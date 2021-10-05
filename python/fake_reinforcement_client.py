@@ -80,8 +80,8 @@ async def main():
     print(resp.result.which());
     state = resp.result.newState
     obj = state.obj
-    obj2 = await obj.runTactic({ 'id': 5, 'arguments': []}).a_wait()
-    print(obj2.result)
+    resp2 = await obj.runTactic({ 'id': 5, 'arguments': []}).a_wait()
+    print(resp2.result)
 
     # Closing the writer will cause Coq to end the session
     writer.close()
