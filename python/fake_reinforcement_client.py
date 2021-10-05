@@ -69,12 +69,12 @@ async def main():
     # Initialize the connection. This sends an object to Coq, that it can call to initiate
     # a reinforcement session, or cache an embedding. In this way, python also acts a a server,
     # even though the connection is initiated as if python is the client.
-    computation = await main.initialize(PushReinforceImpl()).a_wait()
+    initialized = await main.initialize(PushReinforceImpl()).a_wait()
 
     # Here, we initiate a reinforcement session from python's side. This is reasonably nice,
     # because you can wrap the code into asyncio using 'a_wait'. It is still slow though.
     # Bigger problems occur in 'PushReinforceImpl', were we cannot wrap in asyncio.
-    pull = computation.pull
+    pull = initialized.pull
     resp = await pull.reinforce("forall A : Prop, A -> A").a_wait()
     print(resp.result);
     print(resp.result.which());
