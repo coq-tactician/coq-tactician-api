@@ -33,8 +33,6 @@ class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
     def reinforce(self, result, _context):
         print('Fake Reinforcer: reinforce')
         print(result)
-        def p(r):
-            print(r)
         def imp(result, x):
             if x == 0:
                 return
