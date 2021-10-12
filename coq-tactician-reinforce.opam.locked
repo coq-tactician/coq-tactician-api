@@ -135,10 +135,6 @@ pin-depends: [
     "coq-tactician.8.11.dev"
     "git+ssh://git@github.com/coq-tactician/coq-tactician.git"
   ]
-  [
-    "ocaml-base-compiler.4.11.2"
-    "https://github.com/ocaml/ocaml/archive/4.11.2.tar.gz"
-  ]
 ]
 url {
   src:
