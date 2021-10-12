@@ -60,8 +60,8 @@ async def main():
 
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
     proc = await asyncio.create_subprocess_exec(
-        'python3', 'python/fake_coq_server.py',
-        # 'coqc', 'Test2.v',
+        # 'python3', 'python/fake_coq_server.py',
+        'tactician', 'exec', 'coqc', 'Reinforce.v',
         stdin=wsock,
         stdout=None,
         stderr=None)
@@ -82,6 +82,8 @@ async def main():
     obj = state.obj
     resp2 = await obj.runTactic({ 'id': 5, 'arguments': []}).a_wait()
     print(resp2.result)
+
+    print("Closing")
 
     # Closing the writer will cause Coq to end the session
     writer.close()
