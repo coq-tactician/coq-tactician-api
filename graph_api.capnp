@@ -3,7 +3,6 @@
 using File = Text;
 using DepIndex = UInt16;
 using NodeIndex = UInt32;
-using ContextIndex = UInt16;
 using TacticId = UInt64;
 
 struct DirectedEdge {
@@ -25,10 +24,14 @@ struct ProofState {
   context @1 :List(NodeIndex);
 }
 
+struct AbstractTactic {
+  ident @0 :TacticId;
+  parameters @1 :UInt8;
+}
+
 struct Tactic {
-  id @0 :TacticId;
-  # For now, arguments are indices into the local context of the current proof state
-  arguments @1 :List(ContextIndex);
+  ident @0 :TacticId;
+  arguments @1 :List(NodeIndex);
 }
 
 struct Dataset {
@@ -42,6 +45,13 @@ struct Dataset {
   proofSteps @2 :List(DataPoint);
 }
 
+struct Exception {
+  union {
+    noSuchTactic @0 :Void;
+    mismatchedArguments @1 :Void;
+  }
+}
+
 struct ExecutionResult {
   union {
     failure @0 :Void;
@@ -51,7 +61,7 @@ struct ExecutionResult {
       state @3 :ProofState;
       obj @4 :ProofObject;
     }
-    protocolError @5 :Void;
+    protocolError @5 :Exception;
   }
 }
 
@@ -59,8 +69,13 @@ interface ProofObject {
   runTactic @0 (tactic: Tactic) -> (result: ExecutionResult);
 }
 
+interface AvailableTactics {
+  tactics @0 () -> (tactics :List(AbstractTactic));
+  printTactic @1 (tactic :TacticId) -> (tactic :Text);
+}
+
 interface PullReinforce {
-  reinforce @0 (lemma :Text) -> (result :ExecutionResult);
+  reinforce @0 (lemma :Text) -> (available :AvailableTactics, result :ExecutionResult);
 }
 
 interface PushReinforce {

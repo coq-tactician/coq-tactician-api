@@ -13,9 +13,11 @@
     dag_visualizer
     nn_embedding_learner
     reinforce
+    tactic_availability_learner
     graph_generator_learner
     dag_generator_learner
     dag_capnp_generator
+    graph_capnp_generator
     graph_api
     dag_api
  ))

@@ -4,6 +4,7 @@ import sys
 import asyncio
 import socket
 from pathlib import Path
+import graph_visualize as gv
 
 # Load the cap'n proto library, and the communication specification in 'graph_api.capnp'
 import capnp
@@ -47,6 +48,36 @@ class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
         print(root)
         return [1, 2, 3, 4, 5]
 
+# Helper function to visualize an execution result
+def visualize(state):
+    kind = state.which()
+    if kind == 'newState':
+        gv.visualize(state.newState.graph, state.newState.state)
+    else:
+        gv.visualize_exception(state)
+
+# Helper function that runs a given tactic on a given proof state
+async def runTactic(obj, ident, args):
+    resp = await obj.runTactic({ 'ident': ident, 'arguments': args}).a_wait()
+    state = resp.result
+    visualize(state)
+    return state
+
+# Intitiates a new reinforcement learning session with a given lemma
+async def reinforce(pull, lemma):
+    resp = await pull.reinforce(lemma).a_wait()
+    available_cap = resp.available
+    available = await available_cap.tactics().a_wait()
+    tacs = []
+    print("Available tactics:")
+    for tac in available.tactics:
+        tac_str = await available_cap.printTactic(tac.ident).a_wait()
+        tacs.append((tac.ident, tac_str.tactic))
+    for ident, s in tacs:
+        print("{} : {}".format(tac.ident, s))
+    visualize(resp.result)
+    return resp.result, tacs
+
 async def main():
 
     # Create a socket pair, initialize cap'n proto on our end of the socket
@@ -61,7 +92,7 @@ async def main():
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
     proc = await asyncio.create_subprocess_exec(
         # 'python3', 'python/fake_coq_server.py',
-        'tactician', 'exec', 'coqc', 'Reinforce.v',
+        'tactician', 'exec', 'coqc', 'theories/ReinforceTest.v',
         stdin=wsock,
         stdout=None,
         stderr=None)
@@ -73,17 +104,22 @@ async def main():
 
     # Here, we initiate a reinforcement session from python's side. This is reasonably nice,
     # because you can wrap the code into asyncio using 'a_wait'. It is still slow though.
-    # Bigger problems occur in 'PushReinforceImpl', were we cannot wrap in asyncio.
+    # Bigger problems occur in 'PushReinforceImpl', where we cannot wrap in asyncio.
     pull = initialized.pull
-    resp = await pull.reinforce("forall A : Prop, A -> A").a_wait()
-    print(resp.result);
-    print(resp.result.which());
-    state = resp.result.newState
-    obj = state.obj
-    resp2 = await obj.runTactic({ 'id': 5, 'arguments': []}).a_wait()
-    print(resp2.result)
 
-    print("Closing")
+    state, tacs = await reinforce(pull, "forall A B C : Prop, (A -> B -> C) -> A -> B -> C")
+    state = await runTactic(state.newState.obj, 870093143, [])
+    state = await runTactic(state.newState.obj, 870093143, [])
+    state = await runTactic(state.newState.obj, 870093143, [])
+    state = await runTactic(state.newState.obj, 870093143, [])
+    state = await runTactic(state.newState.obj, 870093143, [])
+    state = await runTactic(state.newState.obj, 870093143, [])
+    state = await runTactic(state.newState.obj, 165468576, [10])
+    state = await runTactic(state.newState.obj, 165468576, [20])
+    state = await runTactic(state.newState.obj, 165468576, [22])
+
+    from ptpython.repl import embed
+    await embed(globals(), locals(), return_asyncio_coroutine=True, patch_stdout=True)
 
     # Closing the writer will cause Coq to end the session
     writer.close()
