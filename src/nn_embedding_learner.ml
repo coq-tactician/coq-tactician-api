@@ -87,7 +87,7 @@ module NNEmbeddingLearner : TacticianOnlineLearnerType = functor (TS : Tactician
     Array.fold_left (+.) 0. @@ Array.map2 (fun a b -> a *. b) v1 v2
 
   let empty () = []
-  let learn db loc outcomes tac =
+  let learn db _status _name outcomes tac =
     List.map (fun outcome -> embedder outcome.before, tac) outcomes @ db
   let predict db f =
     if f = [] then IStream.empty else

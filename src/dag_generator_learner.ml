@@ -53,8 +53,8 @@ let cache_type n =
   if Libnames.is_dirpath_prefix_of dirp (Names.ModPath.dp @@ fst @@ Names.Constant.repr2 n) then `File else `Dependency
 
   let empty () = []
-  let learn db loc outcomes tac =
-    match cache_type loc with
+  let learn db _status name outcomes tac =
+    match cache_type name with
     | `File ->
       let db = List.map (fun outcome -> outcome.before, tac) outcomes @ db in
       last_model := db; db
