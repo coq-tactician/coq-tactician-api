@@ -74,7 +74,7 @@ async def reinforce(pull, lemma):
         tac_str = await available_cap.printTactic(tac.ident).a_wait()
         tacs.append((tac.ident, tac_str.tactic))
     for ident, s in tacs:
-        print("{} : {}".format(tac.ident, s))
+        print("{} : {}".format(ident, s))
     visualize(resp.result)
     return resp.result, tacs
 
