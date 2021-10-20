@@ -19,7 +19,7 @@ exception MismatchedArguments
 
 let gen_proof_state (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
   let open M in
-  with_named_context' hyps (gen_constr concl >>
+  with_named_context hyps (gen_constr concl >>
                             map (fun c -> c.named) ask)
 
 let write_execution_result res hyps concl obj =

@@ -122,7 +122,7 @@ module GraphBuilder(G : Graph) = struct
       let* ({ constants; _ } as s) = get in
       put { s with constants = Cmap.add c n constants }
 
-  let rec with_named_context c (m : unit t) =
+  let with_named_context gen_constr c (m : 'a t) =
     Named.fold_inside (fun m d ->
         match d with
         | Named.Declaration.LocalAssum (id, typ) ->
@@ -134,22 +134,11 @@ module GraphBuilder(G : Graph) = struct
              move_toward_new' LocalDefTerm @@ gen_constr term) in
           with_var id.binder_name var m)
       c ~init:m
-  and with_named_context' c (m : 'a t) =
-    Named.fold_inside (fun m d ->
-        match d with
-        | Named.Declaration.LocalAssum (id, typ) ->
-          let* var = move_toward_new (LocalAssum id.binder_name) @@ gen_constr typ in
-          with_var id.binder_name var m
-        | Named.Declaration.LocalDef (id, term, typ) ->
-          let* var = move_toward_new (LocalDef id.binder_name)
-            (move_toward_new' LocalDefType @@ gen_constr typ >>
-             move_toward_new' LocalDefTerm @@ gen_constr term) in
-          with_var id.binder_name var m)
-      c ~init:m
-  and gen_const c =
+
+  let rec gen_const c =
       cached_gen_const c @@ move_toward_new (Const c) @@
       let { const_hyps; const_body; const_type; _ } = Global.lookup_constant c in
-      with_named_context const_hyps
+      with_named_context gen_constr const_hyps
         (move_toward_new' ConstType @@ gen_constr const_type >>
          match const_body with
          | Undef _ -> draw_toward_new' ConstUndef
@@ -191,7 +180,7 @@ module GraphBuilder(G : Graph) = struct
       with_reset @@
       let ({ mind_hyps; mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
         Global.lookup_mind m in
-      with_named_context mind_hyps @@
+      with_named_context gen_constr mind_hyps @@
       let inds = OList.mapi (fun i ind -> i, ind) (Array.to_list mind_packets) in
       let* inds = List.map (fun (i, ind) ->
           let* n = mk_node @@ Ind (m, i) in
@@ -332,6 +321,8 @@ and gen_inductive ((m, _) as i) =
       draw_toward_new' @@ Int n
     | Float f ->
       draw_toward_new' @@ Float f
+
+  let with_named_context ctx m = with_named_context gen_constr ctx m
 
   let map_named f = function
     | Named.Declaration.LocalAssum (id, ty) ->

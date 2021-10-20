@@ -104,7 +104,7 @@ let cache_type n =
     let open M in
     let concl = proof_state_goal ps in
     let hyps = proof_state_hypotheses ps in
-    with_named_context' (List.map (map_named term_repr) hyps) (
+    with_named_context (List.map (map_named term_repr) hyps) (
       gen_constr (term_repr concl) >>
       map (fun c -> c.named) ask)
 
