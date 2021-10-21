@@ -2,7 +2,7 @@
 
 ## OCaml Installation
 
-The recommended `opam` version is `> 2.1`. Other versions might work as well, but you may have to install some dependencies manually.
+The recommended `opam` version is `>= 2.1.0`. Other versions might work as well, but you may have to install some dependencies manually.
 ```
 opam switch create my-switch --empty
 opam repo add coq-released https://coq.inria.fr/opam/released
