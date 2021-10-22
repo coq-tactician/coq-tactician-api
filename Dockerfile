@@ -35,10 +35,9 @@ RUN opam switch create tac 4.11.2
 RUN opam repo  --switch tac add coq-released https://coq.inria.fr/opam/released  
 RUN opam repo  --switch tac add coq-extra-dev https://coq.inria.fr/opam/extra-dev 
 RUN opam repo  --switch tac add coq-core-dev https://coq.inria.fr/opam/core-dev  
-#RUN opam repo add custom-archive https://github.com/LasseBlaauwbroek/custom-archive.git      # less bugs, Lasse's version of coq
-RUN opam repo --switch tac set-url default https://github.com/LasseBlaauwbroek/opam-repository.git
 
-COPY ./coq-tactician-reinforce.opam.locked coq-tactician-reinforce/coq-tactician-reinforce.opam.locked
+
+COPY coq-tactician-reinforce/coq-tactician-reinforce.opam.locked coq-tactician-reinforce/coq-tactician-reinforce.opam.locked
 RUN opam install --switch tac --yes --deps-only coq-tactician-reinforce/coq-tactician-reinforce.opam.locked
 
 
@@ -48,7 +47,7 @@ RUN /home/bot/miniconda3/envs/tac/bin/pip install pycapnp ptpython graphviz
 RUN /home/bot/miniconda3/envs/tac/bin/pip list
 
 
-COPY --chown=bot:bot . temp/coq-tactician-reinforce 
+COPY --chown=bot:bot coq-tactician-reinforce temp/coq-tactician-reinforce 
 RUN opam install --switch tac --yes  temp/coq-tactician-reinforce/coq-tactician-reinforce.opam.locked
 WORKDIR temp/coq-tactician-reinforce
 
@@ -57,11 +56,19 @@ RUN echo "Load NNLearner. Graph Ident plus." | opam exec --switch tac coqtop
 
 RUN cp /home/bot/.opam/tac/.opam-switch/build/coq-tactician-reinforce.~dev/config /home/bot/.opam/tac/etc/coq-tactician/injection-flags
 
-#RUN opam exec --switch tac --set-root --set-switch -- /home/bot/conda run --prefix /home/bot/miniconda3/envs/tac pip list
+USER root
+RUN echo "bot:bot" | chpasswd
+USER bot
 
-#RUN opam exec --switch tac --set-root --set-switch -- conda run --prefix /home/bot/miniconda3/envs/tac python python/fake_reinforcement_client.py
+#USER root
+#RUN sysctl kernel.unprivileged_userns_clone=1
+#USER bot
 
 #RUN opam exec --root /home/bot/.opam  --switch tac --set-root --set-switch -- /home/bot/miniconda3/envs/tac/bin/python python/fake_reinforcement_client.py
 
 
-
+USER root
+RUN apt-get install sudo -y
+RUN usermod bot -aG sudo
+RUN chmod u+s /usr/bin/bwrap
+USER bot
