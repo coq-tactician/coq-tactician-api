@@ -1,6 +1,6 @@
 # Reinforcement learning for Tactician
 
-## OCaml Installation
+## Coq plugin installation
 
 The recommended `opam` version is `>= 2.1.0`. Other versions might work as well, but you may have to install some dependencies manually.
 ```
