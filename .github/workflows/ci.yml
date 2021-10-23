@@ -19,7 +19,6 @@ jobs:
             sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
               export OPAMSOLVERTIMEOUT=120
               opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev
-              opam pin add -n -y -k path $PACKAGE $WORKDIR
               opam update -y
               opam install -y -j 2 -t ./coq-tactician-reinforce.opam.locked --deps-only
             endGroup
