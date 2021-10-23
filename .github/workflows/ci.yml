@@ -28,5 +28,6 @@ jobs:
               opam list
             endGroup
             startGroup "Test"
+              export TMPDIR=/tmp
               tactician exec coqc GraphTest.v
             endGroup
