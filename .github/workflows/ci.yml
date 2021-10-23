@@ -29,5 +29,5 @@ jobs:
             endGroup
             startGroup "Test"
               export TMPDIR=/tmp
-              tactician exec coqc GraphTest.v
+              ./tests/external-tests.sh
             endGroup
