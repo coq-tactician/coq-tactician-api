@@ -60,8 +60,7 @@ pip install ptpython
 ```
 
 If you run
-[python/fake_reinforcement_client.py](python/fake_reinforcement_client.py
---interactive) then an innteractive shell appears where you can
+[python/fake_reinforcement_client.py --interactive](python/fake_reinforcement_client.py) then an innteractive shell appears where you can
 manually interact with the environment. Whenever a tactic is executed,
 the resulting proof state if visualized in the file
 `python_graph.pdf`.
