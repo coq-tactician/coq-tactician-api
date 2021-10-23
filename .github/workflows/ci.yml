@@ -27,3 +27,6 @@ jobs:
               opam install -y -v -j 2 -t ./coq-tactician-reinforce.opam.locked
               opam list
             endGroup
+            startGroup "Test"
+              tactician exec coqc GraphTest.v
+            endGroup
