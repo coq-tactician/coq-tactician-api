@@ -177,7 +177,8 @@ let pull_reinforce =
       release_param_caps ();
       let response, results = Service.Response.create Results.init_pointer in
 
-      let preds = Tactic_learner_internal.learner_predict [] in
+      let learner = Tactic_learner_internal.learner_get () in
+      let preds = learner.predict [] in
       let preds = List.map (fun p -> Tactic_learner_internal.TS.(p.tactic)) @@ IStream.to_list preds in
       let map = List.fold_left (fun map tac ->
           let open Tactic_learner_internal.TS in
