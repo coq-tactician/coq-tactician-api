@@ -33,3 +33,7 @@ jobs:
               sudo chown -R coq:coq . # Ugly hack
               ./tests/external-tests.sh
             endGroup
+          uninstall: |
+            startGroup "Uninstallation test"
+              opam remove coq-tactician-reinforce
+            endGroup
