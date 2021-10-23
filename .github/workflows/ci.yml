@@ -11,8 +11,8 @@ jobs:
       - uses: coq-community/docker-coq-action@v1.2.3
         with:
           opam_file: 'coq-tactician-reinforce.opam.locked'
-          coq_version: '8.11'
-          ocaml_version: '4.10-flambda'
+          coq_version: '8.11.2'
+          ocaml_version: '4.11.2-flambda'
           install: |
             startGroup "Install dependencies"
             sudo apt update
