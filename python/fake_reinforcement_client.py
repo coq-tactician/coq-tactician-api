@@ -81,7 +81,9 @@ async def reinforce(pull, lemma):
 
 async def main():
     parser = argparse.ArgumentParser(description='example of python code interacting with coq-tactician-reinforce')
-    parser.add_argument('--interactive', help='drop to the python shell after proof execution')
+    parser.add_argument('--interactive',
+                        action='store_true',
+                        help='drop to the python shell after proof execution')
     args = parser.parse_args()
 
     # Create a socket pair, initialize cap'n proto on our end of the socket

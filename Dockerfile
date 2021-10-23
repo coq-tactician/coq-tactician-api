@@ -64,4 +64,4 @@ RUN cp $(opam var --switch tac prefix)/.opam-switch/build/coq-tactician-reinforc
 WORKDIR coq-tactician-reinforce
 RUN echo "Load NNLearner. Graph Ident plus." | opam exec --switch tac coqtop
 
-RUN opam exec --switch tac $HOME/miniconda3/envs/tac/bin/python python/fake_reinforcement_client.py
+RUN opam exec --switch tac -- $HOME/miniconda3/envs/tac/bin/python python/fake_reinforcement_client.py
