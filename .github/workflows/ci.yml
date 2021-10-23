@@ -28,6 +28,6 @@ jobs:
               opam list
             endGroup
             startGroup "Test"
-              export TMPDIR=/tmp
-              ./tests/external-tests.sh
+              whoami
+              sudo ./tests/external-tests.sh
             endGroup
