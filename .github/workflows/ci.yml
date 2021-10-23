@@ -15,6 +15,7 @@ jobs:
           ocaml_version: '4.10-flambda'
           install: |
             startGroup "Install dependencies"
+              export OPAMSOLVERTIMEOUT=120
               opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev
               opam pin add -n -y -k path $PACKAGE $WORKDIR
               opam update -y
