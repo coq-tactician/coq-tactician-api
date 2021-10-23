@@ -16,6 +16,7 @@ module TacticMap = Int.Map
 
 exception NoSuchTactic
 exception MismatchedArguments
+exception ParseError
 
 let gen_proof_state (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
   let open M in
@@ -190,14 +191,21 @@ let pull_reinforce =
       Results.available_set results (Some capability);
       Capability.dec_ref capability;
 
-      let lemm_str = Params.lemma_get params in
-      let lemm_constr_expr = Pcoq.parse_string Pcoq.Constr.lconstr lemm_str in
-      let evd, c = Constrintern.interp_constr_evars (Global.env ()) Evd.empty lemm_constr_expr in
-
-      let start = Proof.start ~name:(Names.Id.of_string "dummy") ~poly:false evd [Global.env (), c] in
       let res = Results.result_init results in
-      write_execution_result start res (proof_object start map);
+      begin try
+          let lemm_str = Params.lemma_get params in
+          let evd, c = try
+              let lemm_constr_expr = Pcoq.parse_string Pcoq.Constr.lconstr lemm_str in
+              Constrintern.interp_constr_evars (Global.env ()) Evd.empty lemm_constr_expr
+            with e when CErrors.noncritical e ->
+              raise ParseError in
 
+          let start = Proof.start ~name:(Names.Id.of_string "dummy") ~poly:false evd [Global.env (), c] in
+          write_execution_result start res (proof_object start map)
+        with ParseError ->
+          let exc = Api.Builder.ExecutionResult.protocol_error_init res in
+          Api.Builder.Exception.parse_error_set exc
+      end;
       Service.return response
   end
 

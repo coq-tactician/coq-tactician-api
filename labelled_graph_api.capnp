@@ -51,6 +51,7 @@ struct Exception {
   union {
     noSuchTactic @0 :Void;
     mismatchedArguments @1 :Void;
+    parseError @2 :Void;
   }
 }
 
