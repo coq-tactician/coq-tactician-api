@@ -68,9 +68,6 @@ depends: [
   "mtime" {= "1.2.0"}
   "num" {= "1.4"}
   "ocaml" {= "4.11.2"}
-  "ocaml-base-compiler" {= "4.11.2"}
-  "ocaml-compiler-libs" {= "v0.12.4"}
-  "ocaml-config" {= "1"}
   "ocaml-migrate-parsetree" {= "1.8.0"}
   "ocaml-syntax-shims" {= "1.0.0"}
   "ocamlbuild" {= "0.14.0"}
