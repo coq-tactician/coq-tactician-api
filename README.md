@@ -56,5 +56,8 @@ pip install pycapnp
 pip install ptpython
 ```
 
-When you successfully run the Python code, an interactive shell appears where you can manually interact with the environment. Whenever a tactic is executed,
-the resulting proof state if visualized in the file `python_graph.pdf`.
+If you run
+[python/fake_reinforcement_client.py --interactive](python/fake_reinforcement_client.py) then an innteractive shell appears where you can
+manually interact with the environment. Whenever a tactic is executed,
+the resulting proof state if visualized in the file
+`python_graph.pdf`.
