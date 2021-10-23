@@ -19,8 +19,7 @@ RUN apt-get install -y --no-install-recommends \
     capnproto \
     libcapnp-dev \
     pkg-config \
-    libev-dev  \
-    emacs
+    libev-dev  
 
 RUN useradd -m bot
 WORKDIR /home/bot
@@ -44,7 +43,6 @@ RUN opam install --switch tac --yes --deps-only coq-tactician-reinforce/coq-tact
 ENV PATH="/home/bot/miniconda3/bin:${PATH}"
 RUN conda create -n tac python=3.9 
 RUN /home/bot/miniconda3/envs/tac/bin/pip install pycapnp ptpython graphviz
-RUN /home/bot/miniconda3/envs/tac/bin/pip list
 
 
 COPY --chown=bot:bot coq-tactician-reinforce temp/coq-tactician-reinforce 
@@ -54,21 +52,5 @@ WORKDIR temp/coq-tactician-reinforce
 
 RUN echo "Load NNLearner. Graph Ident plus." | opam exec --switch tac coqtop
 
-RUN cp /home/bot/.opam/tac/.opam-switch/build/coq-tactician-reinforce.~dev/config /home/bot/.opam/tac/etc/coq-tactician/injection-flags
+RUN cp $(opam var --switch tac prefix)/.opam-switch/build/coq-tactician-reinforce.~dev/config $(opam var --switch tac coq-tactician:etc)/injection-flags
 
-USER root
-RUN echo "bot:bot" | chpasswd
-USER bot
-
-#USER root
-#RUN sysctl kernel.unprivileged_userns_clone=1
-#USER bot
-
-#RUN opam exec --root /home/bot/.opam  --switch tac --set-root --set-switch -- /home/bot/miniconda3/envs/tac/bin/python python/fake_reinforcement_client.py
-
-
-USER root
-RUN apt-get install sudo -y
-RUN usermod bot -aG sudo
-RUN chmod u+s /usr/bin/bwrap
-USER bot
