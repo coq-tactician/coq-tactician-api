@@ -33,7 +33,7 @@ depends: [
   "conf-gmp-powm-sec" {= "3"}
   "conf-pkg-config" {= "2"}
   "coq" {= "8.11.dev"}
-  "coq-tactician" {= "8.11.dev"}
+  "coq" {>= "8.11" & < "8.12~"}
   "cppo" {= "1.6.8"}
   "csexp" {= "1.5.1"}
   "cstruct" {= "5.2.0"}
