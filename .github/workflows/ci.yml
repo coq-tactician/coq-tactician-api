@@ -16,7 +16,7 @@ jobs:
           install: |
             startGroup "Install dependencies"
             sudo apt update
-            sudo apt-get install graphviz capnproto libcapnp-dev pkg-config libev-dev
+            sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
               export OPAMSOLVERTIMEOUT=120
               opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev
               opam pin add -n -y -k path $PACKAGE $WORKDIR
