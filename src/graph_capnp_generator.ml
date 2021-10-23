@@ -23,7 +23,7 @@ module GlobalGraph = struct
       assoc = { from = fi; toward = (tp, ti) } :: assoc
     ; paths = DPset.add tp paths }
   let node_list { nodes; _ } = List.rev nodes
-  let edge_list { assoc; _ } = assoc (* No need to reverse this *)
+  let edge_list { assoc; _ } = List.rev assoc
 end
 module G = GlobalGraph
 module GB = GraphBuilder(G)

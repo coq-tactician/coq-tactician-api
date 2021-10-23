@@ -9,7 +9,7 @@ import graph_visualize as gv
 # Load the cap'n proto library, and the communication specification in 'graph_api.capnp'
 import capnp
 capnp.remove_import_hook()
-graph_api_capnp = str(Path('graph_api.capnp').expanduser())
+graph_api_capnp = str(Path('labelled_graph_api.capnp').expanduser())
 graph_api_capnp = capnp.load(graph_api_capnp)
 
 # Boilerplate code needed to have cap'n proto communicate through asyncio
@@ -114,9 +114,9 @@ async def main():
     state = await runTactic(state.newState.obj, 870093143, [])
     state = await runTactic(state.newState.obj, 870093143, [])
     state = await runTactic(state.newState.obj, 870093143, [])
-    state = await runTactic(state.newState.obj, 165468576, [10])
-    state = await runTactic(state.newState.obj, 165468576, [20])
-    state = await runTactic(state.newState.obj, 165468576, [22])
+    state = await runTactic(state.newState.obj, 165468576, [7])
+    state = await runTactic(state.newState.obj, 165468576, [13])
+    state = await runTactic(state.newState.obj, 165468576, [15])
 
     #from ptpython.repl import embed
     #await embed(globals(), locals(), return_asyncio_coroutine=True, patch_stdout=True)

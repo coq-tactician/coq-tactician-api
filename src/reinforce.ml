@@ -1,10 +1,10 @@
 open Tactician_ltac1_record_plugin
-open Graph_capnp_generator
-open Graph_extractor
+open Labelled_graph_capnp_generator
+open Labelled_graph_extractor
 open Names
 open Ltac_plugin
 
-module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
+module Api = Labelled_graph_api.MakeRPC(Capnp_rpc_lwt)
 open Capnp_rpc_lwt
 open Lwt.Infix
 
@@ -19,7 +19,7 @@ exception MismatchedArguments
 
 let gen_proof_state (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
   let open M in
-  with_named_context hyps (gen_constr concl >>
+  with_named_context hyps (gen_constr ContextSubject concl >>
                             map (fun c -> c.named) ask)
 
 let write_execution_result res hyps concl obj =
@@ -41,7 +41,7 @@ let write_execution_result res hyps concl obj =
   let nodes = G.node_list graph.graph in
   let edges =
     let open G in
-    List.rev @@ List.rev_map (fun { from; toward=(tp, ti) } -> { from; toward = (0, ti) })
+    List.rev @@ List.rev_map (fun { from; sort; toward=(tp, ti) } -> { from; sort; toward = (0, ti) })
       (G.edge_list graph.graph) in
 
   (* Write graph to capnp structure *)

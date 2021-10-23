@@ -33,17 +33,14 @@ These commands will create a graph of some object, and write it to `graph.pdf` (
 
 The following commands are always available:
 ```
-[Full] Graph Ident identifier.
-[Full] Graph Term term.
-[Full] DAG Ident identifier.
-[Full] DAG Term term.
+[Full] [LGraph | Graph | DAG] Ident identifier.
+[Full] [LGraph | Graph | DAG] Term term.
 ```
 Normally, the commands print a non-transitive graph. The `[Full]` modifier changes this so that the full transitive graph of definitions is added.
 
 Additionally, in proof mode, these commands are available:
 ```
-[Full] Graph Proof.
-[Full] DAG Proof.
+[Full] [LGraph | Graph | DAG] Proof.
 ```
 
 ## Reinforcement learning

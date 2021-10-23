@@ -47,31 +47,24 @@ type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@de
 type node_type =
   | Root
 
-  (* Local Variable *)
-  | LocalDef of id
-  | LocalDefType
-  | LocalDefTerm
-  | LocalAssum of id
+  (* Context *)
+  | ContextDef of id
+  | ContextAssum of id
 
-  (* Constants *)
+  (* Constant *)
   | Const of constant (* TODO: Universes? *)
-  | ConstType
-  | ConstUndef
-  | ConstDef
-  | ConstOpaqueDef
-  | ConstPrimitive
+  | ConstEmpty (* Helper to deal with definitions that don't have a body *)
 
-  (* Inducives *)
+  (* Inductives *)
   | Ind of inductive (* TODO: Universes? *)
   | Construct of constructor (* TODO: Universes? *)
   | Proj of projection (* TODO: Resolve *)
 
   (* Sorts *)
-  | Sort
-  | SProp
-  | Prop
-  | Set
-  | Type (* Collapsed universe *)
+  | SortSProp
+  | SortProp
+  | SortSet
+  | SortType (* Collapsed universe *)
 
   (* Constr nodes *)
   | Rel
@@ -79,55 +72,165 @@ type node_type =
   | Evar of int (* TODO: This could be resolved *)
   | EvarSubst
   | Cast (* TODO: Do we want cast kind? *)
-  | CastTerm
-  | CastType
   | Prod of name
-  | ProdType
-  | ProdTerm
   | Lambda of name
-  | LambdaType
-  | LambdaTerm
   | LetIn of name
-  | LetInDef
-  | LetInType
-  | LetInTerm
   | App
   | AppFun
   | AppArg
   | Case
-  | CaseTerm
-  | CaseReturn
   | CaseBranch
-  | CBConstruct
-  | CBTerm
   | Fix (* TODO: Recursive var info? *)
   | FixFun of name
-  | FixFunType
-  | FixFunTerm
-  | FixReturn
   | CoFix
   | CoFixFun of name
-  | CoFixFunType
-  | CoFixFunTerm
-  | CoFixReturn
 
   | Int of uint63 (* TODO: Centralize *)
   | Float of float64 (* TODO: Centralize *)
   | Primitive of primitive (* TODO: Centralize *) [@@deriving show { with_path = false }]
+
+type edge_type =
+  (* Contexts *)
+  | ContextElem
+  | ContextSubject
+
+  (* Context elements *)
+  | ContextDefType
+  | ContextDefTerm
+
+  (* Constants *)
+  | ConstType
+  | ConstUndef
+  | ConstDef
+  | ConstOpaqueDef
+  | ConstPrimitive
+
+  (* Inductives *)
+  | IndType
+  | IndConstruct
+  | ProjTerm
+  | ConstructTerm
+
+  (* Casts *)
+  | CastTerm
+  | CastType
+
+  (* Products *)
+  | ProdType
+  | ProdTerm
+
+  (* Lambdas *)
+  | LambdaType
+  | LambdaTerm
+
+  (* LetIns *)
+  | LetInDef
+  | LetInType
+  | LetInTerm
+
+  (* Apps *)
+  | AppFunPointer
+  | AppFunValue
+  | AppArgPointer
+  | AppArgValue
+  | AppArgOrder
+
+  (* Cases *)
+  | CaseTerm
+  | CaseReturn
+  | CaseBranchPointer
+  | CaseInd
+
+  (* CaseBranches *)
+  | CBConstruct
+  | CBTerm
+
+  (* Fixes *)
+  | FixMutual
+  | FixReturn
+
+  (* FixFuns *)
+  | FixFunType
+  | FixFunTerm
+
+  (* CoFixes *)
+  | CoFixMutual
+  | CoFixReturn
+
+  (* CoFixFuns *)
+  | CoFixFunType
+  | CoFixFunTerm
+
+  (* Constr edges *)
+  | RelPointer
+  | VarPointer
+  | EvarSubstPointer
+  | EvarSubstOrder
+  | EvarSubstValue
+[@@deriving show { with_path = false }]
+
+let edge_type_int_mod = function
+  | ContextElem -> 0
+  | ContextSubject -> 1
+  | ContextDefType -> 0
+  | ContextDefTerm -> 1
+  | ConstType -> 0
+  | ConstUndef -> 1
+  | ConstDef -> 2
+  | ConstOpaqueDef -> 3
+  | ConstPrimitive -> 4
+  | IndType -> 0
+  | IndConstruct -> 1
+  | ProjTerm -> 0
+  | ConstructTerm -> 0
+  | CastType -> 0
+  | CastTerm -> 1
+  | ProdType -> 0
+  | ProdTerm -> 1
+  | LambdaType -> 0
+  | LambdaTerm -> 1
+  | LetInDef -> 0
+  | LetInType -> 1
+  | LetInTerm -> 2
+  | AppFunPointer -> 0
+  | AppFunValue -> 0
+  | AppArgPointer -> 1
+  | AppArgValue -> 0
+  | AppArgOrder -> 2
+  | CaseTerm -> 0
+  | CaseReturn -> 1
+  | CaseBranchPointer -> 2
+  | CaseInd -> 3
+  | CBConstruct -> 0
+  | CBTerm -> 1
+  | FixMutual -> 0
+  | FixReturn -> 1
+  | FixFunType -> 0
+  | FixFunTerm -> 1
+  | CoFixMutual -> 0
+  | CoFixReturn -> 1
+  | CoFixFunType -> 0
+  | CoFixFunTerm -> 1
+  | RelPointer -> 0
+  | VarPointer -> 0
+  | EvarSubstPointer -> 0
+  | EvarSubstOrder -> 0
+  | EvarSubstValue -> 1
 
 module type Graph = sig
   type t
   type node
   val empty : t
   val mk_node : t -> node_type -> node * t
-  val mk_edge : t -> from:node -> toward:node -> t
+  val mk_edge : t -> edge_type -> source:node -> target:node -> t
 end
 
-module SimpleGraph = struct
+module SimpleLabelledGraph = struct
   type node = int
   type directed_edge =
-    { from : node
-    ; toward : node }
+    { source : node
+    ; target : node
+    ; sort : edge_type }
   type t =
     { nodes : node_type list (* WARNING: This list needs to be reversed when interpreting node indexes *)
     ; last  : node
@@ -135,8 +238,8 @@ module SimpleGraph = struct
   let empty = { nodes = []; last = 0; assoc = [] }
   let mk_node ({ nodes; last; _ } as g) typ =
     last, { g with nodes = typ::nodes; last = last + 1}
-  let mk_edge ({ assoc; _ } as g) ~from ~toward =
-    { g with assoc = { from; toward } :: assoc }
+  let mk_edge ({ assoc; _ } as g) sort ~source ~target =
+    { g with assoc = { source; target; sort } :: assoc }
   let node_list { nodes; _ } = List.rev nodes
   let edge_list { assoc; _ } = List.rev assoc
 end

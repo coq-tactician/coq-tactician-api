@@ -5,21 +5,27 @@
  (flags :standard -rectypes -w -27-53-55 -warn-error -A)
  (modules (
    "g_graph"
-    visualizer
+    labelled_graph_extractor
     graph_extractor
+    labelled_graph_def
     graph_def
     dag_def
     dag_extractor
     dag_visualizer
+    graph_visualizer
+    labelled_graph_visualizer
     nn_embedding_learner
     reinforce
     tactic_availability_learner
+    labelled_graph_generator_learner
     graph_generator_learner
     dag_generator_learner
     dag_capnp_generator
     graph_capnp_generator
+    labelled_graph_capnp_generator
     graph_api
     dag_api
+    labelled_graph_api
  ))
  (libraries
    capnp capnp.unix lwt.unix capnp-rpc-unix capnp-rpc-lwt
@@ -27,6 +33,11 @@
    coq-tactician.record-plugin)
  (preprocess (staged_pps ppx_deriving.show))
 )
+
+(rule
+ (targets labelled_graph_api.ml labelled_graph_api.mli)
+ (deps    ../labelled_graph_api.capnp)
+ (action (run capnp compile -o %{bin:capnpc-ocaml} %{deps})))
 
 (rule
  (targets graph_api.ml graph_api.mli)

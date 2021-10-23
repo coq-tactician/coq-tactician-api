@@ -1,8 +1,9 @@
 open Tactician_ltac1_record_plugin
 open Tactic_learner
 open Names
-open Dag_extractor
-open Dag_capnp_generator
+open Labelled_graph_extractor
+open Labelled_graph_def
+open Labelled_graph_capnp_generator
 
 let dirpath = Global.current_dirpath ()
 let data_file = Option.default "" Ltacrecord.base_filename ^ ".bin"
@@ -12,7 +13,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   open TS
 
   module G = GlobalGraph
-  module GB = DAGBuilder(G)
+  module GB = GraphBuilder(G)
 
   type model = (proof_state * tactic) list
 
@@ -62,7 +63,7 @@ let cache_type n =
   let predict db situations = IStream.empty
   let evaluate db _ _ = 0., db
 
-  module K = Dag_api.Make(Capnp.BytesMessage)
+  module K = Graph_api.Make(Capnp.BytesMessage)
   let write_graph graph proof_states =
     let open G in
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath graph.paths) in
@@ -74,27 +75,38 @@ let cache_type n =
             | Some f -> f in
           let f = CUnix.strip_path f in
           if Filename.is_relative f then Some f else None) depslist in
-    let g = K.Builder.Dag.init_root () in
-    let _ = K.Builder.Dag.dependencies_set_list g relativized_dependencies in
+    let g = K.Builder.Dataset.init_root () in
+    let _ = K.Builder.Dataset.dependencies_set_list g relativized_dependencies in
     let nodes = node_list graph in
-    (* Prevent stack overflows *)
-    let nodes = List.rev @@ List.rev_map (fun (n, c) ->
-        n, List.map (fun (f, i) -> DPmap.find f path_index, i) c) nodes in
-    let arr = K.Builder.Dag.nodes_init g in
-    write_node_list arr nodes;
-    let arr = K.Builder.Dag.proof_steps_init g (List.length proof_states) in
-    List.iteri (fun i (node, tactic) ->
+    let edges = edge_list graph in
+    let edges = List.rev @@ List.rev_map (fun { from; sort; toward=(tp, ti) } ->
+        { from; sort; toward = (DPmap.find tp path_index, ti) }
+      ) edges in
+    let capnp_graph = K.Builder.Dataset.graph_init g in
+    write_graph capnp_graph nodes edges;
+    let arr = K.Builder.Dataset.proof_steps_init g (List.length proof_states) in
+    List.iteri (fun i (node, context, tactic, args) ->
         let arri = Capnp.Array.get arr i in
-        K.Builder.Dag.ProofStep.node_set_int_exn arri node;
-        K.Builder.Dag.ProofStep.tactic_set_int_exn arri @@ tactic_hash tactic
+        let state = K.Builder.Dataset.DataPoint.state_init arri in
+        let capnp_tactic = K.Builder.Dataset.DataPoint.tactic_init arri in
+        K.Builder.ProofState.root_set_int_exn state node;
+        let _ = K.Builder.ProofState.context_set_list state
+            (List.map Stdint.Uint32.of_int context) in
+        K.Builder.Tactic.ident_set_int_exn capnp_tactic @@ tactic_hash tactic;
+        let _ = K.Builder.Tactic.arguments_set_list capnp_tactic
+            (List.map (fun arg -> Stdint.Uint32.of_int (Option.default 0 arg)) args) in
+        ()
       ) proof_states;
-    Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dag.to_message g) data_file
+    Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) data_file
 
   open GB
   let gen_proof_state ps =
+    let open M in
     let concl = proof_state_goal ps in
     let hyps = proof_state_hypotheses ps in
-    with_named_context2 ~force:true (List.map (map_named term_repr) hyps) @@ gen_constr @@ term_repr concl
+    with_named_context (List.map (map_named term_repr) hyps) (
+      gen_constr ContextSubject (term_repr concl) >>
+      map (fun c -> c.named) ask)
 
   let endline_hook () = print_endline "writing";
     let globrefs = Environ.Globals.view (Global.env ()).env_globals in
@@ -106,20 +118,30 @@ let cache_type n =
     let open Monad.Make(GB.M) in
     let proof_states = OList.rev !last_model in
     let updater =
-      List.iter (fun c -> ignore' @@ gen_const c) constants >>
+      List.iter (gen_const ContextSubject) constants >>
       List.iter gen_mutinductive_helper minductives >>
       List.map (fun (ps, tac) ->
-          let* (fp, root) = gen_proof_state ps in
-          assert (fp = dirpath);
-          return (root, tac)) proof_states in
-    let dag = G.empty in
+          let* root = mk_node Root in
+          let* context_map = with_focus root @@ gen_proof_state ps in
+          let tac = tactic_repr tac in
+          let tac = Tactic_normalize.tactic_strict tac in
+          let args, tac = Tactic_abstract.tactic_abstract tac in
+          let tac = tactic_make tac in
+          let context = Id.Map.bindings context_map in
+          let context_dom = OList.map fst context in
+          let context_range = OList.map (fun (_, (_, n)) -> n) context in
+          let safe_index0 f x l = try Some (CList.index0 f x l) with Not_found -> None in
+          let args = OList.map (fun (id, _) -> safe_index0 Names.Id.equal id context_dom) args in
+          return (snd root, context_range, tac, args))
+        proof_states in
+    let focus, graph = G.mk_node G.empty Root in (* This node is superfluous, but who cares *)
     let graph =
-        { dag
+        { graph
         ; constants = !global_nodes.constants
         ; inductives = !global_nodes.inductives
         ; constructors = !global_nodes.constructors
         ; projections = !global_nodes.projections } in
-    let context = { relative = []; named = Id.Map.empty; follow_defs = true } in
+    let context = { relative = []; named = Id.Map.empty; focus; follow_defs = true } in
     let graph, proof_states = updater (graph, context) in
     let global_node =
       { constants = Cmap.filter
@@ -130,12 +152,12 @@ let cache_type n =
             (fun c _ -> not @@ Constrmap.mem c !global_nodes.constructors) graph.constructors
       ; projections = ProjMap.filter
             (fun p _ -> not @@ ProjMap.mem p !global_nodes.projections) graph.projections } in
-    write_graph graph.dag proof_states;
+    write_graph graph.graph proof_states;
     Lib.add_anonymous_leaf @@ in_global_nodes global_node;
     Lib.add_anonymous_leaf @@ in_dependencies data_file
 
   let () = Declaremods.append_end_library_hook endline_hook
 end
 
-(* let () = register_online_learner "Dataset Generator Learner" (module GraphGeneratorLearner)
- * let () = Tactic_learner_internal.disable_queue () *)
+let () = register_online_learner "Dataset Generator Learner" (module GraphGeneratorLearner)
+let () = Tactic_learner_internal.disable_queue ()

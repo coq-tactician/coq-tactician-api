@@ -116,6 +116,7 @@ let cache_type n =
         (fun m _ -> not @@ Indmap.mem (m, 0) !global_nodes.inductives) globrefs.inductives in
     let open Tactician_util.WithMonadNotations(GB.M) in
     let open Monad.Make(GB.M) in
+    let proof_states = OList.rev !last_model in
     let updater =
       List.iter gen_const constants >>
       List.iter gen_mutinductive_helper minductives >>
@@ -132,7 +133,7 @@ let cache_type n =
           let safe_index0 f x l = try Some (CList.index0 f x l) with Not_found -> None in
           let args = OList.map (fun (id, _) -> safe_index0 Names.Id.equal id context_dom) args in
           return (snd root, context_range, tac, args))
-        !last_model in
+        proof_states in
     let focus, graph = G.mk_node G.empty Root in (* This node is superfluous, but who cares *)
     let graph =
         { graph
