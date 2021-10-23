@@ -3,6 +3,7 @@ import os
 import sys
 import asyncio
 import socket
+import argparse
 from pathlib import Path
 import graph_visualize as gv
 
@@ -79,6 +80,9 @@ async def reinforce(pull, lemma):
     return resp.result, tacs
 
 async def main():
+    parser = argparse.ArgumentParser(description='example of python code interacting with coq-tactician-reinforce')
+    parser.add_argument('--interactive', help='drop to the python shell after proof execution')
+    args = parser.parse_args()
 
     # Create a socket pair, initialize cap'n proto on our end of the socket
     rsock, wsock = socket.socketpair()
@@ -118,8 +122,9 @@ async def main():
     state = await runTactic(state.newState.obj, 165468576, [20])
     state = await runTactic(state.newState.obj, 165468576, [22])
 
-    #from ptpython.repl import embed
-    #await embed(globals(), locals(), return_asyncio_coroutine=True, patch_stdout=True)
+    if args.interactive:
+        from ptpython.repl import embed
+        await embed(globals(), locals(), return_asyncio_coroutine=True, patch_stdout=True)
 
     # Closing the writer will cause Coq to end the session
     writer.close()
