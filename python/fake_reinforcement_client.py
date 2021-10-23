@@ -118,8 +118,8 @@ async def main():
     state = await runTactic(state.newState.obj, 165468576, [20])
     state = await runTactic(state.newState.obj, 165468576, [22])
 
-    from ptpython.repl import embed
-    await embed(globals(), locals(), return_asyncio_coroutine=True, patch_stdout=True)
+    #from ptpython.repl import embed
+    #await embed(globals(), locals(), return_asyncio_coroutine=True, patch_stdout=True)
 
     # Closing the writer will cause Coq to end the session
     writer.close()

@@ -17,6 +17,16 @@ If you encounter problems, try installing `opam install conf-libev`.
 
 Optional but recommended additional software: `graphviz` (install through your distribution's package manager)
 
+Notice: the installation depends on ocaml version 4.11.2 that is in conflict with glibc version >= 2.34
+and therefore fails on Ubuntu 21.10. 
+
+## Docker
+
+To verify installation in a controlled enviroment we provide Dockerfile script. To build the docker image, run from the directory containing the Dockerfile
+```
+docker build -t tac:test . 
+```
+
 ## Available Commands
 
 These commands will create a graph of some object, and write it to `graph.pdf` (if `graphviz` is available).
