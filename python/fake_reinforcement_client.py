@@ -98,7 +98,7 @@ async def main():
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
     proc = await asyncio.create_subprocess_exec(
         # 'python3', 'python/fake_coq_server.py',
-        'tactician', 'exec', 'coqc', 'theories/ReinforceTest.v',
+        'tactician', 'exec', 'coqc', 'tests/ReinforceTest.v',
         stdin=wsock,
         stdout=None,
         stderr=None)
