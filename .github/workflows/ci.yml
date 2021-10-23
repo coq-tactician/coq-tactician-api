@@ -29,6 +29,6 @@ jobs:
               opam list
             endGroup
             startGroup "Test"
-              sudo chown coq:coq . # Ugly hack
+              sudo chown -R coq:coq . # Ugly hack
               ./tests/external-tests.sh
             endGroup
