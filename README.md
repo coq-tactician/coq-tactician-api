@@ -38,6 +38,8 @@ podman build -t tac:test .
 ```
 We recommend using podman in rootless mode as there are certain unresolved limitation of bubblewrap / user namespaces with docker container.  
 
+Notice: as of `podman 3.3.1` and `opam 2.0.5` sometimes race conditions have been detected with building on multicore. Updating podman and/or opam might fix the issue.
+
 ## Available Commands
 
 These commands will create a graph of some object, and write it to `graph.pdf` (if `graphviz` is available).
