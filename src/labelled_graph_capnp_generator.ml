@@ -36,11 +36,19 @@ let nt2nt (nt : node_type) cnt =
   | Root -> root_set cnt
   | ContextDef _ -> context_def_set cnt
   | ContextAssum _ -> context_assum_set cnt
-  | Const c -> const_set cnt (Stdint.Uint64.of_int @@ Constant.hash c)
+  | Const c ->
+    let hash = Constant.UserOrd.hash c in
+    const_set cnt (Stdint.Uint64.of_int hash)
   | ConstEmpty -> const_empty_set cnt
-  | Ind (m, i) -> ind_set cnt (Stdint.Uint64.of_int @@ (Hashtbl.hash (i, MutInd.hash m)))
-  | Construct ((m, i), j) -> construct_set cnt (Stdint.Uint64.of_int @@ (Hashtbl.hash (i, j, MutInd.hash m)))
-  | Proj p -> proj_set cnt @@ Stdint.Uint64.of_int @@ Projection.Repr.hash p (* TODO: This is probably not a good hash *)
+  | Ind (m, i) ->
+    let hash = Hashtbl.hash (i, MutInd.UserOrd.hash m) in
+    ind_set cnt (Stdint.Uint64.of_int hash)
+  | Construct ((m, i), j) ->
+    let hash = Hashtbl.hash (i, j, MutInd.UserOrd.hash m) in
+    construct_set cnt (Stdint.Uint64.of_int @@ hash)
+  | Proj p ->
+    let hash = Projection.Repr.UserOrd.hash p in
+    proj_set cnt @@ Stdint.Uint64.of_int hash (* TODO: This is probably not a good hash *)
   | SortSProp -> sort_s_prop_set cnt
   | SortProp -> sort_prop_set cnt
   | SortSet -> sort_set_set cnt
