@@ -49,12 +49,12 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         ~subst:None
         ~discharge:(fun x -> Some (snd x)))
 
-let cache_type n =
-  let dirp = Global.current_dirpath () in
-  if Libnames.is_dirpath_prefix_of dirp (Names.ModPath.dp @@ fst @@ Names.Constant.repr2 n) then `File else `Dependency
+  let cache_type name =
+    let dirp = Global.current_dirpath () in
+    if Libnames.is_dirpath_prefix_of dirp (Libnames.dirpath name) then `File else `Dependency
 
   let empty () = []
-  let learn db _status name outcomes tac =
+  let learn db (name, _status) outcomes tac =
     match cache_type name with
     | `File ->
       let db = List.map (fun outcome -> outcome.before, tac) outcomes @ db in

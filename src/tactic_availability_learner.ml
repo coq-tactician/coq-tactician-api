@@ -8,7 +8,7 @@ module TacticAvailabilityLearner = functor (TS : TacticianStructures) -> struct
 
   let empty () = []
 
-  let learn db _status _loc _outcomes tac = tac::db
+  let learn db _origin _outcomes tac = tac::db
 
   let predict db f =
     let out = List.map (fun tactic -> { confidence = 0.; focus = 0; tactic }) db in
