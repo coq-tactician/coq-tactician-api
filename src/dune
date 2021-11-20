@@ -26,6 +26,7 @@
     graph_api
     dag_api
     labelled_graph_api
+    extreme_tactic_normalize
  ))
  (libraries
    capnp capnp.unix lwt.unix capnp-rpc-unix capnp-rpc-lwt

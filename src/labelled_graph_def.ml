@@ -44,21 +44,47 @@ type constant = Constant.t
                 [@printer fun fmt c -> fprintf fmt "%s" (Label.to_string @@ Constant.label c)][@@deriving show]
 type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@deriving show]
 
-type node_type =
+type 'node tactical_step =
+  { ps_string: string
+  ; tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
+  ; base_tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
+  ; tactic_hash : int
+  ; arguments : 'node list
+  ; root : 'node
+  ; context : 'node list }
+
+type 'node definition_type =
+  | Ind of inductive (* TODO: Universes? *)
+  | Construct of constructor (* TODO: Universes? *)
+  | Proj of projection (* TODO: Resolve *)
+  | ManualConst of constant (* TODO: Universes? *)
+  | TacticalConstant of constant * 'node tactical_step list (* TODO: Universes? *)
+
+type 'node definition' =
+  { previous : 'node list
+  ; def_type : 'node definition_type }
+
+let print_definition { previous ; def_type } =
+  match def_type with
+  | Ind c -> "Ind " ^ inductive_to_string c
+  | Construct c -> "Construct " ^ constructor_to_string c
+  | Proj p -> "Proj " ^ projection_to_string p
+  | ManualConst c -> "Const " ^ Label.to_string @@ Constant.label c
+  | TacticalConstant (c, _) -> "Const " ^ Label.to_string @@ Constant.label c
+
+type 'node definition = 'node definition'
+                        [@printer fun fmt c -> fprintf fmt "%s" (print_definition c)][@@deriving show]
+
+type 'node node_type =
   | Root
 
   (* Context *)
   | ContextDef of id
   | ContextAssum of id
 
-  (* Constant *)
-  | Const of constant (* TODO: Universes? *)
+  (* Definitions *)
+  | Definition of 'node definition
   | ConstEmpty (* Helper to deal with definitions that don't have a body *)
-
-  (* Inductives *)
-  | Ind of inductive (* TODO: Universes? *)
-  | Construct of constructor (* TODO: Universes? *)
-  | Proj of projection (* TODO: Resolve *)
 
   (* Sorts *)
   | SortSProp
@@ -221,7 +247,7 @@ module type Graph = sig
   type t
   type node
   val empty : t
-  val mk_node : t -> node_type -> node * t
+  val mk_node : t -> node node_type -> node * t
   val mk_edge : t -> edge_type -> source:node -> target:node -> t
 end
 
@@ -232,7 +258,7 @@ module SimpleLabelledGraph = struct
     ; target : node
     ; sort : edge_type }
   type t =
-    { nodes : node_type list (* WARNING: This list needs to be reversed when interpreting node indexes *)
+    { nodes : node node_type list (* WARNING: This list needs to be reversed when interpreting node indexes *)
     ; last  : node
     ; assoc : directed_edge list }
   let empty = { nodes = []; last = 0; assoc = [] }

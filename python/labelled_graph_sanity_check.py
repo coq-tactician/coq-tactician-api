@@ -8,9 +8,12 @@ graph_api_capnp = str(Path('labelled_graph_api.capnp').expanduser())
 graph_api_capnp = capnp.load(graph_api_capnp)
 
 tactics = set()
+base_tactics_text = set()
+tactical_definitions = []
 max_node = {}
 node_total = 0
 edges_total = 0
+proof_steps_total = 0
 
 rootdir = sys.argv[1]
 os.chdir(rootdir)
@@ -27,8 +30,20 @@ for f in file_list:
     node_total += node_count
     edges_total += len(g.graph.edges)
     print(max_node[dep])
-    for ps in g.proofSteps:
-        tactics.add(ps.tactic.ident)
+    for n in g.tacticalDefinitions:
+        if g.graph.classifications[n].which() != 'definition':
+            print('TacticalDefinitions Problem A')
+        if g.graph.classifications[n].definition.which() != 'tacticalConstant':
+            print('TacticalDefinitions Problem B')
+    for n in g.graph.classifications:
+        if (n.which() == 'definition'):
+            if (n.definition.which() == 'tacticalConstant'):
+                tactical_definitions.append(n.definition.name)
+                tc = n.definition.tacticalConstant
+                for p in tc.tacticalProof:
+                    proof_steps_total += 1
+                    tactics.add(p.tactic.ident)
+                    base_tactics_text.add(p.tactic.baseText)
 
 print("Node total")
 print(node_total)
@@ -36,6 +51,12 @@ print("Edge total")
 print(edges_total)
 print("Tactics total")
 print(len(tactics))
+print("Tactics base text total")
+print(len(base_tactics_text))
+print("Tactical definitions total")
+print(len(tactical_definitions))
+print("Proof steps total")
+print(proof_steps_total)
 
 for f in file_list:
     print(f)

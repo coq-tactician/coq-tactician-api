@@ -24,6 +24,7 @@ struct Graph {
 struct ProofState {
   root @0 :NodeIndex;
   context @1 :List(NodeIndex);
+  text @2 :Text;
 }
 
 struct AbstractTactic {
@@ -31,20 +32,26 @@ struct AbstractTactic {
   parameters @1 :UInt8;
 }
 
+struct GlobalNode {
+  depIndex @0 :DepIndex;
+  nodeIndex @1 :NodeIndex;
+}
+
 struct Tactic {
   ident @0 :TacticId;
-  arguments @1 :List(NodeIndex);
+  arguments @1 :List(GlobalNode);
+  text @2 :Text; # WARNING: This is currently not 1-to-1 isomorphic to (ident, arguments)!
+  # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
+  # Note, however, that this is a slight under-approximation, because tactic printing is not 100% isomorphic to
+  # Coq's internal AST of tactics. As such, there are slightly more unique `ident`'s than `bareText`'s in the dataset.
+  baseText @3 :Text;
 }
 
 struct Dataset {
-  struct DataPoint {
-    state @0 :ProofState;
-    tactic @1 :Tactic;
-  }
   # The first file is always the current file
   dependencies @0 :List(File);
   graph @1 :Graph;
-  proofSteps @2 :List(DataPoint);
+  tacticalDefinitions @2 :List(NodeIndex);
 }
 
 struct Exception {
@@ -90,7 +97,34 @@ interface Main {
   initialize @0 (push :PushReinforce) -> (pull :PullReinforce);
 }
 
-# const globalRefs :List(NodeClassification) = [const, ind, construct, proj];
+struct ProofStep {
+  state @0 :ProofState;
+  tactic @1 :Tactic;
+}
+
+struct Definition {
+  hash @0 :DefinitionId;
+  name @1 :Text;
+
+  union {
+    inductive @2 :Void;
+    constructor @3 :Void;
+    projection @4 :Void;
+
+    # A constant defined by directly inputting a term
+    # In the future, we might augment such constants with tactical
+    # refinement proofs that build the term iteratively.
+    manualConstant @5 :Void;
+
+    # A constant that was either directly or indirectly using a tactical proof.
+    tacticalConstant :group {
+
+      # The tactical proof associated to the constant.
+      tacticalProof @6 :List(ProofStep);
+    }
+  }
+}
+
 struct NodeClassification {
   union {
     root @0 :Void;
@@ -99,44 +133,39 @@ struct NodeClassification {
     contextDef @1 :Void;
     contextAssum @2 :Void;
 
-    # Constants
-    const @3 :DefinitionId;
+    # Definitions
+    definition @3 :Definition;
     constEmpty @4 :Void;
 
-    # Inductives
-    ind @5 :DefinitionId;
-    construct @6 :DefinitionId;
-    proj @7 :DefinitionId;
-
     # Sorts
-    sortSProp @8 :Void;
-    sortProp @9 :Void;
-    sortSet @10 :Void;
-    sortType @11 :Void; # Collapsed universe
+    sortSProp @5 :Void;
+    sortProp @6 :Void;
+    sortSet @7 :Void;
+    sortType @8 :Void; # Collapsed universe
 
     # Constr nodes
-    rel @12 :Void;
-    var @13 :Void;
-    evar @14 :UInt64;
-    evarSubst @15 :Void;
-    cast @16 :Void;
-    prod @17 :Void;
-    lambda @18 :Void;
-    letIn @19 :Void;
-    app @20 :Void;
-    appFun @21 :Void;
-    appArg @22 :Void;
-    case @23 :Void;
-    caseBranch @24 :Void;
-    fix @25 :Void;
-    fixFun @26 :Void;
-    coFix @27 :Void;
-    coFixFun @28 :Void;
+    rel @9 :Void;
+    var @10 :Void;
+    evar @11 :UInt64;
+    evarSubst @12 :Void;
+    cast @13 :Void;
+    prod @14 :Void;
+    lambda @15 :Void;
+    letIn @16 :Void;
+    app @17 :Void;
+    appFun @18 :Void;
+    appArg @19 :Void;
+    case @20 :Void;
+    caseBranch @21 :Void;
+    fix @22 :Void;
+    fixFun @23 :Void;
+    coFix @24 :Void;
+    coFixFun @25 :Void;
 
     # Primitives
-    int @29 :UInt64;
-    float @30 :Float64;
-    primitive @31 :Text;
+    int @26 :UInt64;
+    float @27 :Float64;
+    primitive @28 :Text;
   }
 }
 

@@ -35,20 +35,17 @@ let write_execution_result res hyps concl obj =
     let* root = focus in
     let* context_map = gen_proof_state hyps concl in
     return (snd root, context_map) in
-  let graph, (root, context_map) = run_empty false updater in
+  let graph, (root, context_map) = run_empty false Names.Cmap.empty updater in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
   let nodes = G.node_list graph.graph in
-  let edges =
-    let open G in
-    List.rev @@ List.rev_map (fun { from; sort; toward=(tp, ti) } -> { from; sort; toward = (0, ti) })
-      (G.edge_list graph.graph) in
+  let edges = G.edge_list graph.graph in
 
   (* Write graph to capnp structure *)
   let new_state = ExecutionResult.new_state_init res in
   let capnp_graph = ExecutionResult.NewState.graph_init new_state in
-  write_graph capnp_graph nodes edges;
+  write_graph capnp_graph (fun _ -> 0) nodes edges;
   let state = ExecutionResult.NewState.state_init new_state in
   ProofState.root_set_int_exn state root;
   let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
@@ -104,7 +101,7 @@ let rec proof_object state tacs context_map =
       let tac = Params.tactic_get params in
       let tac_id = Tactic.ident_get_int_exn tac in
       let tac_args = Tactic.arguments_get_list tac in
-      let tac_args = List.map Stdint.Uint32.to_int tac_args in
+      let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Api.Reader.GlobalNode.node_index_get a)) tac_args in
       begin
         try
           let tac, params = find_tactic tacs tac_id in
