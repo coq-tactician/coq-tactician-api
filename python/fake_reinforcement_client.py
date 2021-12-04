@@ -57,6 +57,10 @@ def visualize(state):
     else:
         gv.visualize_exception(state)
 
+# Reference to a local node (with depIndex 0)
+def localNode(id):
+    return {'depIndex': 0, 'nodeIndex': id}
+
 # Helper function that runs a given tactic on a given proof state
 async def runTactic(obj, ident, args):
     resp = await obj.runTactic({ 'ident': ident, 'arguments': args}).a_wait()
@@ -120,9 +124,9 @@ async def main():
     state = await runTactic(state.newState.obj, 870093143, [])
     state = await runTactic(state.newState.obj, 870093143, [])
     state = await runTactic(state.newState.obj, 870093143, [])
-    state = await runTactic(state.newState.obj, 165468576, [7])
-    state = await runTactic(state.newState.obj, 165468576, [13])
-    state = await runTactic(state.newState.obj, 165468576, [15])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(7)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(13)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(15)])
 
     if args.interactive:
         from ptpython.repl import embed
