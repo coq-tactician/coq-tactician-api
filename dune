@@ -5,3 +5,7 @@
  (mode fallback)
  (deps config.in)
  (action (run opam config subst %{targets})))
+
+(install
+(section (site (coq-tactician plugins)))
+(files (config as coq-tactician-reinforce/injection-flags)))

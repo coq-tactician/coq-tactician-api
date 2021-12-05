@@ -26,7 +26,7 @@ jobs:
           script: |
             startGroup "Build"
               opam install -y -v -j 2 -t ./coq-tactician-reinforce.opam.locked
-              cp $(opam var prefix)/.opam-switch/build/coq-tactician-reinforce.~dev/config $(opam var coq-tactician:etc)/injection-flags
+              # cp $(opam var prefix)/.opam-switch/build/coq-tactician-reinforce.~dev/config $(opam var coq-tactician:etc)/injection-flags # scheduled to remove if tests pass
               opam list
             endGroup
             startGroup "Test"

@@ -1,7 +1,8 @@
 (lang dune 2.9)
+(using dune_site 0.1)
 (name coq-tactician-reinforce)
 (using coq 0.3)
-(generate_opam_files true)
+(generate_opam_files false)
 
 (source (github coq-tactician/coq-tactician-reinforce))
 (homepage "https://coq-tactician.github.io")
