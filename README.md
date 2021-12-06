@@ -1,27 +1,30 @@
 # Reinforcement learning for Tactician
 
-## Coq plugin installation
+## Assumptions
 
 The recommended `opam` version is `>= 2.1.0`. Other versions might work as well, but you may have to install some dependencies manually.
 
 Notice: the installation depends on ocaml version 4.11.2 that is in conflict with glibc version >= 2.34
 and therefore fails on Ubuntu 21.10. 
 
+On Ubuntu 20.04 the packages installed by the following are required:
+
+```
+sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
+```
+
+## Installation
+
+
 
 Notice: with current limitation of pin-depends and pinned relative path it is strictly necessary to execute
 `opam install ./coq-tactician-reinforce.opam.locked --yes` in the below script from the directory of the opam file.
 
-
 ```
-opam switch create my-switch --empty
-opam repo add coq-released https://coq.inria.fr/opam/released
-opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev
-opam repo add coq-core-dev https://coq.inria.fr/opam/core-dev
-opam repo add custom-archive https://github.com/LasseBlaauwbroek/custom-archive.git
+opam switch create tactician-reinforce --empty
 git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git 
 cd coq-tactician-reinforce
 opam install ./coq-tactician-reinforce.opam.locked --yes
-cp $(opam var prefix)/.opam-switch/build/coq-tactician-reinforce.~dev/config $(opam var coq-tactician:etc)/injection-flags
 ```
 If you encounter problems while installing the `lwt` dependency, try installing `opam install conf-libev`.
 
