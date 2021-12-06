@@ -54,9 +54,8 @@ RUN opam install --switch tac --yes --deps-only ./coq-tactician-reinforce.opam
 
 
 # user opam install coq-tactician-reinforce
-COPY --chown=bot:bot . coq-tactician-reinforce
+COPY --chown=bot:bot . .
 RUN opam install --switch tac --yes  ./coq-tactician-reinforce.opam
-# RUN cp $(opam var --switch tac prefix)/.opam-switch/build/coq-tactician-reinforce.~dev/config $(opam var --switch tac coq-tactician:etc)/injection-flags
 
 # check coq-tactician-reinforce
 
