@@ -47,21 +47,19 @@ RUN opam switch create tac 4.11.2
 
 
 # user opam install coq-tactician
-RUN opam repo  --switch tac add coq-released https://coq.inria.fr/opam/released
-RUN opam repo  --switch tac add coq-extra-dev https://coq.inria.fr/opam/extra-dev
-RUN opam repo  --switch tac add coq-core-dev https://coq.inria.fr/opam/core-dev
-COPY --chown=bot:bot ./coq-tactician-reinforce.opam.locked coq-tactician-reinforce/coq-tactician-reinforce.opam.locked
-RUN opam install --switch tac --yes --deps-only coq-tactician-reinforce/coq-tactician-reinforce.opam.locked
+COPY --chown=bot:bot ./coq-tactician-reinforce.opam coq-tactician-reinforce/coq-tactician-reinforce.opam
+COPY --chown=bot:bot ./coq-tactician coq-tactician-reinforce/coq-tactician
+WORKDIR coq-tactician-reinforce
+RUN opam install --switch tac --yes --deps-only ./coq-tactician-reinforce.opam
 
 
 # user opam install coq-tactician-reinforce
 COPY --chown=bot:bot . coq-tactician-reinforce
-RUN opam install --switch tac --yes  coq-tactician-reinforce/coq-tactician-reinforce.opam.locked
-RUN cp $(opam var --switch tac prefix)/.opam-switch/build/coq-tactician-reinforce.~dev/config $(opam var --switch tac coq-tactician:etc)/injection-flags
+RUN opam install --switch tac --yes  ./coq-tactician-reinforce.opam
+# RUN cp $(opam var --switch tac prefix)/.opam-switch/build/coq-tactician-reinforce.~dev/config $(opam var --switch tac coq-tactician:etc)/injection-flags
 
 # check coq-tactician-reinforce
 
-WORKDIR coq-tactician-reinforce
 RUN echo "Load NNLearner. Graph Ident plus." | opam exec --switch tac coqtop
 
 RUN opam exec --switch tac -- $HOME/miniconda3/envs/tac/bin/python python/fake_reinforcement_client.py
