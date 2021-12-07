@@ -22,10 +22,17 @@ opam switch create tactician-reinforce --empty && opam pin coq-tactician-reinfor
 ```
 
 
-## For developers: 
+## For developers
+To allow one-liner remote pinning as above, after an update to the submodule `coq-tactician` commit, execute:
 
-After an update of a commit of a submodule `coq-tactician` run `make` to generate the 
-`coq-tactician-reinforce.opam` that pins this commit apropriately.
+```
+git add coq-tactician
+make
+git commit
+```
+
+The command `make` records appropriately the submodule's COMMIT_ID in the `pin depends` opam command argument to point correctly `git+https://github.com/coq-tactician/coq-tactician.git#COMMIT_ID` 
+
 
 
 ## Containers
