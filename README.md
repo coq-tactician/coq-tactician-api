@@ -18,7 +18,8 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
 To install from developer git+ssh repository under new opam switch `tactician-reinforce` run
 
 ```
-opam switch create tactician-reinforce --empty && opam pin coq-tactician-reinforce.opam git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
+opam switch create tactician-reinforce --empty 
+opam pin coq-tactician-reinforce.opam git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
 ```
 
 
