@@ -75,7 +75,7 @@ Finally, the command `Reinforce.` will initiate a reinforcement session. An exam
 To do this, you need to have a python client running. An example is available in pip package `pytact` that you can install 
 with 
 ```
-pip install pytact git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git
+pip install git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git
 ```
 
 To see how it works, run 
