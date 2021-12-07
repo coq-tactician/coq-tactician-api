@@ -1,11 +1,12 @@
-#!/usr/bin/env python3
+import os
+import sys
+
 import graphviz
-from pathlib import Path
 
 # Load the cap'n proto library, and the communication specification in 'graph_api.capnp'
 import capnp
 capnp.remove_import_hook()
-graph_api_capnp = str(Path('labelled_graph_api.capnp').expanduser())
+graph_api_capnp = os.path.join(sys.prefix,'share','pytact','labelled_graph_api.capnp')
 graph_api_capnp = capnp.load(graph_api_capnp)
 
 arrow_heads = [ "dot", "inv", "odot", "invdot", "invodot" ]

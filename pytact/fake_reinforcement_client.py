@@ -1,16 +1,15 @@
-#!/usr/bin/env python3
 import os
 import sys
 import asyncio
 import socket
 import argparse
 from pathlib import Path
-import graph_visualize as gv
+import pytact.graph_visualize as gv
 
 # Load the cap'n proto library, and the communication specification in 'graph_api.capnp'
 import capnp
 capnp.remove_import_hook()
-graph_api_capnp = str(Path('labelled_graph_api.capnp').expanduser())
+graph_api_capnp = os.path.join(sys.prefix,'share','pytact','labelled_graph_api.capnp')
 graph_api_capnp = capnp.load(graph_api_capnp)
 
 # Boilerplate code needed to have cap'n proto communicate through asyncio
@@ -84,10 +83,19 @@ async def reinforce(pull, lemma):
     return resp.result, tacs
 
 async def main():
-    parser = argparse.ArgumentParser(description='example of python code interacting with coq-tactician-reinforce')
+    parser = argparse.ArgumentParser(
+        description='example of python code interacting with coq-tactician-reinforce',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    
     parser.add_argument('--interactive',
                         action='store_true',
                         help='drop to the python shell after proof execution')
+
+    test_filename = os.path.join(sys.prefix,'share','pytact','tests/ReinforceTest.v')
+
+    parser.add_argument('--file', type=str, default=test_filename,
+                        help='path to coq source code file (.v extension) to execute in coq-tactician-reinforce')
+
     args = parser.parse_args()
 
     # Create a socket pair, initialize cap'n proto on our end of the socket
@@ -100,9 +108,11 @@ async def main():
     main = client.bootstrap().cast_as(graph_api_capnp.Main)
 
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
+
+
     proc = await asyncio.create_subprocess_exec(
         # 'python3', 'python/fake_coq_server.py',
-        'tactician', 'exec', 'coqc', 'tests/ReinforceTest.v',
+        'tactician', 'exec', 'coqc', test_filename,
         stdin=wsock,
         stdout=None,
         stderr=None)
@@ -137,5 +147,9 @@ async def main():
     await proc.communicate()
     await tasks
 
-if __name__ == '__main__':
+def run_main():
     asyncio.run(main())
+
+if __name__ == '__main__':
+    run_main()
+    

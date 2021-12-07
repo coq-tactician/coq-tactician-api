@@ -1,4 +1,12 @@
-#!/usr/bin/env python3
+"""
+TODO: check if works, fix or deprecate
+
+This file may be useful to Vasily/Fidel/Mirek/Jason when you want
+to test a reinforcement client without having to install the Opam
+packages. Wasn't maintained for a while
+"""
+
+
 import os
 import sys
 
@@ -9,7 +17,8 @@ from pathlib import Path
 
 import capnp
 capnp.remove_import_hook()
-graph_api_capnp = str(Path('graph_api.capnp').expanduser())
+
+graph_api_capnp = os.path.join(sys.prefix,'share','pytact','graph_api.capnp')
 graph_api_capnp = capnp.load(graph_api_capnp)
 
 class ProofObjectImpl(graph_api_capnp.ProofObject.Server):
