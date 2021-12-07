@@ -8,33 +8,45 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+          
       - uses: coq-community/docker-coq-action@v1.2.3
         with:
           opam_file: 'coq-tactician-reinforce.opam'
           coq_version: '8.11.2'
           ocaml_version: '4.11.2-flambda'
           install: |
-            startGroup "Install dependencies"
+            startGroup "Install apt-get dependencies"
               sudo apt update
-              sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
+              sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev python3 python3-pip python3-venv cmake libgmp-dev m4
+            endGroup
+            startGroup "Installing python part"
+              sudo python3 -m pip install --upgrade pip
+              cd $HOME
+              python3 -m venv venv
+              venv/bin/python3 -m pip install /github/workspace
+            endGroup
+            startGroup "Installing opam dependencies"
               # sudo git submodule update --init --recursive scheduled to remove if CI pass 
               export OPAMSOLVERTIMEOUT=120
               opam update -y
-              opam install -y -j 2 -t ./coq-tactician-reinforce.opam --deps-only
+              opam install -y -j 2 -t /github/workspace/coq-tactician-reinforce.opam --deps-only
             endGroup
           script: |
             startGroup "Build"
-              opam install -y -v -j 2 -t ./coq-tactician-reinforce.opam
+              opam install -y -v -j 2 -t /github/workspace/coq-tactician-reinforce.opam
               opam list
             endGroup
-            startGroup "Test"
+            startGroup "Test of Coq part"
+              cd /github/workspace
               sudo chown -R coq:coq . # Ugly hack
               ./tests/external-tests.sh
-              pip install .
-              pytact-test
+            endGroup
+            startGroup "Test of python part"
+              cd $HOME
+              venv/bin/pytact-test
             endGroup
           uninstall: |
             startGroup "Uninstallation test"
               opam remove coq-tactician-reinforce
-              pip uninstall pytact
+              venv/bin/pip uninstall -y pytact
             endGroup
