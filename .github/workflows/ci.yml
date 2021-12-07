@@ -10,14 +10,14 @@ jobs:
       - uses: actions/checkout@v2
       - uses: coq-community/docker-coq-action@v1.2.3
         with:
-          opam_file: 'coq-tactician-reinforce.opam.locked'
+          opam_file: 'coq-tactician-reinforce.opam'
           coq_version: '8.11.2'
           ocaml_version: '4.11.2-flambda'
           install: |
             startGroup "Install dependencies"
               sudo apt update
               sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
-              sudo git submodule update --init --recursive
+              # sudo git submodule update --init --recursive scheduled to remove if CI pass 
               export OPAMSOLVERTIMEOUT=120
               opam update -y
               opam install -y -j 2 -t ./coq-tactician-reinforce.opam --deps-only
