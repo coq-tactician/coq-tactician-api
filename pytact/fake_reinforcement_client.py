@@ -5,11 +5,14 @@ import socket
 import argparse
 from pathlib import Path
 import pytact.graph_visualize as gv
+import pytact.common
 
 # Load the cap'n proto library, and the communication specification in 'graph_api.capnp'
 import capnp
 capnp.remove_import_hook()
-graph_api_capnp = os.path.join(sys.prefix,'share','pytact','labelled_graph_api.capnp')
+
+
+graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
 
 # Boilerplate code needed to have cap'n proto communicate through asyncio
@@ -91,7 +94,7 @@ async def main():
                         action='store_true',
                         help='drop to the python shell after proof execution')
 
-    test_filename = os.path.join(sys.prefix,'share','pytact','tests/ReinforceTest.v')
+    test_filename = pytact.common.test_filename()
 
     parser.add_argument('--file', type=str, default=test_filename,
                         help='path to coq source code file (.v extension) to execute in coq-tactician-reinforce')

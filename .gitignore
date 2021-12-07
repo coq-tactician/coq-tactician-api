@@ -322,3 +322,12 @@ geckodriver.log
 *.pt
 *.ot
 coq-tactician-reinforce.opam.template
+
+# coq
+*.glob
+*.vo
+*.vos
+*.vok
+*.aux
+
+.emacs.desktop

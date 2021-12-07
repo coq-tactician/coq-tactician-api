@@ -30,8 +30,11 @@ jobs:
             startGroup "Test"
               sudo chown -R coq:coq . # Ugly hack
               ./tests/external-tests.sh
+              pip install .
+              pytact-test
             endGroup
           uninstall: |
             startGroup "Uninstallation test"
               opam remove coq-tactician-reinforce
+              pip uninstall pytact
             endGroup

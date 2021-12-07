@@ -1,1 +1,0 @@
-../../labelled_graph_api.capnp
