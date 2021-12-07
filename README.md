@@ -19,7 +19,7 @@ To install from developer git+ssh repository under new opam switch `tactician-re
 
 ```
 opam switch create tactician-reinforce --empty 
-opam pin coq-tactician-reinforce.opam git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
+opam pin coq-tactician-reinforce git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
 ```
 
 
