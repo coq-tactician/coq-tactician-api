@@ -15,18 +15,11 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
 
 ## Installation
 
-
-
-Notice: with current limitation of pin-depends and pinned relative path it is strictly necessary to execute
-`opam install ./coq-tactician-reinforce.opam --yes` in the below script from the directory of the opam file.
+To install from developer git+ssh repository under new opam switch `tactician-reinforce` run
 
 ```
-opam switch create tactician-reinforce --empty
-opam pin coq-tactician-reinforce.opam git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
+opam switch create tactician-reinforce --empty && opam pin coq-tactician-reinforce.opam git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
 ```
-If you encounter problems while installing the `lwt` dependency, try installing `opam install conf-libev`.
-
-Optional but recommended additional software: `graphviz` (install through your distribution's package manager)
 
 
 ## For developers: 
