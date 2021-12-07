@@ -321,3 +321,4 @@ geckodriver.log
 
 *.pt
 *.ot
+coq-tactician-reinforce.opam.template
