@@ -26,9 +26,9 @@ opam pin coq-tactician-reinforce git+ssh://git@github.com/coq-tactician/coq-tact
 For development work you may need to add repositories of `https://github.com/coq/opam-coq-archive`
 
 ``` 
+opam repo add coq-core-dev https://coq.inria.fr/opam/core-dev     # packages for development versions of Coq
 opam repo add coq-released https://coq.inria.fr/opam/released     # packages for officially released versions of Coq libraries and Coq extensions
-opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev   # packages for development versions of Coq
-opam repo add coq-core-dev https://coq.inria.fr/opam/core-dev     # packages for development versions of Coq libraries and Coq extensions
+opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev   # packages for development versions of Coq libraries and Coq extensions
 opam repo add custom-archive https://github.com/LasseBlaauwbroek/custom-archive.git # for Lasse's bugfixes of Coq 
 ```
 
