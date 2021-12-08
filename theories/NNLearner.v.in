@@ -37,6 +37,9 @@ Add ML Path "%{lib}%/zarith".
 Add ML Path "%{lib}%/base64".
 Add ML Path "%{lib}%/domain-name".
 Add ML Path "%{lib}%/pbkdf".
+Add ML Path "%{lib}%/macaddr".
+Add ML Path "%{lib}%/ipaddr".
+Add ML Path "%{lib}%/ipaddr-sexp".
 Add ML Path "%{lib}%/x509".
 Add ML Path "%{lib}%/asn1-combinators".
 Add ML Path "%{lib}%/cstruct".
@@ -51,7 +54,6 @@ Add ML Path "%{lib}%/eqaf".
 Add ML Path "%{lib}%/eqaf/bigstring".
 Add ML Path "%{lib}%/eqaf/cstruct".
 Add ML Path "%{lib}%/result".
-Add ML Path "%{lib}%/rresult".
 Add ML Path "%{lib}%/sexplib".
 Add ML Path "%{lib}%/parsexp".
 Add ML Path "%{lib}%/gmap".
@@ -108,10 +110,12 @@ Declare ML Module "eqaf_cstruct".
 Declare ML Module "mirage_crypto".
 Declare ML Module "mirage_crypto_rng".
 Declare ML Module "mirage_crypto_ec".
-Declare ML Module "rresult".
 Declare ML Module "mirage_crypto_pk".
 Declare ML Module "gmap".
 Declare ML Module "pbkdf".
+Declare ML Module "macaddr".
+Declare ML Module "ipaddr".
+Declare ML Module "ipaddr_sexp".
 Declare ML Module "x509".
 Declare ML Module "capnp_rpc_lwt".
 Declare ML Module "cstruct_sexp".
@@ -130,6 +134,6 @@ Declare ML Module "mirage_crypto_rng_unix".
 Declare ML Module "duration".
 Declare ML Module "mirage_crypto_rng_lwt".
 Declare ML Module "cstruct_lwt".
-Declare ML Module "extunix".
+Declare ML Module "ExtUnix".
 Declare ML Module "capnp_rpc_unix".
 Declare ML Module "tactician_reinforce_plugin".
