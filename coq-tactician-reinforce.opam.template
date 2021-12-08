@@ -1,0 +1,12 @@
+pin-depends: [
+  [
+    "coq-tactician.8.11.dev"
+    "./coq-tactician"
+  ]
+]
+
+
+substs: [
+  "config"
+  "theories/NNLearner.v"
+]
