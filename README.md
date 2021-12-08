@@ -15,12 +15,24 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
 
 ## Installation
 
-To install from developer git+ssh repository under new opam switch `tactician-reinforce` run
+To install from developer git+ssh repository under new opam switch `tact` run
 
 ```
-opam switch create tactician-reinforce --empty 
+opam switch create tact --empty &&  eval $(opam env --switch=tact)
 opam pin coq-tactician-reinforce git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
 ```
+
+## Extra repositories 
+For development work you may need to add repositories of `https://github.com/coq/opam-coq-archive`
+
+``` 
+opam repo add coq-released https://coq.inria.fr/opam/released     # packages for officially released versions of Coq libraries and Coq extensions
+opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev   # packages for development versions of Coq
+opam repo add coq-core-dev https://coq.inria.fr/opam/core-dev     # packages for development versions of Coq libraries and Coq extensions
+opam repo add custom-archive https://github.com/LasseBlaauwbroek/custom-archive.git # for Lasse's bugfixes of Coq 
+```
+
+
 
 
 ## For developers
