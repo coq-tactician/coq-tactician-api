@@ -15,6 +15,8 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
 
 ## Installation
 
+Notice: with current limitation of pin-depends and pinned relative path it is strictly necessary to execute
+`opam install ./coq-tactician-reinforce.opam.locked --yes` in the below script from the directory of the opam file.
 
 ```
 opam switch create tact --empty &&  eval $(opam env --switch=tact)
