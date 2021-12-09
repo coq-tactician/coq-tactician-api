@@ -21,6 +21,7 @@
   capnp-rpc-unix
   capnp-rpc-lwt
   ppx_deriving
+  ocamlgraph
   (dune (>= 2.9))))
 
 
