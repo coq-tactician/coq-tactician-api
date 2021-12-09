@@ -15,7 +15,7 @@
  (description "")
  (depends
   ocaml
-  (coq (= 8.11.2))
+  (coq (and (>= 8.11) (< 8.12~)))
   (coq-tactician (= 8.11.dev))
   (coq-tactician-dummy (= dev))
   capnp-rpc-unix
