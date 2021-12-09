@@ -15,10 +15,12 @@
  (description "")
  (depends
   ocaml
+  (coq (= 8.11.2))
   (coq-tactician (= 8.11.dev))
+  (coq-tactician-dummy (= dev))
   capnp-rpc-unix
   capnp-rpc-lwt
   ppx_deriving
-  ocamlgraph
-  (dune (> 2.5))
-  coq))
+  (dune (>= 2.9))))
+
+
