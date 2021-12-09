@@ -17,11 +17,13 @@
   ocaml
   (coq (and (>= 8.11) (< 8.12~)))
   (coq-tactician (= 8.11.dev))
-  (coq-tactician-dummy (= dev))
+  (coq-tactician-dummy (= dev)) ; scheduled to remove in the release
+                                ; branch. Let's keep this dependency
+                                ; in developers branch assuming we
+                                ; always want tests and we want
+                                ; `dune build && dune install`
   capnp-rpc-unix
   capnp-rpc-lwt
   ppx_deriving
   ocamlgraph
   (dune (>= 2.9))))
-
-
