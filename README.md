@@ -15,48 +15,17 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
 
 ## Installation
 
-To install from developer git+ssh repository under new opam switch `tact` run
 
 ```
 opam switch create tact --empty &&  eval $(opam env --switch=tact)
-opam pin coq-tactician-reinforce git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git --yes
-```
-
-## Extra repositories 
-For development work you may need to add repositories of `https://github.com/coq/opam-coq-archive`
-
-``` 
+opam repo add coq-released https://coq.inria.fr/opam/released     # packages for officially released versions of Coq library
 opam repo add coq-core-dev https://coq.inria.fr/opam/core-dev     # packages for development versions of Coq
-opam repo add coq-released https://coq.inria.fr/opam/released     # packages for officially released versions of Coq libraries and Coq extensions
 opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev   # packages for development versions of Coq libraries and Coq extensions
 opam repo add custom-archive https://github.com/LasseBlaauwbroek/custom-archive.git # for Lasse's bugfixes of Coq 
+git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git
+cd coq-tactician-reinforce
+opam install ./coq-tactician-reinforce.opam.locked --yes
 ```
-
-
-
-
-## For developers
-To allow one-liner remote pinning as above, after an update to the submodule `coq-tactician` commit, execute:
-
-```
-git add coq-tactician
-make
-git commit
-```
-
-The command `make` records appropriately the submodule's COMMIT_ID in the `pin depends` opam command argument to point correctly `git+https://github.com/coq-tactician/coq-tactician.git#COMMIT_ID` 
-
-
-
-## Containers
-
-To verify installation in a controlled enviroment we provide Dockerfile script. The Dockerfile can be used with `docker` or `podman`. To build the image, run from the directory containing the Dockerfile
-```
-podman build -t tac:test . 
-```
-We recommend using podman in rootless mode as there are certain unresolved limitation of bubblewrap / user namespaces with docker container.  
-
-Notice: as of `podman 3.3.1` and `opam 2.0.5` sometimes race conditions have been detected with building on multicore. Updating podman and/or opam might fix the issue.
 
 ## Available Commands
 
