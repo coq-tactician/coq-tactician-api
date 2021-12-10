@@ -4,21 +4,21 @@
  (flags -q -noinit)
  (modules )
  (libraries
-   coq-tactician-reinforce.plugin)
-)
+   coq-tactician-reinforce.plugin
+))
 
 (include_subdirs qualified)
 
 (rule
- (targets NNLearner.v)
- ; When installed through opam, we perform substitutions through the 'substs' directive in the opam file.
- ; It also works using this rule, but running opam during an installation can be risky due to sandboxing issues.
- (mode fallback)
- (deps NNLearner.v.in)
- (action (run opam config subst %{targets})))
+ (target TacticianReinforceDepLoader.v)
+ (deps   plugin_deps_generate_conf.ml )
+ (action (with-stdout-to %{target}
+           (run ocaml -I %{lib:findlib:} str.cma findlib.cma
+                %{deps} ))))
 
-; Workaround for https://github.com/ocaml/dune/issues/4258. Should be fixed in coq 8.12, but will have to remain until we migrate from 8.11
 (install
- (files (NNLearner.v as coq/user-contrib/Tactician/NNLearner.v))
+ (package coq-tactician-reinforce)
+ (files (NNLearner.v as coq/user-contrib/Tactician/NNLearner.v)
+        (TacticianReinforceDepLoader.v as coq/user-contrib/Tactician/TacticianReinforceDepLoader.v))
  (section lib_root)
 )

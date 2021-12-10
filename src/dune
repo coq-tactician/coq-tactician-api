@@ -29,7 +29,11 @@
     extreme_tactic_normalize
  ))
  (libraries
-   capnp capnp.unix lwt.unix capnp-rpc-unix capnp-rpc-lwt
+   capnp
+   capnp.unix
+   capnp-rpc-unix
+   capnp-rpc-lwt
+   lwt.unix
    ocamlgraph
    coq-tactician.record-plugin)
  (preprocess (staged_pps ppx_deriving.show))

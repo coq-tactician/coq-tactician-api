@@ -8,5 +8,4 @@ pin-depends: [
 
 substs: [
   "config"
-  "theories/NNLearner.v"
 ]

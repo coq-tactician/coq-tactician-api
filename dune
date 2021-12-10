@@ -7,5 +7,6 @@
  (action (run opam config subst %{targets})))
 
 (install
+(package coq-tactician-reinforce)
 (section (site (coq-tactician plugins)))
 (files (config as coq-tactician-reinforce/injection-flags)))
