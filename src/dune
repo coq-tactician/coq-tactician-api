@@ -29,6 +29,7 @@
     extreme_tactic_normalize
  ))
  (libraries
+   logs.fmt
    capnp
    capnp.unix
    capnp-rpc-unix

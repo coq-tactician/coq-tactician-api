@@ -9,6 +9,8 @@ depends: [
   "ocamlfind"
   "coq" {>= "8.11" & < "8.12~"}
   "coq-tactician" {= "8.11.dev"}
+  "logs"
+  "fmt"
   "capnp-rpc-unix"
   "capnp-rpc-lwt"
   "ppx_deriving"
