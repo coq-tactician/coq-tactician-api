@@ -1,4 +1,0 @@
-(install
-(package coq-tactician-reinforce)
-(section (site (coq-tactician plugins)))
-(files (injection-flags as coq-tactician-reinforce/injection-flags)))
