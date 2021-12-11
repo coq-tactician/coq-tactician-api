@@ -6,6 +6,7 @@ pin-depends: [
 ]
 
 depends: [
+  "ocamlfind"
   "coq" {>= "8.11" & < "8.12~"}
   "coq-tactician" {= "8.11.dev"}
   "capnp-rpc-unix"
