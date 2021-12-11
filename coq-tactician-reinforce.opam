@@ -7,17 +7,6 @@ authors: ["Lasse Blaauwbroek <lasse@blaauwbroek.eu>"]
 homepage: "https://coq-tactician.github.io"
 bug-reports:
   "https://github.com/coq-tactician/coq-tactician-reinforce/issues"
-depends: [
-  "ocaml"
-  "coq-tactician" {= "8.11.dev"}
-  "capnp-rpc-unix"
-  "capnp-rpc-lwt"
-  "ppx_deriving"
-  "ocamlgraph"
-  "dune" {>= "2.9" & > "2.5"}
-  "coq"
-  "odoc" {with-doc}
-]
 build: [
   ["dune" "subst"] {dev}
   [
@@ -34,8 +23,26 @@ build: [
   ]
   ["dune" "install" "-p" name "--create-install-files" name]
 ]
-
 dev-repo: "git+https://github.com/coq-tactician/coq-tactician-reinforce.git"
+pin-depends: [
+  [
+    "coq-tactician.8.11.dev"
+    "./coq-tactician"
+  ]
+]
+
+
 substs: [
   "config"
+]
+depends: [
+  "coq" {>= "8.11" & < "8.12~"}
+  "coq-tactician" {= "8.11.dev"}
+  "capnp-rpc-unix"
+  "capnp-rpc-lwt"
+  "ppx_deriving"
+  "ocamlgraph"
+  "dune" {>= "2.9" & >= "2.9"}
+  "odoc" {with-doc}
+  "ocaml" {>= "4.13"} | ("ocaml" {< "4.12"} & "lwt" {<= "5.1.0"})
 ]

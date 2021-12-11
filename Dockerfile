@@ -10,9 +10,6 @@ COPY --chown=coq:coq . coq-tactician-reinforce
 WORKDIR coq-tactician-reinforce
 
 RUN eval $(opam env) \
-    && opam pin lwt 5.1.0 -y      # higher versions of lwt incompatible with ocaml 4.11.2
-
-RUN eval $(opam env) \
     && opam install ./coq-tactician-reinforce.opam -y
 
 RUN pip install .
