@@ -31,10 +31,6 @@ pin-depends: [
   ]
 ]
 
-
-substs: [
-  "config"
-]
 depends: [
   "coq" {>= "8.11" & < "8.12~"}
   "coq-tactician" {= "8.11.dev"}

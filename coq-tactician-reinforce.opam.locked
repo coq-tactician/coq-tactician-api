@@ -125,7 +125,6 @@ build: [
   ]
   ["dune" "install" "-p" name "--create-install-files" name]
 ]
-substs: ["config"]
 dev-repo: "git+https://github.com/coq-tactician/coq-tactician-reinforce.git"
 pin-depends: [
   [
