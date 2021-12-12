@@ -1,4 +1,4 @@
-FROM pestun/debian.10.opam.2.1.2.ocaml.4.11.2.coq.8.11.2.conda.python.3.9.capnproto:latest
+FROM pestun/debian.10.opam.2.1.2.ocaml.4.13.1.coq.8.11.dev.conda.python.3.9.capnproto:latest
 
 MAINTAINER Vasily Pestun "pestun@ihes.fr"
 
