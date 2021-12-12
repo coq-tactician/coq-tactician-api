@@ -34,6 +34,7 @@ let preds = ["native";
 
 let debug_msg = Printf.eprintf "%s\n" (* TODO: replace by standard log/debug instruments *)
 
+
 let strip_cmxs s =
   let open String in
   let n = length s in if n >=5 && sub s (n - 5) 5  = ".cmxs" then  sub s 0 (n - 5)
@@ -43,20 +44,28 @@ let strip_cmxs s =
 let strip_ext s =
   match List.find_opt (fun (k,v)  -> k = s) bad_meta_sub_map with
   | Some (k,v) -> v
-  | None ->  strip_cmxs s     
+  | None ->  strip_cmxs s
 
 let quote s = "\"" ^ s ^ "\""
-let write_loader_line dir filename =
-  "Add ML Path " ^ (quote dir) ^ ". Declare ML Module " ^ (quote filename) ^ "."
 
-let fake_dynlink_loadfile dir s = print_endline (write_loader_line dir (strip_ext s))
+let write_loader_line dir filename =
+  "Add ML Path " ^ (quote dir) ^ ". Declare ML Module " ^ (quote filename) ^ ".\n"
+
+let write_injection_flag_line dir =
+  "-I " ^ dir ^ " "
+
+
+let print_two_streams out1 out2 dir filename = (
+    Printf.fprintf out1 "%s" (write_loader_line dir (strip_ext filename));
+    Printf.fprintf out2 "%s" (write_injection_flag_line dir);
+  )
 
 let in_words s = Str.split (Str.regexp "[ \t\n\r,]+") s (* https://github.com/ocaml/ocamlfind/src/findlib/fl_split.ml#L7 *)
 
-let load_pkg ~debug pkg =
+let load_pkg printer pkg =
   if not (Findlib.is_recorded_package pkg) &&
        not (List.mem pkg hard_linked) then (
-     let d = Findlib.package_directory pkg in
+     let dir = Findlib.package_directory pkg in
      let preds = Findlib.recorded_predicates() in
      let archive =
        try
@@ -74,19 +83,25 @@ let load_pkg ~debug pkg =
                 else v
               with Not_found -> "" in
      let files = in_words archive in
-     List.iter (fake_dynlink_loadfile d) files;
+     List.iter (printer dir) files;
      Findlib.record_package Findlib.Record_load pkg
   )
 
 
-let () = 
-  Findlib.init ();
-  debug_msg "Using findlib search path:";
-  List.iter (debug_msg) (Findlib.search_path ())
-
-let resolved_pkgs = Findlib.package_deep_ancestors preds pkgs
-
-let () = Findlib.record_package_predicates preds
-
 let () =
-  List.iter (load_pkg ~debug:false) resolved_pkgs
+  if (Array.length Sys.argv) != 3 then (
+    debug_msg "usage: ocaml plugin_deps_generate_conf.ml \
+               TacticianReinforceDepLoader.v injection-flags";
+    exit 1)
+  else (
+    debug_msg "Using findlib search path:";
+    Findlib.init ();
+    List.iter (debug_msg) (Findlib.search_path ());
+    let resolved_pkgs = Findlib.package_deep_ancestors preds pkgs in
+    Findlib.record_package_predicates preds;
+    let out1 = open_out Sys.argv.(1) in
+    let out2 = open_out Sys.argv.(2) in
+    List.iter (load_pkg (print_two_streams out1 out2)) resolved_pkgs;
+    close_out out1;
+    close_out out2;
+  )
