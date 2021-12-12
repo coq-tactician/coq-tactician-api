@@ -27,8 +27,21 @@
     dag_api
     labelled_graph_api
     extreme_tactic_normalize
- ))
- (libraries %{read:dune_dep_libraries})
+    ))
+  (libraries
+    ;please enter one library name per one line in between watermark lines
+    ;these watermarks are used to guide ../theories/plugin_deps_generate_conf
+    ;to scrape this dune file
+    ;__dep_extract_start__
+    logs.fmt
+    capnp
+    capnp.unix
+    capnp-rpc-unix
+    capnp-rpc-lwt
+    lwt.unix
+    ocamlgraph
+    ;__dep_extract_finish__
+    coq-tactician.record-plugin)
  (preprocess (staged_pps ppx_deriving.show))
 )
 

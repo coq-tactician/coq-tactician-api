@@ -3,37 +3,39 @@
    upstream Coq implements properly recursive loading of ocaml plugin
    dependencies.
 
- In this way we get rid of manual maintance of recursive list of
-   dynamical deps in NNLearner.v *)
+   This tool takes three arguments: ARG1 ARG2 ARG3
 
-(* Packages on which we depends.  Must keep in sync with dune. TODO:
-   write preprocessor to extract from dune *)
+   ARG1 is the filename of input dune file to process and extract libraries depenencies
+   included one per line between the start_watermark and finish_watermark regexp
 
-let pkgs =  [ "logs.fmt";
-              "capnp";
-              "capnp.unix";
-              "capnp-rpc-unix";
-              "capnp-rpc-lwt";
-              "lwt.unix";
-              "ocamlgraph";]
+   ARG2 is the filename of the ouput .v file
+
+   ARG3 is the filename of the output injection-flags file
+
+ *)
 
 
-let hard_linked = ["unix"]  (* list of hardlinked libraries to coq *)
+(* CONFIG SECTION *)
 
-let bad_meta_pkg_list = ["zarith"]   (* list of findlib pkg names that
-                                        have bugs:
-                                        https://github.com/ocaml/Zarith/issues/102
-                                        *)
+let start_watermark = Str.regexp ".*;__dep_extract_start__.*"
+let finish_watermark = Str.regexp ".*;__dep_extract_finish__.*"
 
+(* list of hardlinked libraries to coq *)
+let core_linked = ["unix"] 
+
+(* list of package with bugs in META:  https://github.com/ocaml/Zarith/issues/102 *)
+let bad_meta_pkg_list = ["zarith"]   
 let bad_meta_sub_map = [ ("zarith.cmxa", "zarith") ] (* replacement map for bad cases *)
 
-let preds = ["native";
-             "ppx_driver";
-             "mt";
-             "mt_posix"]
+(* list of META package predicates we search for *)
+let preds = ["native"; "ppx_driver"; "mt"; "mt_posix"]
 
-let debug_msg = Printf.eprintf "%s\n" (* TODO: replace by standard log/debug instruments *)
+(* DEBUG CONFIG SECTION *)
+(* switch off debug when we know this works *)
 
+let debug_msg = Printf.eprintf "%s\n" 
+
+(* CODE SECTION *)
 
 let strip_cmxs s =
   let open String in
@@ -56,6 +58,7 @@ let write_injection_flag_line dir =
 
 
 let print_two_streams out1 out2 dir filename = (
+    debug_msg ("Recording object: " ^ dir ^ "/" ^ filename);
     Printf.fprintf out1 "%s" (write_loader_line dir (strip_ext filename));
     Printf.fprintf out2 "%s" (write_injection_flag_line dir);
   )
@@ -63,8 +66,7 @@ let print_two_streams out1 out2 dir filename = (
 let in_words s = Str.split (Str.regexp "[ \t\n\r,]+") s (* https://github.com/ocaml/ocamlfind/src/findlib/fl_split.ml#L7 *)
 
 let load_pkg printer pkg =
-  if not (Findlib.is_recorded_package pkg) &&
-       not (List.mem pkg hard_linked) then (
+  if not (Findlib.is_recorded_package pkg) then (
      let dir = Findlib.package_directory pkg in
      let preds = Findlib.recorded_predicates() in
      let archive =
@@ -79,7 +81,7 @@ let load_pkg printer pkg =
                   List.mem "native" preds in
                 if need_plugin
                    && not (List.mem (`Pred "plugin") fpreds)
-                   && not (List.mem pkg bad_meta_pkg_list) then   (debug_msg @@ "Skipping: " ^ v; "")
+                   && not (List.mem pkg bad_meta_pkg_list) then   (debug_msg @@ "Skipping object: " ^ v; "")
                 else v
               with Not_found -> "" in
      let files = in_words archive in
@@ -88,19 +90,52 @@ let load_pkg printer pkg =
   )
 
 
+let extract_dune dune_filename =
+  let shared = ref false in
+  let dune_ch = open_in dune_filename in
+  let res = ref [] in
+  try
+    while true do
+      let line = input_line dune_ch in
+      if !shared then
+        if Str.string_match finish_watermark line 0 then
+          shared := false
+        else
+          let trimmed_line = String.trim line in
+          debug_msg ("Extracted dependency: " ^ trimmed_line);
+          res := trimmed_line :: !res
+      else
+        if Str.string_match start_watermark line 0 then
+          shared := true
+    done; !res
+  with End_of_file ->
+    close_in dune_ch; !res
+
+(* MAIN PROCESS *) 
+
 let () =
-  if (Array.length Sys.argv) != 3 then (
-    debug_msg "usage: ocaml plugin_deps_generate_conf.ml \
-               TacticianReinforceDepLoader.v injection-flags";
+  if (Array.length Sys.argv) != 4 then (
+    debug_msg "usage: ocaml plugin_deps_generate_conf.ml dune \
+               TacticianReinforceDepLoader.v injection-flags ";
     exit 1)
   else (
-    debug_msg "Using findlib search path:";
+    (* get libraries from dune, using watermark cut *)
+    let pkgs = extract_dune Sys.argv.(1) in
+
     Findlib.init ();
+    debug_msg "Using findlib search path:";
     List.iter (debug_msg) (Findlib.search_path ());
+
+    (* record coq-core-linked packages *)
+    List.iter (Findlib.record_package Findlib.Record_core) core_linked;
+
+    (* resolve dependencies *)
     let resolved_pkgs = Findlib.package_deep_ancestors preds pkgs in
     Findlib.record_package_predicates preds;
-    let out1 = open_out Sys.argv.(1) in
-    let out2 = open_out Sys.argv.(2) in
+
+    (* record result *)
+    let out1 = open_out Sys.argv.(2) in
+    let out2 = open_out Sys.argv.(3) in
     List.iter (load_pkg (print_two_streams out1 out2)) resolved_pkgs;
     close_out out1;
     close_out out2;

@@ -11,7 +11,7 @@
 
 (rule
  (targets TacticianReinforceDepLoader.v injection-flags-dirs)
- (deps   plugin_deps_generate_conf.ml )
+ (deps   plugin_deps_generate_conf.ml ../src/dune )
  (action (run ocaml -I %{lib:findlib:} str.cma findlib.cma
               %{deps} %{targets})))
 
