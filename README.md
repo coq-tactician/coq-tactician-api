@@ -16,7 +16,7 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
 ## Installation
 
 Notice: with current limitation of pin-depends and pinned relative path it is strictly necessary to execute
-`opam install ./coq-tactician-reinforce.opam.locked --yes` in the below script from the directory of the opam file.
+`opam install ./coq-tactician-reinforce.opam --yes` in the below script from the directory of the opam file.
 
 ```
 opam switch create tact --empty &&  eval $(opam env --switch=tact)
@@ -26,7 +26,7 @@ opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev   # packages for
 opam repo add custom-archive https://github.com/LasseBlaauwbroek/custom-archive.git # for Lasse's bugfixes of Coq 
 git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git
 cd coq-tactician-reinforce
-opam install ./coq-tactician-reinforce.opam.locked --yes
+opam install ./coq-tactician-reinforce.opam --yes
 ```
 
 ## Available Commands
