@@ -28,15 +28,7 @@
     labelled_graph_api
     extreme_tactic_normalize
  ))
- (libraries
-   logs.fmt
-   capnp
-   capnp.unix
-   capnp-rpc-unix
-   capnp-rpc-lwt
-   lwt.unix
-   ocamlgraph
-   coq-tactician.record-plugin)
+ (libraries %{read:dune_dep_libraries})
  (preprocess (staged_pps ppx_deriving.show))
 )
 
