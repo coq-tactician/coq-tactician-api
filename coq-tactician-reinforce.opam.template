@@ -26,5 +26,5 @@ depends: [
   "ocamlgraph"
   "dune" {>= "2.9" & >= "2.9"}
   "odoc" {with-doc}
-  "ocaml" {>= "4.13"} | ("ocaml" {< "4.12"} & "lwt" {<= "5.1.0"})
+  "ocaml" {>= "4.13"} | ("ocaml" {< "4.12"} & "lwt" {<= "5.1.1"})
 ]
