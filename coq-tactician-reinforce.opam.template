@@ -5,8 +5,29 @@ pin-depends: [
   ]
 ]
 
+# we depend on META library name logs.fmt
+# provided by opam package logs if opam package fmt
+# is optionally present. Something in the
+# resolution chain of opam / META / our dependencies
+# dependencies didn't resolve properly depopts case
+# therefore we add it explicitly 
+# commit 544cf04bac7e0d15a459395f5b43fa002ec52389
 
-substs: [
-  "config"
-  "theories/NNLearner.v"
+
+depends: [
+  "ocamlfind"
+  "coq" {>= "8.11" & < "8.12~"}
+  "coq-tactician" {= "8.11.dev"}
+  "logs"
+  "fmt"
+  "capnp-rpc-unix"
+  "capnp-rpc-lwt"
+  "ppx_deriving"
+  "ocamlgraph"
+  "dune" {>= "2.9" & >= "2.9"}
+  "odoc" {with-doc}
+  # These constraints are to work around
+  # https://github.com/ocsigen/lwt/issues/764 and
+  # https://github.com/ocaml/ocaml/pull/9914
+  "ocaml" {>= "4.12~"} | ("ocaml" {< "4.12~"} & "lwt" {<= "5.1.1"})
 ]
