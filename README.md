@@ -80,4 +80,38 @@ This installs python package in developer mode, so that python code updates prop
 to the installed package.
 
 
+## CI
+To verify the build and test locally by specification in `Dockerfile` you run
+
+```
+sudo docker build -t test . 
+```
+The `Dockerfile` contains project build instruction and the set of tests.
+
+Our plan for Github Actions CI to always reuse and refer to the same
+`Dockerfile`.
+
+In this way we can be sure that local CI is identical to GitHub
+Actions CI, and that we can move easily to another platform if
+necessary.
+
+
+## CI caching 
+The `Dockefile` builds on top of the base layer `Dockerfile_base`
+derived from canonical coq-community
+`coqorg/coq:8.11.2-ocaml-4.11.2-flambda` that is based on
+Debian.10/opam 2.0.9/coq 8.12/ocaml-variants-4.11.2+flambda.
+
+The layer defined by `Dockerfile_base` adds `conda/python 3.9`,
+`capnp` library and all opam package dependencies requested by the
+coq-tactician-reinforce (including the opam package defined in git
+submodule `coq-tactician`).
+
+The image defined by `Dockerfile_base` can be updated by maintainers (currently Vasily) by
+```
+sudo sh ci-update-base.sh
+```
+This caching update is necessary only periodically and only
+for optimisation of the speed of CI, but it is not strictly necessary for CI to perform correctly
+(opam is supposed to reinstall packages if dependencies are changed -- to be confirmed by practice). 
 
