@@ -100,7 +100,7 @@ necessary.
 The `Dockefile` builds on top of the base layer `Dockerfile_base`
 derived from canonical coq-community
 `coqorg/coq:8.11.2-ocaml-4.11.2-flambda` that is based on
-Debian.10/opam 2.0.9/coq 8.12/ocaml-variants-4.11.2+flambda.
+Debian.10/opam 2.0.9/coq 8.11.2/ocaml-variants-4.11.2+flambda.
 
 The layer defined by `Dockerfile_base` adds `conda/python 3.9`,
 `capnp` library and all opam package dependencies requested by the
