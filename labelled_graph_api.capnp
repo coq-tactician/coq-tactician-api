@@ -45,6 +45,7 @@ struct Tactic {
   # Note, however, that this is a slight under-approximation, because tactic printing is not 100% isomorphic to
   # Coq's internal AST of tactics. As such, there are slightly more unique `ident`'s than `bareText`'s in the dataset.
   baseText @3 :Text;
+  intermText @4 :Text;
 }
 
 struct Dataset {
@@ -130,8 +131,8 @@ struct NodeClassification {
     root @0 :Void;
 
     # Context
-    contextDef @1 :Void;
-    contextAssum @2 :Void;
+    contextDef @1 :Text;
+    contextAssum @2 :Text;
 
     # Definitions
     definition @3 :Definition;

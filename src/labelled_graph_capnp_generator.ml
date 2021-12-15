@@ -38,8 +38,8 @@ let nt2nt transformer (nt : G.node node_type) cnt =
   let open K.Builder.NodeClassification in
   match nt with
   | Root -> root_set cnt
-  | ContextDef _ -> context_def_set cnt
-  | ContextAssum _ -> context_assum_set cnt
+  | ContextDef id -> context_def_set cnt (Id.to_string id)
+  | ContextAssum id -> context_assum_set cnt (Id.to_string id)
   | Definition { previous; def_type } ->
     let cdef = definition_init cnt in
     let open K.Builder.Definition in
@@ -50,7 +50,7 @@ let nt2nt transformer (nt : G.node node_type) cnt =
       name_set cdef (Constant.to_string c);
       let tconst = tactical_constant_init cdef in
       let arr = TacticalConstant.tactical_proof_init tconst (List.length proof) in
-      List.iteri (fun i ({ tactic; base_tactic; tactic_hash; arguments; root; context; ps_string }
+      List.iteri (fun i ({ tactic; base_tactic; interm_tactic; tactic_hash; arguments; root; context; ps_string }
                          : G.node tactical_step) ->
           let arri = Capnp.Array.get arr i in
           let state = K.Builder.ProofStep.state_init arri in
@@ -64,6 +64,8 @@ let nt2nt transformer (nt : G.node node_type) cnt =
             (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) tactic));
           K.Builder.Tactic.base_text_set capnp_tactic
             (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) base_tactic));
+          K.Builder.Tactic.interm_text_set capnp_tactic
+            (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) interm_tactic));
           let arg_arr = K.Builder.Tactic.arguments_init capnp_tactic (List.length arguments) in
           List.iteri (fun i (dep, index) ->
               let arri = Capnp.Array.get arg_arr i in

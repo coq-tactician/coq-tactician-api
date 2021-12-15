@@ -86,8 +86,8 @@ module GraphBuilder(G : Graph) = struct
     let+ { focus; _ } = ask in focus
   let with_focus focus =
     local (fun c -> { c with focus })
-  let with_initial_focus =
-    local (fun c -> { c with focus = c.initial_focus })
+  let with_initial_focus m =
+    local (fun c -> { c with focus = c.initial_focus }) m
   let with_relatives ns =
     local (fun ({ relative; _ } as c) ->
         let relative = OList.fold_left (fun ctx n -> n::ctx) ns relative in (* Funs are added backwards *)
@@ -154,6 +154,7 @@ module GraphBuilder(G : Graph) = struct
         Printer.safe_pr_constr_env env evar_map t)) in
     let goal = constr_str concl in
     let id_str id = Names.Id.to_string id.binder_name in
+    let hyps = OList.rev hyps in
     let hyps = OList.map (function
         | Named.Declaration.LocalAssum (id, typ) ->
           id_str id ^ " : " ^ constr_str typ
@@ -195,34 +196,36 @@ module GraphBuilder(G : Graph) = struct
   and gen_tactical_proof (ps, tac) =
     let* root = mk_node Root in
     let* context_map = with_focus root @@ gen_proof_state ps in
-    let tac_orig = tac in
+    let tac_orig = Tactic_name_remove.tactic_name_remove tac in
     let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
-    let args, tac = Tactic_abstract.tactic_abstract tac in
+    let args, interm_tactic = Tactic_one_variable.tactic_one_variable tac in
 
-    (* Generate and find referenced constants *)
-    let constants = Tactic_abstract.tactic_constants tac in
-    (* TODO: We are generating extra edges here, improve *)
-    let* constants = List.map (fun c -> with_initial_focus @@ gen_const ContextElem c) constants in
+    (* (\* Generate and find referenced constants *\) *)
+    (* let constants = Tactic_abstract.tactic_constants tac in *)
+    (* (\* TODO: We are generating extra edges here, improve *\) *)
+    (* let* constants = List.map (fun c -> with_initial_focus @@ gen_const ContextElem c) constants in *)
 
     let tac = Extreme_tactic_normalize.tactic_normalize tac in
     let context = Id.Map.bindings context_map in
     let context_range = OList.map (fun (_, n) -> n) context in
     let warn_arg id =
       Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
-                               Pptactic.pr_glob_tactic (Global.env ()) tac_orig ++ str " in context\n" ++
-                               prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context) in
+                               Pptactic.pr_glob_tactic (Global.env ()) tac_orig (* ++ str " in context\n" ++ *)
+                               (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
     let check_default id def = function
       | None -> warn_arg id; def
       | Some x -> x in
     let+ r = ask in
     let initial_focus = r.initial_focus in
-    let arguments = OList.map (fun (id, _) ->
-        check_default id initial_focus @@
-        Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context) args in
+    let arguments = OList.map (fun id ->
+        Option.cata (fun id ->
+            check_default id initial_focus @@
+            Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context)
+          initial_focus id) args in
     let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
-    { tactic = tac_orig; base_tactic = tac
+    { tactic = tac_orig; base_tactic = tac; interm_tactic
     ; tactic_hash = Hashtbl.hash_param 255 255 tac
-    ; arguments = arguments @ constants
+    ; arguments = arguments (* @ constants *)
     ; root; context = context_range; ps_string }
   and gen_primitive_constructor et ind proj_npars typ =
     let relctx, sort = Term.decompose_prod_assum typ in
