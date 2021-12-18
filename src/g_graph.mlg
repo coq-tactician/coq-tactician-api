@@ -43,5 +43,7 @@ VERNAC COMMAND EXTEND DAGProof CLASSIFIED AS QUERY STATE proof_query
 END
 
 VERNAC COMMAND EXTEND Reinforce CLASSIFIED AS QUERY
-| [ "Reinforce" ] -> { Reinforce.reinforce () }
+| [ "Reinforce" ] -> { Reinforce.reinforce_stdin () }
+| [ "Reinforce" string(ip_addr) int(port) ] -> { Reinforce.reinforce_tcp ip_addr port }
 END
+

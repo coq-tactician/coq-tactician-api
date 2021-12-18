@@ -1,4 +1,4 @@
-@0xafda4797418def92;
+@0xf4cf5f92e12816a5;
 
 using File = Text;
 using DepIndex = UInt16;
@@ -17,7 +17,7 @@ struct DirectedEdge {
 
 struct Graph {
   # Gives a classification to every NodeIndex
-  classifications @0 :List(NodeClassification);
+  classifications @0 :List(NodeClassification);   # TODO: may be let's rename this to 'nodes'?
   edges @1 :List(DirectedEdge);
 }
 
@@ -80,7 +80,7 @@ interface ProofObject {
 }
 
 interface AvailableTactics {
-  tactics @0 () -> (tactics :List(AbstractTactic));
+  tactics @0 () -> (tactics :List(AbstractTactic));    #TODO: may be move this to ExecutionResult?
   printTactic @1 (tactic :TacticId) -> (tactic :Text);
 }
 
@@ -95,7 +95,12 @@ interface PushReinforce {
 
 interface Main {
   initialize @0 (push :PushReinforce) -> (pull :PullReinforce);
+
+  # ping is a template for the handshake with remote coq client
+  # i'll use it later to agree on the versions of capnp protocol
+  ping @1 () -> (result: Text);
 }
+
 
 struct ProofStep {
   state @0 :ProofState;

@@ -12,8 +12,8 @@ import capnp
 capnp.remove_import_hook()
 
 
-graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+
+labelled_graph_api = capnp.load(pytact.common.labelled_graph_api_filename)
 
 # Boilerplate code needed to have cap'n proto communicate through asyncio
 async def read_loop(client, reader, write_task):
@@ -29,7 +29,7 @@ async def write_loop(client, writer):
         await writer.drain()
 
 # A class that implements reinforcement learning when it is initiated from Coq's side
-class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
+class PushReinforceImpl(labelled_graph_api.PushReinforce.Server):
 
     # This function is tricky, because you cannot use asyncio in it. You have to use
     # the C++ async library, which uses 'then()' as a chaining mechanism. This may cause
@@ -94,7 +94,7 @@ async def main():
                         action='store_true',
                         help='drop to the python shell after proof execution')
 
-    test_filename = pytact.common.test_filename()
+    test_filename = pytact.common.test_filename_stdin
 
     parser.add_argument('--file', type=str, default=test_filename,
                         help='path to coq source code file (.v extension) to execute in coq-tactician-reinforce')
@@ -108,7 +108,7 @@ async def main():
     write_task = asyncio.create_task(write_loop(client, writer))
     coroutines = [read_loop(client, reader, write_task), write_task]
     tasks = asyncio.gather(*coroutines, return_exceptions=True)
-    main = client.bootstrap().cast_as(graph_api_capnp.Main)
+    main = client.bootstrap().cast_as(labelled_graph_api.Main)
 
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
 
