@@ -18,4 +18,4 @@ module TacticAvailabilityLearner = functor (TS : TacticianStructures) -> struct
 
 end
 
-let () = register_online_learner "tactic-availability-learner" (module TacticAvailabilityLearner)
+(* let () = register_online_learner "tactic-availability-learner" (module TacticAvailabilityLearner) *)
