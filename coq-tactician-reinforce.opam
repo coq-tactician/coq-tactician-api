@@ -44,13 +44,13 @@ depends: [
   "ocamlfind"
   "coq" {>= "8.11" & < "8.12~"}
   "coq-tactician" {= "8.11.dev"}
-  "fmt"
   "logs"
+  "fmt"
   "capnp-rpc-unix"
   "capnp-rpc-lwt"
   "ppx_deriving"
   "ocamlgraph"
-  "dune" {>= "2.9" }
+  "dune" {>= "2.9"}
   "odoc" {with-doc}
   # These constraints are to work around
   # https://github.com/ocsigen/lwt/issues/764 and
