@@ -58,7 +58,7 @@ def process2(res):
                 print(f"Error: x.target.depIndex {x.target.depIndex} but len(g.dependencies) is {len(g.dependencies)}")
                 print(f"file is {fname} edge is {x}")
                 print(f"g.dependencies = {g.dependencies}")
-                sys.exit(1)
+                raise Exception
 
             if max_node[g.dependencies[x.target.depIndex]] <= x.target.nodeIndex:
                 print(x)
