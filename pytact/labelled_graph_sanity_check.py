@@ -59,9 +59,9 @@ print(len(tactical_definitions))
 print("Proof steps total")
 print(proof_steps_total)
 
-for f in file_list:
-    print(f)
-    f = open(f)
+for fname in file_list:
+    print(fname)
+    f = open(fname)
     g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
     dep = g.dependencies[0]
     local_max = 0
@@ -73,6 +73,12 @@ for f in file_list:
         if local_count <= x.source:
             print(x)
             print("ProblemA")
+        if not (x.target.depIndex < len(g.dependencies)):
+            print(f"Error: x.target.depIndex {x.target.depIndex} but len(g.dependencies) is {len(g.dependencies)}")
+            print(f"file is {fname} edge is {x}")
+            print(f"g.dependencies = {g.dependencies}")
+            sys.exit(1)
+            
         if max_node[g.dependencies[x.target.depIndex]] <= x.target.nodeIndex:
             print(x)
             print("ProblemB")
