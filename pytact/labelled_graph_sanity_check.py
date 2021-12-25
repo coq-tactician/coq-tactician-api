@@ -1,6 +1,7 @@
 import sys
 import os
 from pathlib import Path
+import pytact.common
 
 import capnp
 capnp.remove_import_hook()
@@ -77,9 +78,3 @@ for f in file_list:
             print("ProblemB")
     if local_max != local_count - 1:
         print("ProblemC")
-    for x in g.proofSteps:
-        if local_count <= x.state.root:
-            print("ProblemD")
-        nt = g.graph.classifications[x.state.root]
-        if nt.which() != 'root':
-            print("ProblemE")
