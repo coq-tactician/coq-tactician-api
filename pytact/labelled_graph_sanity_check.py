@@ -4,6 +4,7 @@ from pathlib import Path
 
 import capnp
 capnp.remove_import_hook()
+import pytact.common
 graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
 
@@ -77,9 +78,12 @@ for f in file_list:
             print("ProblemB")
     if local_max != local_count - 1:
         print("ProblemC")
-    for x in g.proofSteps:
-        if local_count <= x.state.root:
+    for node_index in g.tacticalDefinitions:
+        node_classification = g.graph.classifications[node_index]
+        if node_classification.which() != 'definition':
             print("ProblemD")
-        nt = g.graph.classifications[x.state.root]
-        if nt.which() != 'root':
-            print("ProblemE")
+        else:
+            proof_steps = node_classification.definition.tacticalConstant.tacticalProof
+            for x in proof_steps:
+                if local_count <= x.state.root:
+                    print("ProblemE")
