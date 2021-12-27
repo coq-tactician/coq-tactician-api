@@ -82,10 +82,9 @@ def main():
         description = 'sanity of check of *.bin dataset with labelled_graph_api',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--dir',
+    parser.add_argument('dir',
                         type=str,
-                        default=os.getcwd(),
-                        help='directory of the dataset')
+                        help='the directory of the dataset')
     parser.add_argument('--jobs',
                         type=int,
                         default=4,
