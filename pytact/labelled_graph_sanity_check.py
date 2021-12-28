@@ -3,6 +3,7 @@ import argparse
 from multiprocessing import Pool
 import os
 from pathlib import Path
+from functools import partial
 import capnp
 capnp.remove_import_hook()
 import pytact.common
@@ -12,7 +13,7 @@ graph_api_capnp = capnp.load(graph_api_capnp)
 max_node = {}
 
 
-def process1(fname):
+def process1(fname, rootdir):
     with open(fname) as f:
         print(fname)
         file_tactical_definitions = []
@@ -38,6 +39,10 @@ def process1(fname):
                         proof_steps += 1
                         file_tactics.add(p.tactic.ident)
                         file_base_tactics_text.add(p.tactic.baseText)
+        for dep in g.dependencies:
+            abs_dep = os.path.join(rootdir, dep)
+            if not os.path.isfile(abs_dep):
+                print(f"Dependency file does not exist: {abs_dep}")
     return (fname, dep, nodes_count, edges_count, file_tactical_definitions, file_base_tactics_text, file_tactics, proof_steps)
 
 def process2(res):
@@ -102,8 +107,9 @@ def main():
 
     file_list = [f for f in rootdir.glob('**/*.bin') if f.is_file()]
 
+    process1_partial = partial(process1, rootdir=rootdir)
     with Pool(args.jobs) as pool:
-        results = pool.map(process1, file_list, chunksize=20)
+        results = pool.map(process1_partial, file_list, chunksize=20)
 
     for res in results:
         fname, dep, nodes_count, edges_count, file_tactical_definitions, file_base_tactics_text, file_tactics, proof_steps = res
