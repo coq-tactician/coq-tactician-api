@@ -6,7 +6,9 @@ open Labelled_graph_def
 open Labelled_graph_capnp_generator
 
 let dirpath = Global.current_dirpath ()
-let data_file = Option.default "" Ltacrecord.base_filename ^ ".bin"
+let data_file = match Ltacrecord.base_filename with
+  | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
+  | Some f -> f ^ ".bin"
 
 module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
@@ -41,11 +43,10 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                  ~subst:None
                  ~discharge:(fun x -> Some (snd x)))
 
-  module StringSet = CSet.Make(String)
-  let dependencies = Summary.ref ~name:"TacticianGraphDependencies" StringSet.empty
-  let in_dependencies : string -> Libobject.obj =
+  let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
+  let in_dependencies : (DirPath.t * string) -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object "LTACRECORDGRAPHDEPS"
-        ~cache:(fun (_, dep) -> dependencies := StringSet.add dep !dependencies)
+        ~cache:(fun (_, (path, bin)) -> dependencies := DPmap.add path bin !dependencies)
         ~subst:None
         ~discharge:(fun x -> Some (snd x)))
 
@@ -67,20 +68,24 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   let predict db situations = IStream.empty
   let evaluate db _ _ = 0., db
 
+  let resolve_dependencies deps =
+    List.filter_map (fun p ->
+        let f = match DPmap.find_opt p !dependencies with
+          | None -> CErrors.anomaly (Pp.str ("Dependency was not resolvable: " ^ DirPath.to_string p))
+          | Some f -> f in
+        Feedback.msg_warning Pp.(str f);
+        let f = CUnix.strip_path f in
+        Feedback.msg_warning Pp.(str f);
+        if Filename.is_relative f then Some f else None) deps
+
   module K = Labelled_graph_api.Make(Capnp.BytesMessage)
   let write_graph graph tactical_constants =
     let open G in
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath graph.paths) in
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
-    let relativized_dependencies =
-      List.filter_map (fun p ->
-          let f = match Ltacrecord.try_locate_absolute_library p with
-            | None -> CErrors.user_err (Pp.str ("Path was not locatable: " ^ DirPath.to_string p))
-            | Some f -> f in
-          let f = CUnix.strip_path f in
-          if Filename.is_relative f then Some f else None) depslist in
+    let resolved_dependencies = resolve_dependencies depslist in
     let g = K.Builder.Dataset.init_root () in
-    let _ = K.Builder.Dataset.dependencies_set_list g relativized_dependencies in
+    let _ = K.Builder.Dataset.dependencies_set_list g resolved_dependencies in
     let _ = K.Builder.Dataset.tactical_definitions_set_list g @@
       List.map (fun n -> Stdint.Uint32.of_int @@ snd n) tactical_constants in
     let nodes = node_list graph in
@@ -167,9 +172,9 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
             (fun c _ -> not @@ Constrmap.mem c !global_nodes.constructors) graph.constructors
       ; projections = ProjMap.filter
             (fun p _ -> not @@ ProjMap.mem p !global_nodes.projections) graph.projections } in
+    Lib.add_anonymous_leaf @@ in_dependencies (dirpath, data_file);
     write_graph graph.graph tactical_constants;
-    Lib.add_anonymous_leaf @@ in_global_nodes global_node;
-    Lib.add_anonymous_leaf @@ in_dependencies data_file
+    Lib.add_anonymous_leaf @@ in_global_nodes global_node
 
   let () = Declaremods.append_end_library_hook endline_hook
 end
