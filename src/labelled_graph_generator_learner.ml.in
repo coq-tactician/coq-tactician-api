@@ -69,14 +69,31 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   let evaluate db _ _ = 0., db
 
   let resolve_dependencies deps =
-    List.filter_map (fun p ->
-        let f = match DPmap.find_opt p !dependencies with
-          | None -> CErrors.anomaly (Pp.str ("Dependency was not resolvable: " ^ DirPath.to_string p))
-          | Some f -> f in
-        Feedback.msg_warning Pp.(str f);
+    let absolute_deps = List.map (fun p ->
+        match DPmap.find_opt p !dependencies with
+        | None -> CErrors.anomaly (Pp.str ("Dependency was not resolvable: " ^ DirPath.to_string p))
+        | Some f -> f
+      ) deps in
+    let pwd = Sys.getcwd () in
+    (match Sys.getenv_opt "OPAM_PACKAGE_NAME" with
+     | None -> ()
+     | Some _ ->
+       let (/) = Filename.concat in
+       let prefix = "%{prefix}%" in
+       let build_dir = prefix/".opam-switch"/"build" in
+       match CString.is_sub build_dir pwd 0 with
+       | false -> ()
+       | true -> Sys.chdir build_dir);
+    let relative_deps = List.map (fun f ->
         let f = CUnix.strip_path f in
-        Feedback.msg_warning Pp.(str f);
-        if Filename.is_relative f then Some f else None) deps
+        if not @@ Filename.is_relative f then
+          Feedback.msg_warning
+            Pp.(str "Dependency could not be relativized w.r.t. a common root. " ++
+                str "An absolute path was inserted into the dataset: " ++ str f);
+        f
+      ) absolute_deps in
+    Sys.chdir pwd;
+    relative_deps
 
   module K = Labelled_graph_api.Make(Capnp.BytesMessage)
   let write_graph graph tactical_constants =
