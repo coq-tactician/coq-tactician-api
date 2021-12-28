@@ -6,7 +6,7 @@ open Labelled_graph_def
 open Labelled_graph_capnp_generator
 
 let dirpath = Global.current_dirpath ()
-let data_file = match Ltacrecord.base_filename with
+let data_file () = match Ltacrecord.base_filename with
   | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
   | Some f -> f ^ ".bin"
 
@@ -111,7 +111,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       DPmap.find tp path_index in
     let capnp_graph = K.Builder.Dataset.graph_init g in
     write_graph capnp_graph transformer nodes edges;
-    Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) data_file
+    Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) (data_file ())
 
   open GB
 
@@ -189,7 +189,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
             (fun c _ -> not @@ Constrmap.mem c !global_nodes.constructors) graph.constructors
       ; projections = ProjMap.filter
             (fun p _ -> not @@ ProjMap.mem p !global_nodes.projections) graph.projections } in
-    Lib.add_anonymous_leaf @@ in_dependencies (dirpath, data_file);
+    Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()));
     write_graph graph.graph tactical_constants;
     Lib.add_anonymous_leaf @@ in_global_nodes global_node
 
