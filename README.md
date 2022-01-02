@@ -135,14 +135,6 @@ opam install .
 tactician inject # you can answer 'no' to recompiling
 opam install coq-tactician-stdlib # make sure that you have the coq-extra-dev repo enabled
 ```
-NOTICE: A of opam 2.1.0 and bwrap 0.4 the bwrap called by tactician terminates with error if the option `--disable-sandboxing` wasn't
-passed to `opam init`
-```
-# context     2.1.0 | linux/x86_64 |  | https://coq.inria.fr/opam/extra-dev#2021-12-30 14:00
-# path        ~/.opam/tac-build1/.opam-switch/build/coq-tactician-stdlib.8.11.dev
-# command     ~/.opam/opam-init/hooks/sandbox.sh build ~/.opam/tac-build1/lib/coq-tactician/with-tactician make -j15
-# bwrap: Can't create file at /home/pestun/.opam/tac-build1/lib/coq-tactician/coqtop.real: Read-only file system
-```
 
 4. For your Coq dataset, e.g. `propositional`
 ```
