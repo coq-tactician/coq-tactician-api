@@ -39,7 +39,7 @@ let nt2nt transformer (nt : G.node node_type) cnt =
   match nt with
   | Root -> root_set cnt
   | ContextDef _ -> context_def_set cnt ""
-  | ContextAssum _ -> context_assum_set cnt
+  | ContextAssum _ -> context_assum_set cnt ""
   | Definition { previous; def_type } ->
     let cdef = definition_init cnt in
     let open K.Builder.Definition in
