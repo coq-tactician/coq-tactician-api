@@ -129,7 +129,7 @@ git clone -b generate-dataset --recurse-submodules git@github.com:coq-tactician/
 cd coq-tactician-reinforce
 opam install .
 tactician inject # you can answer 'no' to recompiling
-opam install coq-tactician-stdlib # make sure that you have the coq-extra-dev repo enabled
+opam install coq-tactician-stdlib --keep-build-dir # make sure that you have the coq-extra-dev repo enabled
 ```
 
 3. For your Coq dataset, e.g. `propositional`
@@ -137,3 +137,9 @@ opam install coq-tactician-stdlib # make sure that you have the coq-extra-dev re
 cd ../propositional
 tactician exec dune build
 ```
+4. With opam build of `coq-package` do
+```
+opam install coq-package --keep-build-dir
+```
+and you find the `*.bin` in the directory `<switch>/.opam-switch/build`. The recorded
+dependency paths are relative to `<switch>/.opam-switch/build`.
