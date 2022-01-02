@@ -119,15 +119,11 @@ for optimisation of the speed of CI, but it is not strictly necessary for CI to 
 
 The procedure to generate the dataset is the following.
 
-1. Initialize opam
-```
-opam init --disable-sandboxing --bare
-```
-2. Create your switch
+1. Create your switch
 ```
 opam switch create tacgen --empty
 ```
-3. Install coq-tactician-reinforce generate-dataset
+2. Install coq-tactician-reinforce generate-dataset
 ```
 git clone -b generate-dataset --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git
 cd coq-tactician-reinforce
@@ -136,7 +132,7 @@ tactician inject # you can answer 'no' to recompiling
 opam install coq-tactician-stdlib # make sure that you have the coq-extra-dev repo enabled
 ```
 
-4. For your Coq dataset, e.g. `propositional`
+3. For your Coq dataset, e.g. `propositional`
 ```
 cd ../propositional
 tactician exec dune build
