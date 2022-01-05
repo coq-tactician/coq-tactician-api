@@ -29,6 +29,13 @@
 )
 
 (install
+ (package coq-tactician-reinforce)
+ (files (../labelled_graph_api.capnp as labelled_graph_api.capnp))
+ (section share)
+)
+
+
+(install
 (package coq-tactician-reinforce)
 (section (site (coq-tactician plugins)))
 (files (injection-flags as coq-tactician-reinforce/injection-flags)))
