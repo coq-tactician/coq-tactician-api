@@ -116,7 +116,6 @@ def process2(rootdir, args, res):
                         raise Exception
 
 def entropy(d):
-    entr = 0
     n = sum(d.values())
     return -sum([(c / n) * math.log(c / n, 2) for c in d.values()])
 
