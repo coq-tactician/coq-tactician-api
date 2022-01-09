@@ -31,3 +31,6 @@ depends: [
   # https://github.com/ocaml/ocaml/pull/9914
   "ocaml" {>= "4.12~"} | ("ocaml" {< "4.12~"} & "lwt" {<= "5.1.1"})
 ]
+substs: [
+  "src/labelled_graph_generator_learner.ml"
+]
