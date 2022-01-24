@@ -67,10 +67,14 @@ let nt2nt transformer (nt : G.node node_type) cnt =
           K.Builder.Tactic.interm_text_set capnp_tactic
             (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) interm_tactic));
           let arg_arr = K.Builder.Tactic.arguments_init capnp_tactic (List.length arguments) in
-          List.iteri (fun i (dep, index) ->
+          List.iteri (fun i arg ->
               let arri = Capnp.Array.get arg_arr i in
-              K.Builder.GlobalNode.dep_index_set_exn arri @@ transformer dep;
-              K.Builder.GlobalNode.node_index_set_int_exn arri index
+              match arg with
+              | None -> K.Builder.Tactic.Argument.unresolvable_set arri
+              | Some (dep, index) ->
+                let node = K.Builder.Tactic.Argument.term_init arri in
+                K.Builder.GlobalNode.dep_index_set_exn node @@ transformer dep;
+                K.Builder.GlobalNode.node_index_set_int_exn node index
             ) arguments;
           ()
         ) proof;

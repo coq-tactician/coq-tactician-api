@@ -61,7 +61,7 @@ def visualize(state):
 
 # Reference to a local node (with depIndex 0)
 def localNode(id):
-    return {'depIndex': 0, 'nodeIndex': id}
+    return {'term': {'depIndex': 0, 'nodeIndex': id}}
 
 # Helper function that runs a given tactic on a given proof state
 async def runTactic(obj, ident, args):
@@ -89,7 +89,7 @@ async def main():
     parser = argparse.ArgumentParser(
         description='example of python code interacting with coq-tactician-reinforce',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    
+
     parser.add_argument('--interactive',
                         action='store_true',
                         help='drop to the python shell after proof execution')
@@ -131,12 +131,12 @@ async def main():
     pull = initialized.pull
 
     state, tacs = await reinforce(pull, "forall A B C : Prop, (A -> B -> C) -> A -> B -> C")
-    state = await runTactic(state.newState.obj, 870093143, [])
-    state = await runTactic(state.newState.obj, 870093143, [])
-    state = await runTactic(state.newState.obj, 870093143, [])
-    state = await runTactic(state.newState.obj, 870093143, [])
-    state = await runTactic(state.newState.obj, 870093143, [])
-    state = await runTactic(state.newState.obj, 870093143, [])
+    state = await runTactic(state.newState.obj, 126567959, [])
+    state = await runTactic(state.newState.obj, 126567959, [])
+    state = await runTactic(state.newState.obj, 126567959, [])
+    state = await runTactic(state.newState.obj, 126567959, [])
+    state = await runTactic(state.newState.obj, 126567959, [])
+    state = await runTactic(state.newState.obj, 126567959, [])
     state = await runTactic(state.newState.obj, 165468576, [localNode(7)])
     state = await runTactic(state.newState.obj, 165468576, [localNode(13)])
     state = await runTactic(state.newState.obj, 165468576, [localNode(15)])
@@ -155,4 +155,4 @@ def run_main():
 
 if __name__ == '__main__':
     run_main()
-    
+

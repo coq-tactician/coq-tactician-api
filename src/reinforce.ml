@@ -16,6 +16,7 @@ module TacticMap = Int.Map
 
 exception NoSuchTactic
 exception MismatchedArguments
+exception IllegalArgument
 exception ParseError
 
 let gen_proof_state (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
@@ -101,9 +102,11 @@ let rec proof_object state tacs context_map =
       let tac = Params.tactic_get params in
       let tac_id = Tactic.ident_get_int_exn tac in
       let tac_args = Tactic.arguments_get_list tac in
-      let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Api.Reader.GlobalNode.node_index_get a)) tac_args in
       begin
         try
+          let tac_args = List.map (fun arg ->
+              if Tactic.Argument.has_term arg then Tactic.Argument.term_get arg else raise IllegalArgument) tac_args in
+          let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Api.Reader.GlobalNode.node_index_get a)) tac_args in
           let tac, params = find_tactic tacs tac_id in
           if List.length params <> List.length tac_args then raise MismatchedArguments;
           let tac_args = List.map (find_argument context_map) tac_args in
@@ -128,6 +131,9 @@ let rec proof_object state tacs context_map =
         | MismatchedArguments ->
           let exc = ExecutionResult.protocol_error_init res in
           Exception.mismatched_arguments_set exc
+        | IllegalArgument ->
+          let exc = ExecutionResult.protocol_error_init res in
+          Exception.illegal_argument_set exc
       end;
       Service.return response
   end

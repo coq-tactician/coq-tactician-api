@@ -212,16 +212,15 @@ module GraphBuilder(G : Graph) = struct
       Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
                                Pptactic.pr_glob_tactic (Global.env ()) tac_orig (* ++ str " in context\n" ++ *)
                                (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
-    let check_default id def = function
-      | None -> warn_arg id; def
-      | Some x -> x in
+    let check_default id = function
+      | None -> warn_arg id; None
+      | Some x -> Some x in
     let+ r = ask in
-    let initial_focus = r.initial_focus in
     let arguments = OList.map (fun id ->
         Option.cata (fun id ->
-            check_default id initial_focus @@
+            check_default id @@
             Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context)
-          initial_focus id) args in
+          None id) args in
     let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
     { tactic = tac_orig; base_tactic = tac; interm_tactic
     ; tactic_hash = Hashtbl.hash_param 255 255 tac
