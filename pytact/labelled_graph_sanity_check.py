@@ -4,6 +4,8 @@ from multiprocessing import Pool
 import os
 from pathlib import Path
 from functools import partial
+from collections import Counter
+import math
 import capnp
 capnp.remove_import_hook()
 import pytact.common
@@ -27,7 +29,7 @@ def process1(rootdir, args, fname):
         file_tactical_definitions = []
         file_base_tactics_text = set()
         file_base_tactics_intermtext = set()
-        file_tactics = set()
+        file_tactics = Counter()
         proof_steps = 0
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
         dep0 = g.dependencies[0]
@@ -50,7 +52,7 @@ def process1(rootdir, args, fname):
                     tc = n.definition.tacticalConstant
                     for p in tc.tacticalProof:
                         proof_steps += 1
-                        file_tactics.add(p.tactic.ident)
+                        file_tactics[p.tactic.ident] += 1
                         file_base_tactics_text.add(p.tactic.baseText)
                         file_base_tactics_intermtext.add(p.tactic.intermText)
         for _dep in g.dependencies:
@@ -113,6 +115,9 @@ def process2(rootdir, args, res):
                               f"outside local node count {local_count}")
                         raise Exception
 
+def entropy(d):
+    n = sum(d.values())
+    return -sum([(c / n) * math.log(c / n, 2) for c in d.values()])
 
 def main():
     parser = argparse.ArgumentParser(
@@ -134,7 +139,7 @@ def main():
     args = parser.parse_args()
     rootdir = Path(os.path.expanduser(args.dir))
 
-    tactics = set()
+    tactics = Counter()
     base_tactics_text = set()
     base_tactics_intermtext = set()
     tactical_definitions = []
@@ -160,11 +165,12 @@ def main():
         tactical_definitions.extend(file_tactical_definitions)
         base_tactics_text.update(file_base_tactics_text)
         base_tactics_intermtext.update(file_base_tactics_intermtext)
-        tactics.update(file_tactics)
+        tactics += file_tactics
 
     print(f"Nodes total {nodes_total}")
     print(f"Edges total {edges_total}")
     print(f"Tactics total {len(tactics)}")
+    print(f"Tactics entropy (bits) {entropy(tactics)}")
     print(f"Tactics base text total {len(base_tactics_text)}")
     print(f"Tactics base intermtext total {len(base_tactics_intermtext)}")
     print(f"Tactical definitions total {len(tactical_definitions)}")
