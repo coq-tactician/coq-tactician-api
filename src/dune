@@ -60,3 +60,11 @@
  (targets dag_api.ml dag_api.mli)
  (deps    ../dag_api.capnp)
  (action (run capnp compile -o %{bin:capnpc-ocaml} %{deps})))
+
+(rule
+ (targets labelled_graph_generator_learner.ml)
+ ; When installed through opam, we perform substitutions through the 'substs' directive in the opam file.
+ ; It also works using this rule, but running opam during an installation can be risky due to sandboxing issues.
+ (mode fallback)
+ (deps labelled_graph_generator_learner.ml.in)
+ (action (run opam config subst %{targets})))

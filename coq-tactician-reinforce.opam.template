@@ -24,10 +24,13 @@ depends: [
   "capnp-rpc-lwt"
   "ppx_deriving"
   "ocamlgraph"
-  "dune" {>= "2.9" & >= "2.9"}
+  "dune" {>= "2.9"}
   "odoc" {with-doc}
   # These constraints are to work around
   # https://github.com/ocsigen/lwt/issues/764 and
   # https://github.com/ocaml/ocaml/pull/9914
   "ocaml" {>= "4.12~"} | ("ocaml" {< "4.12~"} & "lwt" {<= "5.1.1"})
+]
+substs: [
+  "src/labelled_graph_generator_learner.ml"
 ]

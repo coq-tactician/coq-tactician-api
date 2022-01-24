@@ -34,7 +34,8 @@ setuptools.setup(
     package_data = {'pytact': ['labelled_graph_api.capnp',
                                'tests/ReinforceTest.v']},
     install_requires=['pycapnp', 'graphviz', 'ptpython'],
-    entry_points={'console_scripts': ['pytact-test=pytact.fake_reinforcement_client:run_main']},
+    entry_points={'console_scripts': ['pytact-test=pytact.fake_reinforcement_client:run_main',
+                                      'pytact-check=pytact.labelled_graph_sanity_check:main']},
     project_urls={
         'Source': 'https://github.com/coq-tactician/coq-tactician-reinforce'
     },
