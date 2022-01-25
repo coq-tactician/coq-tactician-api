@@ -23,7 +23,7 @@ Tactical definitions total 11348
 Proof steps total 197090
 ```
 - Dependency references now point to the actual `.bin` files in the dataset, instead of the bogus corresponding `.v` files (this was a bug)
-- Starting with version v4 we will version the capnp protocol through the magic id at the top of the `.capnp`` file. Every new incompatible version will get a new hash
+- Starting with version v4 we will version the capnp protocol through the magic id at the top of the `.capnp` file. Every new incompatible version will get a new hash
 - Tactical arguments are now wrapped in a variant type. Arguments that cannot be resolved are encoded using the `unresolvable` variant (a `None`-type)
 
 # stdlib-lgraph-intermediate-v4-local
@@ -40,11 +40,11 @@ Changes w.r.t the previous version:
   + As a consequence, the number of recorded proof states has increased from 150k (approximately) to 197k
   + Note that the number of unique textual representations of tactics is 914, a bit lower than 987 because the textual representation is not always precise
   + The tactical decomposition is still a work in progress, but we are now reaching diminishing returns. One might think that 987 tactics is a lot, but two-third of those occur less than 10 times in the dataset. There are still many tactics that can be decomposed (I estimate about 300), but I don't think it is currently worth spending time on.
-  + One goal of the decomposition is to not have any tactics that generate arbitrary names. For example, we convert a tactic like intro my_fancy_variable_name to intros ? in order to let Coq invent the name for us. This is also still a work in progress, but we are also reaching diminishing returns here. There are currently about 5000 instances of generative variables that have not been properly anonymized yet.
+  + One goal of the decomposition is to not have any tactics that generate arbitrary names. For example, we convert a tactic like intro `my_fancy_variable_name` to `intros ?` in order to let Coq invent the name for us. This is also still a work in progress, but we are also reaching diminishing returns here. There are currently about 5000 instances of generative variables that have not been properly anonymized yet.
 - The dataset now encodes arguments of tactics as follows:
   + The number of parameters of each base tactic is fixed (if not, it is a bug, please report).
   + For each argument of a tactic, we look up the first free variable referencing the local context inside of that argument. Then we replace the whole argument with that variable.
-  + If an argument does not reference anything from the local context, the argument is replaced with a pointer to node 0 (yes I know that a None type would be better but I'm to lazy for that). Note that arguments that represent generative names also point to node 0. As explained above, this happens about 5000 times.
+  + If an argument does not reference anything from the local context, the argument is replaced with a pointer to node 0 (yes I know that a `None`` type would be better but I'm to lazy for that). Note that arguments that represent generative names also point to node 0. As explained above, this happens about 5000 times.
 - There are now three textual representations of tactics:
   + `text`: The full text representation of the tactic, including the full original arguments
   + `baseText`: A textual representation of the base tactic without any arguments
