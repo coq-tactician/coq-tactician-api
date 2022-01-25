@@ -56,8 +56,9 @@ let mapper = { FreeVarsDef.default_mapper with
                  )
              ; glob_constr = (fun c cont ->
                  curtail @@
-                 let* c = cont c in
-                 let c = match c with
+                 let c =
+                   let* c = cont c in
+                   match c with
                    | GRef (GlobRef.IndRef _ as i, _) ->
                      M.(tell [TRef i]) >> return c
                    | GRef (GlobRef.ConstructRef _ as i, _) ->
