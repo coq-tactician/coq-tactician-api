@@ -19,7 +19,8 @@ def check_dep(fname, rootdir, _dep):
     if abs_dep[-2:] == '.v':
         abs_dep = abs_dep[:-2] + '.bin'    # remove .v -> .bin correction when datasets with .v are no longer used
     if os.path.isfile(abs_dep):
-        print(f"{fname}: Dependency file {abs_dep} present")
+        # print(f"{fname}: Dependency file {abs_dep} present")
+        pass
     else:
         print(f"{fname}: Error: Dependency file does not exist: {abs_dep}")
         raise Exception
@@ -55,10 +56,6 @@ def process1(rootdir, args, fname):
                         proof_steps += 1
                         if p.tactic.text == p.tactic.intermText:
                             proof_steps_faithful += 1
-                        else:
-                            print(p.tactic.text)
-                            print(p.tactic.intermText)
-                            print()
                         file_tactics[p.tactic.ident] += 1
                         file_base_tactics_text.add(p.tactic.baseText)
                         file_base_tactics_intermtext.add(p.tactic.intermText)
