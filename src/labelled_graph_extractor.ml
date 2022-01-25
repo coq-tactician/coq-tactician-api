@@ -199,12 +199,6 @@ module GraphBuilder(G : Graph) = struct
     let tac_orig = Tactic_name_remove.tactic_name_remove tac in
     let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
     let args, interm_tactic = Tactic_one_variable.tactic_one_variable tac in
-
-    (* (\* Generate and find referenced constants *\) *)
-    (* let constants = Tactic_abstract.tactic_constants tac in *)
-    (* (\* TODO: We are generating extra edges here, improve *\) *)
-    (* let* constants = List.map (fun c -> with_initial_focus @@ gen_const ContextElem c) constants in *)
-
     let tac = Extreme_tactic_normalize.tactic_normalize tac in
     let context = Id.Map.bindings context_map in
     let context_range = OList.map (fun (_, n) -> n) context in
@@ -214,13 +208,29 @@ module GraphBuilder(G : Graph) = struct
                                (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
     let check_default id = function
       | None -> warn_arg id; None
-      | Some x -> Some x in
-    let+ r = ask in
-    let arguments = OList.map (fun id ->
-        Option.cata (fun id ->
-            check_default id @@
-            Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context)
-          None id) args in
+      | x -> x in
+    let+ arguments =
+      let open Tactic_one_variable in
+      List.map (function
+          | TVar id ->
+            return @@ check_default id @@
+            Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context
+          | TRef c ->
+            (* TODO: We are generating extra edges here, improve *)
+            (match c with
+              | GlobRef.VarRef _ -> assert false
+              | GlobRef.ConstRef c ->
+                let+ c = with_initial_focus @@ gen_const ContextElem c in
+                Some c
+              | GlobRef.IndRef i ->
+                let+ c = with_initial_focus @@ gen_inductive ContextElem i in
+                Some c
+              | GlobRef.ConstructRef c ->
+                let+ c = with_initial_focus @@ gen_constructor ContextElem c in
+                Some c
+            )
+          | TOther -> return None
+        ) args in
     let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
     { tactic = tac_orig; base_tactic = tac; interm_tactic
     ; tactic_hash = Hashtbl.hash_param 255 255 tac
@@ -284,18 +294,22 @@ module GraphBuilder(G : Graph) = struct
              let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) (Global.env ()) in
              let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
              gen_constr IndType typ)) inds
-and gen_inductive et ((m, _) as i) =
+  and gen_inductive et ((m, _) as i) : G.node t =
     gen_mutinductive_helper m >>
     let* { inductives; _ } = get in
     match Indmap.find_opt i inductives with
-    | Some inn -> draw_toward et inn
+    | Some inn -> draw_toward et inn >> return inn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
-  and gen_constructor et (((m, _), _) as c) =
+  and gen_inductive2 et i =
+    let+ _ = gen_inductive et i in ()
+  and gen_constructor et (((m, _), _) as c) : G.node t =
     gen_mutinductive_helper m >>
     let* { constructors; _ } = get in
     match Constrmap.find_opt c constructors with
-    | Some cn -> draw_toward et cn
+    | Some cn -> draw_toward et cn >> return cn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
+  and gen_constructor2 et c =
+    let+ _ = gen_constructor et c in ()
   and gen_projection et p =
     gen_mutinductive_helper (Projection.mind p) >>
     let* { projections; _ } = get in
@@ -360,17 +374,17 @@ and gen_inductive et ((m, _) as i) =
     | Const (c, u) ->
       follow_def et (mk_definition (ManualConst c)) @@ gen_const2 et c
     | Ind (i, u) ->
-      follow_def et (mk_definition (Ind i)) @@ gen_inductive et i
+      follow_def et (mk_definition (Ind i)) @@ gen_inductive2 et i
     | Construct (c, u) ->
-      follow_def et (mk_definition (Construct c)) @@ gen_constructor et c
+      follow_def et (mk_definition (Construct c)) @@ gen_constructor2 et c
     | Case (i, ret, term, branches) ->
       move_toward_new' et Case
-        (follow_def CaseInd (mk_definition (Ind i.ci_ind)) @@ gen_inductive CaseInd i.ci_ind >>
+        (follow_def CaseInd (mk_definition (Ind i.ci_ind)) @@ gen_inductive2 CaseInd i.ci_ind >>
          gen_constr CaseReturn ret >>
          gen_constr CaseTerm term >>
          List.iter (fun (c, branch) ->
              move_toward_new' CaseBranchPointer CaseBranch
-               (follow_def CBConstruct (mk_definition (Construct (i.ci_ind, c + 1))) @@ gen_constructor CBConstruct (i.ci_ind, c + 1) >>
+               (follow_def CBConstruct (mk_definition (Construct (i.ci_ind, c + 1))) @@ gen_constructor2 CBConstruct (i.ci_ind, c + 1) >>
                 gen_constr CBTerm branch))
            (OList.mapi (fun i x -> i, x) @@ Array.to_list branches))
     | Fix ((offset, ret), (ids, typs, terms)) ->
@@ -423,6 +437,6 @@ and gen_inductive et ((m, _) as i) =
   let gen_globref = function
     | GlobRef.VarRef _ -> CErrors.anomaly (Pp.str "not handled yet")
     | GlobRef.ConstRef c -> gen_const2 ContextSubject c
-    | GlobRef.IndRef i -> gen_inductive ContextSubject i
-    | GlobRef.ConstructRef c -> gen_constructor ContextSubject c
+    | GlobRef.IndRef i -> gen_inductive2 ContextSubject i
+    | GlobRef.ConstructRef c -> gen_constructor2 ContextSubject c
 end
