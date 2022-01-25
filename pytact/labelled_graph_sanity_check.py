@@ -31,6 +31,7 @@ def process1(rootdir, args, fname):
         file_base_tactics_intermtext = set()
         file_tactics = Counter()
         proof_steps = 0
+        proof_steps_faithful = 0
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
         dep0 = g.dependencies[0]
         nodes_count = len(g.graph.classifications)
@@ -52,6 +53,12 @@ def process1(rootdir, args, fname):
                     tc = n.definition.tacticalConstant
                     for p in tc.tacticalProof:
                         proof_steps += 1
+                        if p.tactic.text == p.tactic.intermText:
+                            proof_steps_faithful += 1
+                        else:
+                            print(p.tactic.text)
+                            print(p.tactic.intermText)
+                            print()
                         file_tactics[p.tactic.ident] += 1
                         file_base_tactics_text.add(p.tactic.baseText)
                         file_base_tactics_intermtext.add(p.tactic.intermText)
@@ -61,10 +68,10 @@ def process1(rootdir, args, fname):
 
     return (fname, dep0, nodes_count, edges_count,
             file_tactical_definitions, file_base_tactics_text,
-            file_base_tactics_intermtext, file_tactics, proof_steps)
+            file_base_tactics_intermtext, file_tactics, proof_steps, proof_steps_faithful)
 
 def process2(rootdir, args, res):
-    fname, _, nodes_count, _, _,  _, _, _, _  = res
+    fname, _, nodes_count, _, _,  _, _, _, _, _  = res
     with open(fname) as f:
         print(fname)
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
@@ -146,6 +153,7 @@ def main():
     nodes_total = 0
     edges_total = 0
     proof_steps_total = 0
+    proof_steps_faithful_total = 0
 
     file_list = [f for f in rootdir.glob('**/*.bin') if f.is_file()]
 
@@ -157,11 +165,12 @@ def main():
         (fname, dep0, nodes_count, edges_count,
          file_tactical_definitions, file_base_tactics_text,
          file_base_tactics_intermtext,
-         file_tactics, proof_steps) = res
+         file_tactics, proof_steps, proof_steps_faithful) = res
         len_nodes[dep0] = nodes_count
         nodes_total += nodes_count
         edges_total += edges_count
         proof_steps_total += proof_steps
+        proof_steps_faithful_total += proof_steps_faithful
         tactical_definitions.extend(file_tactical_definitions)
         base_tactics_text.update(file_base_tactics_text)
         base_tactics_intermtext.update(file_base_tactics_intermtext)
@@ -175,6 +184,7 @@ def main():
     print(f"Tactics base intermtext total {len(base_tactics_intermtext)}")
     print(f"Tactical definitions total {len(tactical_definitions)}")
     print(f"Proof steps total {proof_steps_total}")
+    print(f"Faithfully represented proof steps total {proof_steps_faithful_total}")
 
     if (args.verbose >=1):
         print("Tactics base text:")
