@@ -105,7 +105,10 @@ let rec proof_object state tacs context_map =
       begin
         try
           let tac_args = List.map (fun arg ->
-              if Tactic.Argument.has_term arg then Tactic.Argument.term_get arg else raise IllegalArgument) tac_args in
+              match Tactic.Argument.get arg with
+              | Tactic.Argument.Undefined _ | Tactic.Argument.Unresolvable -> raise IllegalArgument
+              | Tactic.Argument.Term t -> t
+            ) tac_args in
           let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Api.Reader.GlobalNode.node_index_get a)) tac_args in
           let tac, params = find_tactic tacs tac_id in
           if List.length params <> List.length tac_args then raise MismatchedArguments;

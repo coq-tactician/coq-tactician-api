@@ -1,4 +1,4 @@
-@0xfb20420c8ea20a41; # v4
+@0xb563d37c5537abb0; # v5
 
 using File = Text;
 using DepIndex = UInt16;
@@ -39,8 +39,10 @@ struct GlobalNode {
 
 struct Tactic {
   struct Argument {
-    unresolvable @0 :Void;
-    term @1 :GlobalNode;
+    union {
+      unresolvable @0 :Void;
+      term @1 :GlobalNode;
+    }
   }
 
   ident @0 :TacticId;
