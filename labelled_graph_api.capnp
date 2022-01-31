@@ -100,6 +100,22 @@ interface PullReinforce {
 interface PushReinforce {
   reinforce @0 (result :ExecutionResult);
   embed @1 (graph :Graph, root :NodeIndex) -> (emb :List(Float64));
+
+  # Start a context for making tactical predictions for proof search. The context includes the tactics
+  # that are currently available, the definitions that are available. Definitions are currently represented only
+  # by their root node, the body of the definition is immediately truncated.
+  predictionContext @2 (available :AvailableTactics, graph :Graph, definitions :List(NodeIndex)) ->
+                       (result :PredictionContext);
+}
+
+interface PredictionContext {
+  struct Prediction {
+    tactic @0 :Tactic;
+    confidence @1 :Float64;
+  }
+  # Predict a list of tactics given the graph of a proof state. The graph is truncated when it finds a definition.
+  # Output is a list of predictions with a confidence. The list is expected to be sorted by decreasing confidence.
+  predict @0 (graph :Graph, root: NodeIndex) -> (predictions :List(Prediction));
 }
 
 interface Main {
