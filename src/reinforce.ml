@@ -1,6 +1,5 @@
 open Tactician_ltac1_record_plugin
 open Labelled_graph_capnp_generator
-open Labelled_graph_extractor
 open Names
 open Ltac_plugin
 
@@ -9,7 +8,6 @@ open Capnp_rpc_lwt
 open Lwt.Infix
 
 module G = GlobalGraph
-module GB = GraphBuilder(G)
 open GB
 
 module TacticMap = Int.Map
@@ -20,9 +18,9 @@ exception IllegalArgument
 exception ParseError
 
 let gen_proof_state (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
-  let open M in
+  let open CICGraph in
   with_named_context hyps (gen_constr ContextSubject concl >>
-                            map (fun c -> c.named) ask)
+                           get_named_context)
 
 let write_execution_result res hyps concl obj =
   let module ExecutionResult = Api.Builder.ExecutionResult in
@@ -31,17 +29,16 @@ let write_execution_result res hyps concl obj =
 
   (* Obtain the graph *)
   let updater =
-    let open Monad.Make(GB.M) in
-    let open Tactician_util.WithMonadNotations(GB.M) in
-    let* root = focus in
+    let open Monad_util.WithMonadNotations(CICGraph) in
+    let open Monad.Make(CICGraph) in
+    let* root = CICGraph.lookup_focus in
     let* context_map = gen_proof_state hyps concl in
     return (snd root, context_map) in
-  let graph, (root, context_map) = run_empty false Names.Cmap.empty updater in
+  let (definitions, (root, context_map)), nodes, paths, edges =
+      CICGraph.run_empty ~initial_focus:Root ~follow_defs:true Names.Cmap.empty updater in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
-  let nodes = G.node_list graph.graph in
-  let edges = G.edge_list graph.graph in
 
   (* Write graph to capnp structure *)
   let new_state = ExecutionResult.new_state_init res in

@@ -1,5 +1,6 @@
 open Names
 open Declarations
+open Tactician_ltac1_record_plugin
 
 let print_mutind fmt m =
   Format.fprintf fmt "%s" @@ MutInd.to_string m
@@ -244,29 +245,61 @@ let edge_type_int_mod = function
   | EvarSubstOrder -> 0
   | EvarSubstValue -> 1
 
-module type Graph = sig
-  type t
+module type GraphMonadType = sig
+  include Monad.Def
   type node
-  val empty : t
-  val mk_node : t -> node node_type -> node * t
-  val mk_edge : t -> edge_type -> source:node -> target:node -> t
+  type node_label
+  type edge_label
+  type 'a repr_t
+  val mk_node : node_label -> node t
+  val mk_edge : edge_label -> source:node -> target:node -> unit t
+  val with_delayed_node : (node -> ('a * node_label) t) -> 'a t
+  val run : 'a t -> 'a repr_t
 end
 
-module SimpleLabelledGraph = struct
+type 'a dlist = 'a list -> 'a list
+
+let dlist_nil = fun tl -> tl
+let dlist_append ls1 ls2 = fun tl -> ls1 (ls2 tl)
+let dlist_cons x ls = fun tl -> x :: ls tl
+let dlist_singleton x = fun tl -> x::tl
+let dlist_of_list ls = fun tl -> ls @ tl
+let dlist_to_list ls = ls []
+
+type ('s, 't, 'edge_label) directed_edge =
+  { source : 's
+  ; target : 't
+  ; label  : 'edge_label }
+module SimpleGraph (D : sig type node_label type edge_label end) : GraphMonadType
+  with type node_label = D.node_label
+   and type edge_label = D.edge_label
+   and type node = int
+   and type 'a repr_t = 'a * D.node_label list * (int, int, D.edge_label) directed_edge list = struct
+  include D
   type node = int
-  type directed_edge =
-    { source : node
-    ; target : node
-    ; sort : edge_type }
-  type t =
-    { nodes : node node_type list (* WARNING: This list needs to be reversed when interpreting node indexes *)
-    ; last  : node
-    ; assoc : directed_edge list }
-  let empty = { nodes = []; last = 0; assoc = [] }
-  let mk_node ({ nodes; last; _ } as g) typ =
-    last, { g with nodes = typ::nodes; last = last + 1}
-  let mk_edge ({ assoc; _ } as g) sort ~source ~target =
-    { g with assoc = { source; target; sort } :: assoc }
-  let node_list { nodes; _ } = List.rev nodes
-  let edge_list { assoc; _ } = List.rev assoc
+  type writer = node_label dlist * (int, int, edge_label) directed_edge dlist
+  module M = Monad_util.StateWriterMonad
+      (struct type s = int end)
+      (struct type w = writer
+        let id = dlist_nil, dlist_nil
+        let comb = fun (nls1, els1) (nls2, els2) -> dlist_append nls1 nls2, dlist_append els1 els2 end)
+  include M
+  type 'a repr_t = 'a * node_label list * (int, int, edge_label) directed_edge list
+  open Monad_util.WithMonadNotations(M)
+  let mk_node nl =
+    let* i = get in
+    put (i + 1) >>
+    let+ () = tell (dlist_singleton nl, dlist_nil) in
+    i
+  let mk_edge label ~source ~target =
+    tell (dlist_nil, dlist_singleton { source; target; label })
+  let with_delayed_node f =
+    let* i = get in
+    put (i + 1) >>
+    pass @@
+    let+ (v, nl) = f i in
+    v, fun (nls, els) -> (dlist_cons nl nls, els)
+  let run m =
+    let _, ((ns, es), res) = run m 0 in
+    res, dlist_to_list ns, dlist_to_list es
 end

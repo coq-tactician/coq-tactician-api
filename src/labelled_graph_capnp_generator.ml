@@ -5,33 +5,61 @@ open Tactician_ltac1_record_plugin
 open Ltac_plugin
 
 let dirpath = Global.current_dirpath ()
-module GlobalGraph = struct
+
+(* TODO: See if this can be merged with SimpleGraph *)
+module GlobalGraph : GraphMonadType
+  with type node_label = (DirPath.t * int) node_type
+   and type edge_label = edge_type
+   and type node = DirPath.t * int
+   and type 'a repr_t = 'a * (DirPath.t * int) node_type list * DPset.t *
+                        (int, DirPath.t * int, edge_type) directed_edge list
+= struct
   type node = DirPath.t * int
   type edge_label = edge_type
   type node_label = node node_type
-  type 'loc directed_edge =
-    { from : int
-    ; sort : edge_type
-    ; toward : 'loc * int }
-  type t =
-    { nodes : node node_type list
+  type writer =
+    { nodes : node_label dlist
     ; paths : DPset.t
-    ; last  : int
-    ; assoc : DirPath.t directed_edge list }
-  let empty = { nodes = []; paths = DPset.empty; last = 0; assoc = [] }
+    ; assoc : (int, node, edge_label) directed_edge dlist }
+  module M = Monad_util.StateWriterMonad
+      (struct type s = int end)
+      (struct type w = writer
+        let id = { nodes = dlist_nil; paths = DPset.empty; assoc = dlist_nil }
+        let comb = fun
+          { nodes = n1; paths = p1; assoc = a1 }
+          { nodes = n2; paths = p2; assoc = a2 } ->
+          { nodes = dlist_append n1 n2; paths = DPset.union p1 p2; assoc = dlist_append a1 a2 } end)
+  include M
+  type 'a repr_t = 'a * node_label list * DPset.t * (int, node, edge_label) directed_edge list
+  open Monad_util.WithMonadNotations(M)
   let index_to_node i = dirpath, i
-  let mk_node ({ nodes; last; _ } as g) typ =
-    index_to_node last, { g with nodes = typ::nodes; last = last + 1}
-  let mk_edge ({ assoc; paths; _ } as g) sort ~source:(fp, fi) ~target:(tp, ti) =
-    assert (fp = dirpath);
-    { g with
-      assoc = { from = fi; sort; toward = (tp, ti) } :: assoc
-    ; paths = DPset.add tp paths }
-  let node_list { nodes; _ } = List.rev nodes
-  let edge_list { assoc; _ } = List.rev assoc
+  let mk_node nl =
+    let* i = get in
+    put (i + 1) >>
+    let+ () = tell { nodes = dlist_singleton nl; paths = DPset.empty; assoc = dlist_nil } in
+    index_to_node i
+  let mk_edge label ~source:(sp, si) ~target:(tp, ti) =
+    assert (sp = dirpath);
+    tell { nodes = dlist_nil; paths = DPset.singleton tp
+         ; assoc = dlist_singleton { source = si; target = (tp, ti); label } }
+  let with_delayed_node f =
+    let* i = get in
+    put (i + 1) >>
+    pass @@
+    let+ (v, nl) = f (index_to_node i) in
+    v, fun ({ nodes; _ } as w) -> { w with nodes = dlist_cons nl nodes }
+  let run m =
+    let _, ({ nodes; paths; assoc }, res) = run m 0 in
+    res, dlist_to_list nodes, paths, dlist_to_list assoc
 end
+
+
 module G = GlobalGraph
-module GB = GraphBuilder(G)
+module CICGraph = struct
+  type node' = DirPath.t * int
+  include CICGraphMonad(GlobalGraph)
+end
+module GB = GraphBuilder(CICGraph)
 
 module K = Labelled_graph_api.Make(Capnp.BytesMessage)
 let nt2nt transformer (nt : G.node node_type) cnt =
@@ -181,12 +209,11 @@ let write_classification_list transformer classification_arr nodes =
       nt2nt transformer x arri) nodes
 
 let write_edge_list transformer edge_arr edges =
-  let open G in
   let arr = edge_arr (List.length @@ edges) in
-  List.iteri (fun i { from; sort; toward=(tp, ti) } ->
+  List.iteri (fun i { source; label; target=(tp, ti) } ->
       let arri = Capnp.Array.get arr i in
-      K.Builder.DirectedEdge.source_set_int_exn arri from;
-      K.Builder.DirectedEdge.sort_set arri @@ et2et sort;
+      K.Builder.DirectedEdge.source_set_int_exn arri source;
+      K.Builder.DirectedEdge.sort_set arri @@ et2et label;
       let toward = K.Builder.DirectedEdge.target_get arri in
       K.Builder.DirectedEdge.Target.dep_index_set_exn toward @@ transformer tp;
       K.Builder.DirectedEdge.Target.node_index_set_int_exn toward ti

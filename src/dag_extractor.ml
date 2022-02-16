@@ -41,7 +41,7 @@ module DAGBuilder(G : DAG) = struct
 
   module M = ReaderStateMonad(struct type s = state and r = context end)
   open M
-  open Tactician_util.WithMonadNotations(M)
+  open Monad_util.WithMonadNotations(M)
   module OList = List
   open Monad.Make(M)
 

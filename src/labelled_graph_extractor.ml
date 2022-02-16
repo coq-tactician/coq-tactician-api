@@ -6,78 +6,194 @@ open Context
 open Ltac_plugin
 open Tacexpr
 
-module ReaderStateMonad (R : sig type r and s end) = struct
-  open R
-  type 'a t = (s * r) -> (s * 'a)
-  let return x = fun (s, _) -> s,x
-  let (>>=) x f = fun (s, r) -> let s, x = x (s, r) in f x (s, r)
-  let (>>) x y = fun (s, r) -> let s, () = x (s, r) in y (s, r)
-  let map f x = fun sr -> let s, x = x sr in s, f x
+module ProjMap = CMap.Make(Projection.Repr)
 
-  let put s = fun _ -> s, ()
-  let get = fun (s, _) -> s, s
+module type CICGraphMonadType = sig
 
-  let ask sr = sr
-  let local f x = fun (s, r) -> x (s, f r)
+  include Monad.Def
+  type node
+  type node_label
+  type edge_label
+  type 'a repr_t
+
+  (** Basic drawing primitives. More high-level primitives are defined below and should be preferred *)
+  val mk_node : node_label -> node t
+  val mk_edge : edge_label -> source:node -> target:node -> unit t
+  val with_delayed_node : (node -> ('a * node_label) t) -> 'a t
+
+  (** Registering and lookup of definitions *)
+  val register_constant : Constant.t -> node -> unit t
+  val find_constant : Constant.t -> node option t
+
+  val register_inductive : inductive -> node -> unit t
+  val find_inductive : inductive -> node option t
+
+  val register_constructor : constructor -> node -> unit t
+  val find_constructor : constructor -> node option t
+
+  val register_projection : Projection.Repr.t -> node -> unit t
+  val find_projection : Projection.Repr.t -> node option t
+
+  (** Managing the local context and the focus *)
+  val lookup_relative    : int -> node t
+  val lookup_named       : Id.t -> node t
+  val lookup_named_map   : node Id.Map.t t
+  val lookup_focus       : node t
+  val lookup_follow_defs : bool t
+  val lookup_proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t t
+
+  val get_named_context : node Id.Map.t t
+
+  val with_relative       : node -> 'a t -> 'a t
+  val with_relatives      : node list -> 'a t -> 'a t
+  val with_named          : Id.t -> node -> 'a t -> 'a t
+  val with_focus          : node -> 'a t -> 'a t
+  val with_initial_focus  : 'a t -> 'a t
+  val with_empty_contexts : 'a t -> 'a t
+
+  (** High level drawing commands that draw from a given focus *)
+
+  (** [draw_toward_delayed el f] creates a new node [n], draws an edge from the focus (if any) to [n] with [el] as edge label,
+      and runs the computation [f n] in a context where the focus is kept to the original. Finally, the output of [f n] determines the
+      node label of [n] *)
+  val draw_toward_delayed : edge_label -> (node -> ('a * node_label) t) -> 'a t
+
+  (** [move_toward_delayed el f] creates a new node [n], draws an edge from the focus (if any) to [n] with [el] as edge label,
+      and runs the computation [f n] in a context where the focus is set to [n]. Finally, the output of [f n] determines the
+      node label of [n] *)
+  val move_toward_delayed : edge_label -> (node -> ('a * node_label) t) -> 'a t
+
+  (** Variations of the three functions above *)
+  val draw_toward                 : edge_label -> node -> unit t
+  val draw_toward_new             : edge_label -> node_label -> node t
+  val draw_toward_new_unit        : edge_label -> node_label -> unit t
+
+  val move_toward                 : edge_label -> node -> 'a t -> 'a t
+  val move_toward_new             : edge_label -> node_label -> unit t -> node t
+  val move_toward_new_unit        : edge_label -> node_label -> unit t -> unit t
+  val move_toward_delayed_unit    : edge_label -> (node -> node_label t) -> node t
+  val move_toward_delayed_ignore  : edge_label -> (node -> node_label t) -> unit t
+  val move_toward_new_with_parent : edge_label -> node_label -> (node -> 'a t) -> 'a t
+
+  type definitions =
+    { constants            : node Cmap.t
+    ; inductives           : node Indmap.t
+    ; constructors         : node Constrmap.t
+    ; projections          : node ProjMap.t }
+
+  val run :
+    initial_focus:node_label ->
+    follow_defs:advanced_flag ->
+    known_definitions:definitions ->
+    (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
+    'a t -> (definitions * 'a) repr_t
+  val run_empty :
+    initial_focus:node_label ->
+    follow_defs:advanced_flag ->
+    (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
+    'a t -> (definitions * 'a) repr_t
 end
+module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
+  with type node = G.node
+   and type node_label = G.node_label
+   and type edge_label = G.edge_label
+   and type 'a repr_t = 'a G.repr_t = struct
 
-module GraphBuilder(G : Graph) = struct
+  include G
 
-  module ProjMap = CMap.Make(Projection.Repr)
-
-  type state =
-    { graph         : G.t
-    ; constants     : G.node Cmap.t
-    ; inductives    : G.node Indmap.t
-    ; constructors  : G.node Constrmap.t
-    ; projections   : G.node ProjMap.t }
-
+  type definitions =
+    { constants            : node Cmap.t
+    ; inductives           : node Indmap.t
+    ; constructors         : node Constrmap.t
+    ; projections          : node ProjMap.t }
   type context =
-    { relative    : G.node list
-    ; named       : G.node Id.Map.t
-    ; focus       : G.node
+    { relative    : node list
+    ; named       : node Id.Map.t
+    ; focus       : node
     ; follow_defs : bool
     ; proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t
-    ; initial_focus : G.node }
+    ; initial_focus : node }
+  type directed_edge =
+    { source : node
+    ; target : node
+    ; label  : edge_label }
 
-  module M = ReaderStateMonad(struct type s = state and r = context end)
-  open M
-  open Tactician_util.WithMonadNotations(M)
+  module M = Monad_util.ReaderStateMonadT
+      (G)
+      (struct type r = context end)
+      (struct type s = definitions end)
   module OList = List
-  open Monad.Make(M)
+  open M
+  include Monad_util.WithMonadNotations(M)
 
-  let run_empty follow_defs proofs_map m =
-    let focus, graph = G.mk_node G.empty Root in
-    let state =
-      { graph
-      ; constants = Cmap.empty
-      ; inductives = Indmap.empty
-      ; constructors = Constrmap.empty
-      ; projections = ProjMap.empty} in
-    let context = { relative = []; named = Id.Map.empty; focus; follow_defs; proofs_map; initial_focus = focus } in
-    m (state, context)
+  (** Lifting of basic drawing primitives *)
+  let mk_node nl = M.lift @@ mk_node nl
+  let mk_edge el ~source ~target = M.lift @@ mk_edge el ~source ~target
+  let with_delayed_node f = unrun @@ fun c s ->
+    with_delayed_node (fun n ->
+        G.map (fun (s, (a, nl)) -> (s, a), nl) (run (f n) c s))
 
-  let const x _ = x
-  let ignore' m = map ignore m
+  let get_named_context =
+    let+ context = ask in
+    context.named
 
-  let mk_node nt =
-    let* ({ graph; _ } as g) = get in
-    let n, graph = G.mk_node graph nt in
-    let+ () = put { g with graph } in
-    n
-  let mk_edge sort source target =
-    let* { graph; _ } as g = get in
-    put { g with graph = G.mk_edge graph sort ~source ~target }
-  let relative_lookup i =
+  (** Registering and lookup of definitions *)
+
+  let update_error x = function
+    | None -> Some x
+    | Some _ -> CErrors.anomaly (Pp.str "Map update attempt while key already existed")
+
+  let register_constant c n =
+    let* ({ constants; _ } as s) = get in
+    put { s with constants = Cmap.update c (update_error n) constants }
+  let find_constant c =
+    let+ { constants; _ } = get in
+    Cmap.find_opt c constants
+
+  let register_inductive i n =
+    let* ({ inductives; _ } as s) = get in
+    put { s with inductives = Indmap.update i (update_error n) inductives }
+  let find_inductive i =
+    let+ { inductives; _ } = get in
+    Indmap.find_opt i inductives
+
+  let register_constructor c n =
+    let* ({ constructors; _ } as s) = get in
+    put { s with constructors = Constrmap.update c (update_error n) constructors }
+  let find_constructor c =
+    let+ { constructors; _ } = get in
+    Constrmap.find_opt c constructors
+
+  let register_projection p n =
+    let* ({ projections; _ } as s) = get in
+    put { s with projections = ProjMap.update p (update_error n) projections }
+  let find_projection p =
+    let+ { projections; _ } = get in
+    ProjMap.find_opt p projections
+
+  (** Managing the local context and the focus *)
+  let lookup_relative i =
     let+ { relative; _ } = ask in
     let rec find ctx i = match ctx, i with
       | node::_, 1 -> node
       | _::ctx, n -> find ctx (n - 1)
       | [], _ -> CErrors.anomaly (Pp.str "Invalid relative context") in
     find relative i
-  let named_lookup id =
+  let lookup_named_map =
     let+ { named; _ } = ask in
+    named
+  let lookup_named id =
+    let+ named = lookup_named_map in
     Id.Map.find id named
+  let lookup_focus =
+    let+ { focus; _ } = ask in focus
+  let lookup_follow_defs =
+    let+ { follow_defs; _ } = ask in
+    follow_defs
+  let lookup_proofs_map =
+    let+ { proofs_map; _ } = ask in
+    proofs_map
+
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
   let with_var id var =
@@ -92,41 +208,96 @@ module GraphBuilder(G : Graph) = struct
     local (fun ({ relative; _ } as c) ->
         let relative = OList.fold_left (fun ctx n -> n::ctx) ns relative in (* Funs are added backwards *)
         { c with relative })
-  let with_reset m =
+  let with_named id n =
+    local (fun ({ named; _ } as c) -> { c with named = Id.Map.update id (update_error n) named })
+  let with_focus focus =
+    local (fun c -> { c with focus })
+  let with_empty_contexts m =
     local (fun c -> { c with named = Id.Map.empty; relative = [] }) m
 
-  let draw_toward et n =
+  (** High level drawing commands that draw from a given focus *)
+
+  let draw_toward et target =
     let* { focus; _ } = ask in
-    mk_edge et focus n
-  let move_toward et n m =
-    draw_toward et n >>
-    local (fun c -> { c with focus = n }) m
-  let move_toward_new et nt m =
+    mk_edge et ~source:focus ~target
+  let move_toward et target m =
+    draw_toward et target >>
+    local (fun c -> { c with focus = target }) m
+  let move_toward_new_with_parent et nt m =
     let* n = mk_node nt in
-    move_toward et n m >> return n
-  let move_toward_new' et nt m = ignore' @@ move_toward_new et nt m
+    move_toward et n (m n)
+  let move_toward_new et nt m =
+    move_toward_new_with_parent et nt (fun i -> m >> return i)
+  let move_toward_new_unit et nt m =
+    move_toward_new_with_parent et nt (fun i -> m)
   let draw_toward_new et nt =
     move_toward_new et nt (return ())
-  let draw_toward_new' et nt = move_toward_new' et nt (return ())
+  let draw_toward_new_unit et nt =
+    move_toward_new_unit et nt (return ())
 
-  let register_ind i n =
-    let* ({ inductives; _ } as s) = get in
-    put { s with inductives = Indmap.add i n inductives }
-  let register_construct c n =
-    let* ({ constructors; _ } as s) = get in
-    put { s with constructors = Constrmap.add c n constructors }
-  let register_projection p n =
-    let* ({ projections; _ } as s) = get in
-    put { s with projections = ProjMap.add p n projections }
+  let draw_toward_delayed et f =
+    with_delayed_node @@
+    fun n -> draw_toward et n >> f n
+
+  let move_toward_delayed et f =
+    with_delayed_node @@
+    fun n -> move_toward et n (f n)
+
+  let move_toward_delayed_unit et f =
+    with_delayed_node @@
+    fun n -> move_toward et n @@
+    let+ nt = f n in
+    n, nt
+
+  let move_toward_delayed_ignore et f =
+    with_delayed_node @@
+    fun n -> move_toward et n @@
+    let+ nt = f n in
+    (), nt
+
+  let run ~initial_focus ~follow_defs ~known_definitions proofs_map m =
+    (* The initial focus node is superfluous, but who cares *)
+    G.run @@ G.(>>=) (G.mk_node initial_focus) (fun focus ->
+        let context =
+          { relative = []; named = Id.Map.empty; focus; follow_defs; proofs_map; initial_focus = focus } in
+        run m context known_definitions)
+  let run_empty ~initial_focus ~follow_defs proofs_map m =
+    let known_definitions =
+      { constants = Cmap.empty
+      ; inductives = Indmap.empty
+      ; constructors = Constrmap.empty
+      ; projections = ProjMap.empty} in
+    run ~initial_focus ~follow_defs ~known_definitions proofs_map m
+end
+
+module GraphBuilder
+    (G : sig
+       type node'
+       include CICGraphMonadType
+         with type node = node'
+          and type edge_label = edge_type
+          and type node_label = node' node_type
+    end) = struct
+
+  module OList = List
+  open G
+  open Monad.Make(G)
+  open Monad_util.WithMonadNotations(G)
+
+  let update_error x = function
+    | None -> Some x
+    | Some _ -> CErrors.anomaly (Pp.str "Map update attempt while key already existed")
+
+  let const x _ = x
+  let ignore' m = map ignore m
 
   let cached_gen_const et c gen : G.node t =
-    let* { constants; _ } = get in
-    match Cmap.find_opt c constants with
+    let* n = find_constant c in
+    match n with
     | Some c -> draw_toward et c >> return c
     | None ->
-      let* n = with_reset gen in
-      let* ({ constants; _ } as s) = get in
-      let+ _ = put { s with constants = Cmap.add c n constants } in
+      let* n = with_empty_contexts gen in
+      let+ () = register_constant c n in
       n
 
   let with_named_context gen_constr c (m : 'a t) =
@@ -135,12 +306,12 @@ module GraphBuilder(G : Graph) = struct
         | Named.Declaration.LocalAssum (id, typ) ->
           let* var = move_toward_new ContextElem (ContextAssum id.binder_name) @@
             gen_constr ContextDefType typ in
-          with_var id.binder_name var m
+          with_named id.binder_name var m
         | Named.Declaration.LocalDef (id, term, typ) ->
           let* var = move_toward_new ContextElem (ContextDef id.binder_name)
             (gen_constr ContextDefType typ >>
              gen_constr ContextDefTerm term) in
-          with_var id.binder_name var m)
+          with_named id.binder_name var m)
       c ~init:m
 
   let mk_definition def_type = Definition { previous = []; def_type }
@@ -167,20 +338,20 @@ module GraphBuilder(G : Graph) = struct
     (* Only process canonical constants *)
     let c = Constant.make1 (Constant.canonical c) in
     cached_gen_const et c @@
-    let* r = ask in
-    let proof = Cmap.find_opt c r.proofs_map in
+    let* proofs = lookup_proofs_map in
+    let proof = Cmap.find_opt c proofs in
     let gen_const d =
       move_toward_new et (mk_definition d) @@
       let { const_hyps; const_body; const_type; _ } = Global.lookup_constant c in
       with_named_context gen_constr const_hyps
         (gen_constr ConstType const_type >>
          match const_body with
-         | Undef _ -> draw_toward_new' ConstUndef ConstEmpty
+         | Undef _ -> draw_toward_new_unit ConstUndef ConstEmpty
          | Def c -> gen_constr ConstDef @@ Mod_subst.force_constr c
          | OpaqueDef c ->
            let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Global.opaque_tables ()) c in
            gen_constr ConstOpaqueDef c
-         | Primitive p -> draw_toward_new' ConstPrimitive @@ Primitive p) in
+         | Primitive p -> draw_toward_new_unit ConstPrimitive @@ Primitive p) in
     match proof with
     | None -> gen_const (ManualConst c)
     | Some proof ->
@@ -192,7 +363,7 @@ module GraphBuilder(G : Graph) = struct
   and gen_proof_state (hyps, concl) =
     with_named_context gen_constr hyps @@
       (gen_constr ContextSubject concl >>
-       map (fun c -> c.named) ask)
+       lookup_named_map)
   and gen_tactical_proof (ps, tac) =
     let* root = mk_node Root in
     let* context_map = with_focus root @@ gen_proof_state ps in
@@ -242,8 +413,8 @@ module GraphBuilder(G : Graph) = struct
     let generator = snd @@ CList.fold_left (fun (reli, m) d ->
         match d with
         | Rel.Declaration.LocalAssum ({ binder_name = id; _ }, typ) ->
-          reli - 1, fun et -> move_toward_new' et (Prod id)
-            (let* prod = focus in
+          reli - 1, fun et -> move_toward_new_unit et (Prod id)
+            (let* prod = lookup_focus in
              (match id with
               | Name id when reli >= 0 ->
                 let proj = Projection.Repr.make
@@ -255,28 +426,28 @@ module GraphBuilder(G : Graph) = struct
              gen_constr ProdType typ >>
              with_relative prod @@ m ProdTerm)
         | Rel.Declaration.LocalDef ({ binder_name = id; _ }, term, typ) ->
-          reli, fun et -> move_toward_new' et (LetIn id)
+          reli, fun et -> move_toward_new_unit et (LetIn id)
             (gen_constr LetInType typ >>
              gen_constr LetInDef term >>
-             let* letin = focus in
+             let* letin = lookup_focus in
              with_relative letin @@ m LetInDef))
         (real_arity - 1, (fun et -> gen_constr et sort)) relctx in
     generator et
   and gen_mutinductive_helper m =
     (* Only process canonical inductives *)
     let m = MutInd.make1 (MutInd.canonical m) in
-    let* { inductives; _ } = get in
-    match Indmap.find_opt (m, 0) inductives with
+    let* c = find_inductive (m, 0) in
+    match c with
     | Some mn -> return ()
     | None ->
-      with_reset @@
+      with_empty_contexts @@
       let ({ mind_hyps; mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
         Global.lookup_mind m in
       with_named_context gen_constr mind_hyps @@
       let inds = OList.mapi (fun i ind -> i, ind) (Array.to_list mind_packets) in
       let* inds = List.map (fun (i, ind) ->
           let* n = mk_node @@ mk_definition (Ind (m, i)) in
-          register_ind (m, i) n >> return (i, ind, n)) inds in
+          register_inductive (m, i) n >> return (i, ind, n)) inds in
       let indsn = OList.rev @@ OList.map (fun (_, _, n) -> n) inds in (* Backwards ordering w.r.t. Fun *)
       List.iter (fun (i, ({ mind_user_lc; mind_consnames; _ } as ib), n) ->
           let gen_constr_typ et typ = match mind_record with
@@ -288,7 +459,7 @@ module GraphBuilder(G : Graph) = struct
             (List.iter (fun (j, (typ, id)) ->
                  with_relatives indsn @@ move_toward_new IndConstruct (mk_definition (Construct ((m, i), j + 1))) @@
                  gen_constr_typ ConstructTerm typ >>=
-                 register_construct ((m, i), j + 1)) constructs >>
+                 register_constructor ((m, i), j + 1)) constructs >>
              let univs = Declareops.inductive_polymorphic_context mb in
              let inst = Univ.make_abstract_instance univs in
              let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) (Global.env ()) in
@@ -296,80 +467,80 @@ module GraphBuilder(G : Graph) = struct
              gen_constr IndType typ)) inds
   and gen_inductive et ((m, _) as i) : G.node t =
     gen_mutinductive_helper m >>
-    let* { inductives; _ } = get in
-    match Indmap.find_opt i inductives with
+    let* n = find_inductive i in
+    match n with
     | Some inn -> draw_toward et inn >> return inn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
   and gen_inductive2 et i =
     let+ _ = gen_inductive et i in ()
   and gen_constructor et (((m, _), _) as c) : G.node t =
     gen_mutinductive_helper m >>
-    let* { constructors; _ } = get in
-    match Constrmap.find_opt c constructors with
+    let* n = find_constructor c in
+    match n with
     | Some cn -> draw_toward et cn >> return cn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
   and gen_constructor2 et c =
     let+ _ = gen_constructor et c in ()
   and gen_projection et p =
     gen_mutinductive_helper (Projection.mind p) >>
-    let* { projections; _ } = get in
-    match ProjMap.find_opt (Projection.repr p) projections with
+    let* n = find_projection (Projection.repr p) in
+    match n with
     | Some cn -> draw_toward et cn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
   and follow_def et nt def =
-    let* ({ follow_defs; _ }) = ask in
-    if follow_defs then def else draw_toward_new' et nt
+    let* follow_defs = lookup_follow_defs in
+    if follow_defs then def else draw_toward_new_unit et nt
   and gen_constr et c = gen_kind_of_term et @@ Constr.kind c
   and gen_kind_of_term et = function
     | Rel i ->
-      let* ino = relative_lookup i in
-      move_toward_new' et Rel @@ draw_toward RelPointer ino
+      let* ino = lookup_relative i in
+      move_toward_new_unit et Rel @@ draw_toward RelPointer ino
     | Var id ->
-      move_toward_new' et Var (named_lookup id >>= draw_toward VarPointer)
+      move_toward_new_unit et Var (lookup_named id >>= draw_toward VarPointer)
     | Meta i ->
       CErrors.anomaly (Pp.str "Unexpected meta")
     | Evar (ev, substs) -> (* TODO: Add type and proper substitution list *)
-      move_toward_new' et (Evar (Evar.repr ev))
+      move_toward_new_unit et (Evar (Evar.repr ev))
         (match Array.to_list substs with
          | [] -> return ()
          | h::substs ->
            let* head = move_toward_new EvarSubstPointer EvarSubst @@ gen_constr EvarSubstValue h in
            ignore' @@ List.fold_left (fun prev b ->
                let* curr = move_toward_new EvarSubstPointer EvarSubst @@ gen_constr EvarSubstValue b in
-               map (const curr) @@ mk_edge EvarSubstOrder prev curr)
+               map (const curr) @@ mk_edge EvarSubstOrder ~source:prev ~target:curr)
              head substs)
     | Sort s ->
         (match s with
-         | Sorts.SProp -> draw_toward_new' et SortSProp
-         | Sorts.Prop -> draw_toward_new' et SortProp
-         | Sorts.Set -> draw_toward_new' et SortSet
-         | Sorts.Type _ -> draw_toward_new' et SortType)
+         | Sorts.SProp -> draw_toward_new_unit et SortSProp
+         | Sorts.Prop -> draw_toward_new_unit et SortProp
+         | Sorts.Set -> draw_toward_new_unit et SortSet
+         | Sorts.Type _ -> draw_toward_new_unit et SortType)
     | Cast (term, kind, typ) ->
-      move_toward_new' et Cast
+      move_toward_new_unit et Cast
         (gen_constr CastTerm term >>
          gen_constr CastType typ)
     | Prod (id, bi, conc) ->
-      move_toward_new' et (Prod id.binder_name)
+      move_toward_new_unit et (Prod id.binder_name)
         (gen_constr ProdType bi >>
-         let* prod = focus in
+         let* prod = lookup_focus in
          with_relative prod @@ gen_constr ProdTerm conc)
     | Lambda (id, typ, term) ->
-      move_toward_new' et (Lambda id.binder_name)
+      move_toward_new_unit et (Lambda id.binder_name)
         (gen_constr LambdaType typ >>
-         let* lambda = focus in
+         let* lambda = lookup_focus in
          with_relative lambda @@ gen_constr LambdaTerm term)
     | LetIn (id, def, typ, term) ->
-      move_toward_new' et (LetIn id.binder_name)
+      move_toward_new_unit et (LetIn id.binder_name)
         (gen_constr LetInDef def >>
          gen_constr LetInType typ >>
-         let* letin = focus in
+         let* letin = lookup_focus in
          with_relative letin @@ gen_constr LetInTerm term)
     | App (f, args) ->
-      move_toward_new' et App @@
+      move_toward_new_unit et App @@
       let* fn = move_toward_new AppFunPointer AppFun @@ gen_constr AppFunValue f in
       ignore' @@ List.fold_left (fun prev b ->
           let* curr = move_toward_new AppArgPointer AppArg @@ gen_constr AppArgValue b in
-          map (const curr) @@ mk_edge AppArgOrder prev curr)
+          map (const curr) @@ mk_edge AppArgOrder ~source:prev ~target:curr)
         fn (Array.to_list args)
     | Const (c, u) ->
       follow_def et (mk_definition (ManualConst c)) @@ gen_const2 et c
@@ -378,17 +549,17 @@ module GraphBuilder(G : Graph) = struct
     | Construct (c, u) ->
       follow_def et (mk_definition (Construct c)) @@ gen_constructor2 et c
     | Case (i, ret, term, branches) ->
-      move_toward_new' et Case
+      move_toward_new_unit et Case
         (follow_def CaseInd (mk_definition (Ind i.ci_ind)) @@ gen_inductive2 CaseInd i.ci_ind >>
          gen_constr CaseReturn ret >>
          gen_constr CaseTerm term >>
          List.iter (fun (c, branch) ->
-             move_toward_new' CaseBranchPointer CaseBranch
+             move_toward_new_unit CaseBranchPointer CaseBranch
                (follow_def CBConstruct (mk_definition (Construct (i.ci_ind, c + 1))) @@ gen_constructor2 CBConstruct (i.ci_ind, c + 1) >>
                 gen_constr CBTerm branch))
            (OList.mapi (fun i x -> i, x) @@ Array.to_list branches))
     | Fix ((offset, ret), (ids, typs, terms)) ->
-      move_toward_new' et Fix @@
+      move_toward_new_unit et Fix @@
       let* funs = List.map (fun id -> mk_node @@ FixFun id.binder_name) (Array.to_list ids) in
       let combined = OList.combine funs (OList.combine (Array.to_list typs) (Array.to_list terms)) in
       List.iter (fun (fn, (typ, term)) ->
@@ -398,7 +569,7 @@ module GraphBuilder(G : Graph) = struct
         combined >>
       draw_toward FixReturn (OList.nth funs ret)
     | CoFix (ret, (ids, typs, terms)) ->
-      move_toward_new' et CoFix @@
+      move_toward_new_unit et CoFix @@
       let* funs = List.map (fun id -> mk_node @@ CoFixFun id.binder_name) (Array.to_list ids) in
       let combined = OList.combine funs (OList.combine (Array.to_list typs) (Array.to_list terms)) in
       List.iter (fun (fn, (typ, term)) ->
@@ -408,14 +579,14 @@ module GraphBuilder(G : Graph) = struct
         combined >>
       draw_toward CoFixReturn (OList.nth funs ret)
     | Proj (p, term) ->
-      move_toward_new' et App @@
+      move_toward_new_unit et App @@
       let* fn = move_toward_new AppFunPointer AppFun @@ follow_def AppFunValue (mk_definition (Proj (Projection.repr p))) @@ gen_projection AppFunValue p in
       let* arg = move_toward_new AppArgPointer AppArg @@ gen_constr AppArgValue term in
-      mk_edge AppArgOrder fn arg
+      mk_edge AppArgOrder ~source:fn ~target:arg
     | Int n ->
-      draw_toward_new' et @@ Int n
+      draw_toward_new_unit et @@ Int n
     | Float f ->
-      draw_toward_new' et @@ Float f
+      draw_toward_new_unit et @@ Float f
 
   let with_named_context ctx m = with_named_context gen_constr ctx m
 

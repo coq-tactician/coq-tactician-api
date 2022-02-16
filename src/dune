@@ -26,7 +26,6 @@
     graph_api
     dag_api
     labelled_graph_api
-    extreme_tactic_normalize
     tactic_one_variable
     ))
   (libraries

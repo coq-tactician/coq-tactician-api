@@ -1,3 +1,4 @@
+open Tactician_ltac1_record_plugin
 open Names
 open Declarations
 
@@ -111,4 +112,40 @@ module SimpleDAG = struct
   let empty = 0, []
   let mk_node (l, g) nt children = (l, (l+1, (nt, children) :: g))
   let node_list (_, nodes) = List.rev nodes
+end
+
+module type DAG2 = sig
+  include Monad.Def
+  type node
+  val mk_node : node_type -> node list -> node t
+  val with_delayed_node : (node -> ('a * node_type * node list) t) -> 'a t
+end
+
+type 'a dlist = 'a list -> 'a list
+
+let dlist_nil = fun tl -> tl
+let dlist_append ls1 ls2 = fun tl -> ls1 (ls2 tl)
+let dlist_cons x ls = fun tl -> x :: ls tl
+let dlist_singleton x = fun tl -> x::tl
+
+module SimpleDAG2 : DAG2 = struct
+  type node = int
+  module M = Monad_util.StateWriterMonad
+      (struct type s = int end)
+      (struct type w = (node_type * node list) dlist
+        let id = dlist_nil
+        let comb = dlist_append end)
+  include M
+  open Monad_util.WithMonadNotations(M)
+  let mk_node (nt : node_type) (children : node list) : node t =
+    let* i = get in
+    put (i + 1) >>
+    let+ () = tell (dlist_singleton (nt, children)) in
+    i
+  let with_delayed_node (f : node -> ('a * node_type * node list) t) : 'a t =
+    let* i = get in
+    put (i+1) >>
+    pass @@
+    let+ (v, nt, children) = f i in
+    v, dlist_cons (nt, children)
 end

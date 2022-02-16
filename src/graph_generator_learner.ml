@@ -6,7 +6,7 @@ open Graph_def
 open Graph_capnp_generator
 
 let dirpath = Global.current_dirpath ()
-let data_file = Option.default "" Ltacrecord.base_filename ^ ".bin"
+let data_file = Option.default "" Tactician_util.base_filename ^ ".bin"
 
 module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
@@ -70,7 +70,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
     let relativized_dependencies =
       List.filter_map (fun p ->
-          let f = match Ltacrecord.try_locate_absolute_library p with
+          let f = match Tactician_util.try_locate_absolute_library p with
             | None -> CErrors.user_err (Pp.str ("Path was not locatable: " ^ DirPath.to_string p))
             | Some f -> f in
           let f = CUnix.strip_path f in
@@ -114,7 +114,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         (fun c _ -> not @@ Cmap.mem c !global_nodes.constants) globrefs.constants in
     let minductives = Mindmap_env.Set.elements @@ Mindmap_env.domain @@ Mindmap_env.filter
         (fun m _ -> not @@ Indmap.mem (m, 0) !global_nodes.inductives) globrefs.inductives in
-    let open Tactician_util.WithMonadNotations(GB.M) in
+    let open Monad_util.WithMonadNotations(GB.M) in
     let open Monad.Make(GB.M) in
     let proof_states = OList.rev !last_model in
     let updater =
