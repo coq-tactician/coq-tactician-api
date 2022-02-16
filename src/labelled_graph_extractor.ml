@@ -565,7 +565,7 @@ module GraphBuilder
       List.iter (fun (fn, (typ, term)) ->
           move_toward FixMutual fn
             (gen_constr FixFunType typ >>
-             with_relatives funs @@ gen_constr FixFunTerm term))
+             with_relatives (OList.rev funs) @@ gen_constr FixFunTerm term))
         combined >>
       draw_toward FixReturn (OList.nth funs ret)
     | CoFix (ret, (ids, typs, terms)) ->
@@ -575,7 +575,7 @@ module GraphBuilder
       List.iter (fun (fn, (typ, term)) ->
           move_toward CoFixMutual fn
             (gen_constr CoFixFunType typ >>
-             with_relatives funs @@ gen_constr CoFixFunTerm term))
+             with_relatives (OList.rev funs) @@ gen_constr CoFixFunTerm term))
         combined >>
       draw_toward CoFixReturn (OList.nth funs ret)
     | Proj (p, term) ->
