@@ -1,6 +1,6 @@
 # Unreleased
 
-Changes to the capn'proto format:
+Changes to the Capn'proto format:
 - Upgraded the magic id
 - The storage format of the graph has been changed from an edge-list to an adjacency-list, giving us a much more natural representation.
   This should allow consumers of the graph to implement graph-algorithms that operate directly on the capn'proto datastructure instead of
@@ -18,8 +18,9 @@ Changes to the graph representation:
 
 Other changes:
 - The code to generate the older 'graph' and 'dag' datasets have been removed. The maintenance burden was to great.
-  Now only the 'labelled_graph' remains. Many of the advantages of the 'dag' version have now been integrated into 'labelled_graph', and the labelled graph
+  Now only the 'labelled graph' remains. Many of the advantages of the 'dag' version have now been integrated into 'labelled_graph', and the labelled graph
   can relatively easily be modified to be acyclic. The 'graph' version has been removed due to lack of interest.
+- Now that we do no longer have to distinguish between 'graph' and 'labelled graph', we rename all modules to not mention 'labelled' anymore.
 
 # stdlib-lgraph-intermediate-v5-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v5-global.tar.xz

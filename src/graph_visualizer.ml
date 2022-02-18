@@ -1,5 +1,5 @@
-open Labelled_graph_extractor
-open Labelled_graph_def
+open Graph_extractor
+open Graph_def
 
 let order_option = Goptions.declare_bool_option_and_ref
       ~depr:false ~name:"order graph nodes"
@@ -30,10 +30,10 @@ module GraphvizGraph = struct
 
   let graph_attributes _ = if order_option () then [`OrderingOut] else []
   let default_vertex_attributes _ = []
-  let vertex_attributes n = [`Label Labelled_graph_def.(show_node_type (fun _ _ -> ()) @@ (V.label n).label)]
+  let vertex_attributes n = [`Label Graph_def.(show_node_type (fun _ _ -> ()) @@ (V.label n).label)]
   let default_edge_attributes _ = []
   let edge_attributes e =
-    (if label_option () then [ `Label Labelled_graph_def.(show_edge_type @@ E.label e) ] else []) @
+    (if label_option () then [ `Label Graph_def.(show_edge_type @@ E.label e) ] else []) @
     [ `Dir `Both
     ; `Arrowtail (List.nth arrow_heads @@ edge_type_int_mod @@ E.label e)] @
     (match E.label e with

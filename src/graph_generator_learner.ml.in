@@ -1,8 +1,8 @@
 open Tactician_ltac1_record_plugin
 open Tactic_learner
 open Names
-open Labelled_graph_extractor
-open Labelled_graph_capnp_generator
+open Graph_extractor
+open Graph_capnp_generator
 
 let dirpath = Global.current_dirpath ()
 let data_file () = match Tactician_util.base_filename with
@@ -87,7 +87,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     Sys.chdir pwd;
     relative_deps
 
-  module K = Labelled_graph_api.Make(Capnp.BytesMessage)
+  module K = Graph_api.Make(Capnp.BytesMessage)
   let write_graph (nodes, paths) tactical_constants =
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in

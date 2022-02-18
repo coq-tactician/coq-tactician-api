@@ -1,5 +1,5 @@
-open Labelled_graph_def
-open Labelled_graph_extractor
+open Graph_def
+open Graph_extractor
 open Names
 open Tactician_ltac1_record_plugin
 open Ltac_plugin
@@ -60,7 +60,7 @@ module CICGraph = struct
 end
 module GB = GraphBuilder(CICGraph)
 
-module K = Labelled_graph_api.Make(Capnp.BytesMessage)
+module K = Graph_api.Make(Capnp.BytesMessage)
 let nt2nt transformer (nt : G.node node_type) cnt =
   let open K.Builder.NodeClassification in
   match nt with

@@ -1,5 +1,5 @@
 open Tactician_ltac1_record_plugin
-open Labelled_graph_def
+open Graph_def
 open Names
 open Declarations
 open Context

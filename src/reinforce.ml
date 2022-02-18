@@ -1,9 +1,9 @@
 open Tactician_ltac1_record_plugin
-open Labelled_graph_capnp_generator
+open Graph_capnp_generator
 open Names
 open Ltac_plugin
 
-module Api = Labelled_graph_api.MakeRPC(Capnp_rpc_lwt)
+module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 open Capnp_rpc_lwt
 open Lwt.Infix
 
