@@ -1,4 +1,4 @@
-@0xb563d37c5537abb0; # v5
+@0xec525db4e04108d4; # v6
 
 using File = Text;
 using DepIndex = UInt16;
@@ -6,19 +6,26 @@ using NodeIndex = UInt32;
 using TacticId = UInt64;
 using DefinitionId = UInt64;
 
-struct DirectedEdge {
-  source @0 :NodeIndex;
-  sort @1 :EdgeClassification;
-  target :group {
-    depIndex @2 :DepIndex;
-    nodeIndex @3 :NodeIndex;
-  }
-}
-
 struct Graph {
-  # Gives a classification to every NodeIndex
-  classifications @0 :List(NodeClassification);
-  edges @1 :List(DirectedEdge);
+  struct EdgeTarget {
+    label @0 :EdgeClassification;
+    target :group {
+      depIndex @1 :DepIndex;
+      nodeIndex @2 :NodeIndex;
+    }
+  }
+  struct Node {
+    label @0 :NodeClassification;
+
+    # We might consider creating special cases for nodes with a small number of children for efficiency purposes
+    children @1 :List(EdgeTarget);
+  }
+  # The main memory store of the graph. It acts as a heap similar to the main memory of a C/C++ program.
+  # The heap is indexed using a `NodeIndex`, returning a `Node`. Every node has a label and a list of
+  # children, which can in turn be found in the heap or the heap of a dependency. Note that just like in
+  # C/C++ doing pointer arithmetic on the heap is undefined behavior, and you may encounter arbitrary
+  # garbage if you do this. In particular, iterating over the heap is discouraged.
+  heap @0 :List(Node);
 }
 
 struct ProofState {
@@ -32,16 +39,14 @@ struct AbstractTactic {
   parameters @1 :UInt8;
 }
 
-struct GlobalNode {
-  depIndex @0 :DepIndex;
-  nodeIndex @1 :NodeIndex;
-}
-
 struct Tactic {
   struct Argument {
     union {
       unresolvable @0 :Void;
-      term @1 :GlobalNode;
+      term :group {
+        depIndex @1 :DepIndex;
+        nodeIndex @2 :NodeIndex;
+      }
     }
   }
 

@@ -250,21 +250,30 @@ module type GraphMonadType = sig
   type node
   type node_label
   type edge_label
+  type children = (edge_label * node) list
   type 'a repr_t
-  val mk_node : node_label -> node t
-  val mk_edge : edge_label -> source:node -> target:node -> unit t
-  val with_delayed_node : (node -> ('a * node_label) t) -> 'a t
+  val mk_node : node_label -> children -> node t
+  val with_delayed_node : (node -> ('a * node_label * children) t) -> 'a t
   val run : 'a t -> 'a repr_t
 end
 
-type 'a dlist = 'a list -> 'a list
-
-let dlist_nil = fun tl -> tl
-let dlist_append ls1 ls2 = fun tl -> ls1 (ls2 tl)
-let dlist_cons x ls = fun tl -> x :: ls tl
-let dlist_singleton x = fun tl -> x::tl
-let dlist_of_list ls = fun tl -> ls @ tl
-let dlist_to_list ls = ls []
+module DList : sig
+  type 'a t
+  val nil : 'a t
+  val append : 'a t -> 'a t -> 'a t
+  val cons : 'a -> 'a t -> 'a t
+  val singleton : 'a -> 'a t
+  val of_list : 'a list -> 'a t
+  val to_list : 'a t -> 'a list
+end = struct
+  type 'a t = 'a list -> 'a list
+  let nil = fun tl -> tl
+  let append ls1 ls2 = fun tl -> ls1 (ls2 tl)
+  let cons x ls = fun tl -> x :: ls tl
+  let singleton x = fun tl -> x::tl
+  let of_list ls = fun tl -> ls @ tl
+  let to_list ls = ls []
+end
 
 type ('s, 't, 'edge_label) directed_edge =
   { source : 's
@@ -274,32 +283,31 @@ module SimpleGraph (D : sig type node_label type edge_label end) : GraphMonadTyp
   with type node_label = D.node_label
    and type edge_label = D.edge_label
    and type node = int
-   and type 'a repr_t = 'a * D.node_label list * (int, int, D.edge_label) directed_edge list = struct
+   and type 'a repr_t = 'a * (D.node_label * (D.edge_label * int) list) list = struct
   include D
   type node = int
-  type writer = node_label dlist * (int, int, edge_label) directed_edge dlist
+  type children = (edge_label * node) list
+  type writer = (node_label * children) DList.t
   module M = Monad_util.StateWriterMonad
-      (struct type s = int end)
+      (struct type s = node end)
       (struct type w = writer
-        let id = dlist_nil, dlist_nil
-        let comb = fun (nls1, els1) (nls2, els2) -> dlist_append nls1 nls2, dlist_append els1 els2 end)
+        let id = DList.nil
+        let comb = fun nls1 nls2 -> DList.append nls1 nls2 end)
   include M
-  type 'a repr_t = 'a * node_label list * (int, int, edge_label) directed_edge list
+  type 'a repr_t = 'a * (node_label * children) list
   open Monad_util.WithMonadNotations(M)
-  let mk_node nl =
+  let mk_node nl ch =
     let* i = get in
     put (i + 1) >>
-    let+ () = tell (dlist_singleton nl, dlist_nil) in
+    let+ () = tell @@ DList.singleton (nl, ch) in
     i
-  let mk_edge label ~source ~target =
-    tell (dlist_nil, dlist_singleton { source; target; label })
   let with_delayed_node f =
     let* i = get in
     put (i + 1) >>
     pass @@
-    let+ (v, nl) = f i in
-    v, fun (nls, els) -> (dlist_cons nl nls, els)
+    let+ (v, nl, ch) = f i in
+    v, fun nls -> DList.cons (nl, ch) nls
   let run m =
-    let _, ((ns, es), res) = run m 0 in
-    res, dlist_to_list ns, dlist_to_list es
+    let _, (ns, res) = run m 0 in
+    res, DList.to_list ns
 end

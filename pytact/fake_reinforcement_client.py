@@ -111,8 +111,6 @@ async def main():
     main = client.bootstrap().cast_as(graph_api_capnp.Main)
 
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
-
-
     proc = await asyncio.create_subprocess_exec(
         # 'python3', 'python/fake_coq_server.py',
         'tactician', 'exec', 'coqc', test_filename,
@@ -137,7 +135,7 @@ async def main():
     state = await runTactic(state.newState.obj, 126567959, [])
     state = await runTactic(state.newState.obj, 126567959, [])
     state = await runTactic(state.newState.obj, 126567959, [])
-    state = await runTactic(state.newState.obj, 165468576, [localNode(7)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(11)])
     state = await runTactic(state.newState.obj, 165468576, [localNode(13)])
     state = await runTactic(state.newState.obj, 165468576, [localNode(15)])
 

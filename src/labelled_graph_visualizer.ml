@@ -1,7 +1,5 @@
 open Labelled_graph_extractor
 open Labelled_graph_def
-open Tactician_ltac1_record_plugin
-open Monad_util
 
 let order_option = Goptions.declare_bool_option_and_ref
       ~depr:false ~name:"order graph nodes"
@@ -56,15 +54,16 @@ module CICGraph = struct
 end
 module Builder = GraphBuilder(CICGraph)
 
-(* TODO: Temporary inefficient solution *)
-let cic_graph_to_dot_graph (ns, es) =
-  let g = CList.fold_left_i (fun tag g label ->
+(* TODO: Probably not the most beautiful and efficient solution *)
+let cic_graph_to_dot_graph ns =
+  let nm, g = CList.fold_left_i (fun tag (nm, g) (label, _) ->
       let node = { tag; label } in
-      GraphvizGraph.add_vertex g node) 0 GraphvizGraph.empty ns in
-  List.fold_left (fun g { source; target; label } ->
-      let source = { tag = source; label = List.nth ns source } in
-      let target = { tag = target; label = List.nth ns target } in
-      GraphvizGraph.mk_edge g label ~source ~target) g es
+      Int.Map.add tag node nm, GraphvizGraph.add_vertex g node) 0 (Int.Map.empty, GraphvizGraph.empty) ns in
+  CList.fold_left_i (fun tag g (_, children) ->
+      let source = Int.Map.find tag nm in
+      List.fold_left (fun g (label, tag) ->
+          let target = Int.Map.find tag nm in
+        GraphvizGraph.mk_edge g label ~source ~target) g children) 0 g ns
 
 let make_graph graph =
   let graph = cic_graph_to_dot_graph graph in
@@ -78,22 +77,22 @@ let make_global_graph x follow_defs =
     try
       Smartlocate.locate_global_with_alias x
     with Not_found -> CErrors.user_err (Pp.str "Invalid ident given") in
-  let (_, ()), ns, es = CICGraph.run_empty ~initial_focus:Root ~follow_defs Names.Cmap.empty @@ Builder.gen_globref x in
-  make_graph (ns, es)
+  let (_, _), ns = CICGraph.run_empty ~follow_defs Names.Cmap.empty @@ Builder.gen_globref x in
+  make_graph ns
 
 let make_constr_graph c follow_defs =
   let env = Global.env () in
   let sigma = Evd.from_env env in
   let evd, c = Constrintern.interp_constr_evars env sigma c in
-  let (_, ()), ns, es = CICGraph.run_empty ~initial_focus:Root ~follow_defs Names.Cmap.empty @@
-    Builder.gen_constr ContextSubject (EConstr.to_constr evd c) in
-  make_graph (ns, es)
+  let (_, _), ns = CICGraph.run_empty ~follow_defs Names.Cmap.empty @@
+    Builder.gen_constr (EConstr.to_constr evd c) in
+  make_graph ns
 
 let make_proof_graph state follow_defs =
   let _ =
     Pfedit.solve (Goal_select.get_default_goal_selector ()) None
       (Proofview.tclBIND Builder.gen_proof_state (fun res ->
-           let (_, ()), ns, es = CICGraph.run_empty ~initial_focus:Root ~follow_defs Names.Cmap.empty res in
-           make_graph (ns, es);
+           let (_, _), ns = CICGraph.run_empty ~follow_defs Names.Cmap.empty res in
+           make_graph ns;
            Proofview.tclUNIT ()))
       (Proof_global.get_proof state) in ()

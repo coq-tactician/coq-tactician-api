@@ -21,32 +21,31 @@ for group in graph_api_capnp.groupedEdges:
         count += 1
 
 def visualize(graph, state, showLabel = False):
-    nodes = graph.classifications
-    edges = graph.edges
+    heap = graph.heap
     root = state.root
     context = state.context
-    assert all(n < len(nodes) for n in context)
+    assert all(n < len(heap) for n in context)
 
     dot = graphviz.Digraph()
     dot.attr('graph', ordering="out")
-    for node, label in enumerate(nodes):
-        label = label.which()
+    for node, value in enumerate(heap):
+        label = value.label.which()
         if node in context: label = str(node) + ': ['+label+']'
         if node == root:
             label = "Root: "+label
         dot.node(str(node), label)
-
-    for edge in edges:
-        if showLabel:
-            label = str(edge.sort)
-        else:
-            label = ""
-        if str(edge.sort) in ["appArgOrder", "evarSubstOrder"]:
-            constraint = "false"
-        else:
-            constraint = "true"
-        dot.edge(str(edge.source), str(edge.target.nodeIndex), label=label,
-                 arrowtail=edge_arrow_map[edge.sort], dir="both", constraint=constraint)
+    for node, value in enumerate(heap):
+        for edge in value.children:
+            if showLabel:
+                label = str(edge.label)
+            else:
+                label = ""
+            if str(edge.label) in ["appArgOrder", "evarSubstOrder"]:
+                constraint = "false"
+            else:
+                constraint = "true"
+            dot.edge(str(node), str(edge.target.nodeIndex), label=label,
+                     arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
 
     dot.render('python_graph', view=False)
 

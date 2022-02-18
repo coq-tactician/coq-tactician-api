@@ -2,7 +2,6 @@ open Tactician_ltac1_record_plugin
 open Tactic_learner
 open Names
 open Labelled_graph_extractor
-open Labelled_graph_def
 open Labelled_graph_capnp_generator
 
 let dirpath = Global.current_dirpath ()
@@ -89,7 +88,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     relative_deps
 
   module K = Labelled_graph_api.Make(Capnp.BytesMessage)
-  let write_graph (nodes, paths, edges) tactical_constants =
+  let write_graph (nodes, paths) tactical_constants =
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
     let resolved_dependencies = resolve_dependencies depslist in
@@ -100,7 +99,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let transformer tp =
       DPmap.find tp path_index in
     let capnp_graph = K.Builder.Dataset.graph_init g in
-    write_graph capnp_graph transformer nodes edges;
+    write_graph capnp_graph transformer nodes;
     Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) (data_file ())
 
   open GB
@@ -152,7 +151,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
     let updater =
       let+ cnodes = List.map (fun c ->
-          let+ n = gen_const ContextSubject c in
+          let+ n = gen_const c in
         c, n) constants
       and+ () = List.iter gen_mutinductive_helper minductives in
       cnodes in
@@ -161,8 +160,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         ; inductives = !global_nodes.inductives
         ; constructors = !global_nodes.constructors
         ; projections = !global_nodes.projections } in
-    let (known_definitions, constant_nodes), nodes, paths, edges =
-      CICGraph.run ~initial_focus:Root ~follow_defs:true ~known_definitions proofs_map updater in
+    let (known_definitions, constant_nodes), nodes, paths =
+      CICGraph.run ~follow_defs:true ~known_definitions proofs_map updater in
     let tactical_constants = OList.filter_map (fun (c, n) ->
         match Cmap.mem c proofs_map with
         | true -> Some n
@@ -177,7 +176,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       ; projections = ProjMap.filter
             (fun p _ -> not @@ ProjMap.mem p !global_nodes.projections) known_definitions.projections } in
     Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()));
-    write_graph (nodes, paths, edges) tactical_constants;
+    write_graph (nodes, paths) tactical_constants;
     Lib.add_anonymous_leaf @@ in_global_nodes global_node
 
   let () = Declaremods.append_end_library_hook endline_hook
