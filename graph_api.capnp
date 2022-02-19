@@ -7,6 +7,7 @@ using TacticId = UInt64;
 using DefinitionId = UInt64;
 
 struct Graph {
+  # Note: This struct fits exactly in 64 bits. Let's keep it that way.
   struct EdgeTarget {
     label @0 :EdgeClassification;
     target :group {
@@ -15,10 +16,49 @@ struct Graph {
     }
   }
   struct Node {
-    label @0 :NodeClassification;
+    label :union { # Inlined for efficiency purposes
+      root @0 :Void;
 
-    # We might consider creating special cases for nodes with a small number of children for efficiency purposes
-    children @1 :List(EdgeTarget);
+      # Context
+      contextDef @1 :Text;
+      contextAssum @2 :Text;
+
+      # Definitions
+      definition @3 :Definition;
+      constEmpty @4 :Void;
+
+      # Sorts
+      sortSProp @5 :Void;
+      sortProp @6 :Void;
+      sortSet @7 :Void;
+      sortType @8 :Void; # Collapsed universe
+
+      # Constr nodes
+      rel @9 :Void;
+      var @10 :Void;
+      evar @11 :IntP;
+      evarSubst @12 :Void;
+      cast @13 :Void;
+      prod @14 :Void;
+      lambda @15 :Void;
+      letIn @16 :Void;
+      app @17 :Void;
+      appFun @18 :Void;
+      appArg @19 :Void;
+      case @20 :Void;
+      caseBranch @21 :Void;
+      fix @22 :Void;
+      fixFun @23 :Void;
+      coFix @24 :Void;
+      coFixFun @25 :Void;
+
+      # Primitives
+      int @26 :IntP;
+      float @27 :FloatP;
+      primitive @28 :Text;
+    }
+
+    children @29 :List(EdgeTarget);
   }
   # The main memory store of the graph. It acts as a heap similar to the main memory of a C/C++ program.
   # The heap is indexed using a `NodeIndex`, returning a `Node`. Every node has a label and a list of
@@ -40,6 +80,7 @@ struct AbstractTactic {
 }
 
 struct Tactic {
+  # Together with the tag, this fits exactly in 64 bits. Lets keep it that way.
   struct Argument {
     union {
       unresolvable @0 :Void;
@@ -139,49 +180,15 @@ struct Definition {
   }
 }
 
-struct NodeClassification {
-  union {
-    root @0 :Void;
-
-    # Context
-    contextDef @1 :Text;
-    contextAssum @2 :Text;
-
-    # Definitions
-    definition @3 :Definition;
-    constEmpty @4 :Void;
-
-    # Sorts
-    sortSProp @5 :Void;
-    sortProp @6 :Void;
-    sortSet @7 :Void;
-    sortType @8 :Void; # Collapsed universe
-
-    # Constr nodes
-    rel @9 :Void;
-    var @10 :Void;
-    evar @11 :UInt64;
-    evarSubst @12 :Void;
-    cast @13 :Void;
-    prod @14 :Void;
-    lambda @15 :Void;
-    letIn @16 :Void;
-    app @17 :Void;
-    appFun @18 :Void;
-    appArg @19 :Void;
-    case @20 :Void;
-    caseBranch @21 :Void;
-    fix @22 :Void;
-    fixFun @23 :Void;
-    coFix @24 :Void;
-    coFixFun @25 :Void;
-
-    # Primitives
-    int @26 :UInt64;
-    float @27 :Float64;
-    primitive @28 :Text;
-  }
+# Used for in-mermory space optimization. This allows us to make structs smaller by reusing space in
+# the pointer section of a struct that would otherwise be allocated in the data section.
+struct FloatP {
+  value @0 :Float64;
 }
+struct IntP {
+  value @0 :UInt64;
+}
+
 
 enum EdgeClassification {
   # Contexts

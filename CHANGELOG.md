@@ -5,12 +5,15 @@ Changes to the Capn'proto format:
 - The storage format of the graph has been changed from an edge-list to an adjacency-list, giving us a much more natural representation.
   This should allow consumers of the graph to implement graph-algorithms that operate directly on the capn'proto datastructure instead of
   first loading the graph into an intermediate format. This should help with efficiency.
+  However, it the new format does cause a significant space overhead, ever after optimization of the formt.
+  The dataset goes from 1.3Gb to 1.7Gb.
+- Improved in-memory storage requirements by wrapping some integers and floats into structs.
 - For tactic arguments, the `GlobalNode` struct has been inlined.
 
 Changes to the graph representation:
 - Fixed a bug that caused mutual (co)fixpoints to be cross-connected (unclear wether or not this bug was observable in datasets).
 - Fixed a bug causing section contexts variables to be children of inappropriate nodes. This was likely not observable in previous datasets.
-- We are generating less superfluous node and edges. Note, however, that this still does not guarantee the absence of garbage.
+- We are generating less superfluous nodes (526) and edges (87392). Note, however, that this still does not guarantee the absence of garbage.
   One should still take care to only access nodes that are reachable through forward graph traversal.
 - Switched the orientation of order-indicating edges between arguments of function application nodes and existential-variable substitution nodes.
   In the current dataset, this change is expected to have little to no impact.

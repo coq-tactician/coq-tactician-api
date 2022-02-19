@@ -66,7 +66,7 @@ module GB = GraphBuilder(CICGraph)
 
 module K = Graph_api.Make(Capnp.BytesMessage)
 let nt2nt transformer (nt : G.node node_type) cnt =
-  let open K.Builder.NodeClassification in
+  let open K.Builder.Graph.Node.Label in
   match nt with
   | Root -> root_set cnt
   | ContextDef id -> context_def_set cnt (Id.to_string id)
@@ -137,7 +137,9 @@ let nt2nt transformer (nt : G.node node_type) cnt =
   | SortType -> sort_type_set cnt
   | Rel -> rel_set cnt
   | Var -> var_set cnt
-  | Evar i -> evar_set cnt @@ Stdint.Uint64.of_int i
+  | Evar i ->
+    let p = evar_init cnt in
+    K.Builder.IntP.value_set p @@ Stdint.Uint64.of_int i
   | EvarSubst -> evar_subst_set cnt
   | Cast -> cast_set cnt
   | Prod _ -> prod_set cnt
@@ -152,8 +154,12 @@ let nt2nt transformer (nt : G.node node_type) cnt =
   | FixFun _ -> fix_fun_set cnt
   | CoFix -> co_fix_set cnt
   | CoFixFun _ -> co_fix_fun_set cnt
-  | Int i -> int_set cnt @@ Stdint.Uint64.of_int @@ snd @@ Uint63.to_int2 i
-  | Float f -> float_set cnt (float64_to_float f)
+  | Int i ->
+    let p = int_init cnt in
+    K.Builder.IntP.value_set p @@ Stdint.Uint64.of_int @@ snd @@ Uint63.to_int2 i
+  | Float f ->
+    let p = float_init cnt in
+    K.Builder.FloatP.value_set p @@ float64_to_float f
   | Primitive p -> primitive_set cnt (CPrimitives.to_string p)
 let et2et (et : edge_type) =
   let open K.Builder.EdgeClassification in
