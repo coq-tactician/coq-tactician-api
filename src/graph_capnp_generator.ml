@@ -36,17 +36,19 @@ module GlobalGraph : GraphMonadType
   type 'a repr_t = 'a * (node_label * children) list * DPset.t
   open Monad_util.WithMonadNotations(M)
   let index_to_node i = dirpath, i
+  let children_paths ch ps =
+    List.fold_left (fun ps (_, (p, _)) -> DPset.add p ps) ps ch
   let mk_node nl ch =
     let* i = get in
     put (i + 1) >>
-    let+ () = tell { nodes = DList.singleton (nl, ch); paths = DPset.empty } in
+    let+ () = tell { nodes = DList.singleton (nl, ch); paths = children_paths ch DPset.empty } in
     index_to_node i
   let with_delayed_node f =
     let* i = get in
     put (i + 1) >>
     pass @@
     let+ (v, nl, ch) = f (index_to_node i) in
-    v, fun ({ nodes; _ } as w) -> { w with nodes = DList.cons (nl, ch) nodes }
+    v, fun { nodes; paths } -> { nodes = DList.cons (nl, ch) nodes; paths = children_paths ch paths }
   let run m =
     let _, ({ nodes; paths }, res) = run m 0 in
     res, DList.to_list nodes, paths
@@ -55,7 +57,7 @@ end
 
 module G = GlobalGraph
 module CICGraph = struct
-  type node' = DirPath.t * int
+  type node' = node
   include CICGraphMonad(GlobalGraph)
 end
 module GB = GraphBuilder(CICGraph)
