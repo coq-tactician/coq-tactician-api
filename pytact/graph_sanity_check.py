@@ -109,17 +109,12 @@ def process2(rootdir, args, res):
                     raise Exception
         for node_index in g.tacticalDefinitions:
             node_classification = g.graph.heap[node_index].label
-            if node_classification.which() != 'definition':
-                print(f"{fname}: ERROR: the node type of tacticialDefinition is not definition but "
-                      f"{node_classification.which()}")
-                raise Exception
-            else:
-                proof_steps = node_classification.definition.tacticalConstant.tacticalProof
-                for x in proof_steps:
-                    if not (x.state.root < local_count):
-                        print(f"{fname}: root {x.state.root} of a state {x.state} is "
-                              f"outside local node count {local_count}")
-                        raise Exception
+            proof_steps = node_classification.definition.tacticalConstant.tacticalProof
+            for x in proof_steps:
+                if not (x.state.root < local_count):
+                    print(f"{fname}: root {x.state.root} of a state {x.state} is "
+                          f"outside local node count {local_count}")
+                    raise Exception
 
 def entropy(d):
     n = sum(d.values())
