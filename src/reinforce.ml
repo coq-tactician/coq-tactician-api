@@ -1,15 +1,13 @@
 open Tactician_ltac1_record_plugin
-open Labelled_graph_capnp_generator
-open Labelled_graph_extractor
+open Graph_capnp_generator
 open Names
 open Ltac_plugin
 
-module Api = Labelled_graph_api.MakeRPC(Capnp_rpc_lwt)
+module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 open Capnp_rpc_lwt
 open Lwt.Infix
 
 module G = GlobalGraph
-module GB = GraphBuilder(G)
 open GB
 
 module TacticMap = Int.Map
@@ -20,9 +18,14 @@ exception IllegalArgument
 exception ParseError
 
 let gen_proof_state (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
-  let open M in
-  with_named_context hyps (gen_constr ContextSubject concl >>
-                            map (fun c -> c.named) ask)
+  let open CICGraph in
+  let open Monad_util.WithMonadNotations(CICGraph) in
+  let* hyps, (concl, map) = with_named_context hyps @@
+    let* map = lookup_named_map in
+    let+ concl = gen_constr concl in
+    concl, map in
+  let+ root = mk_node Root ((ContextSubject, concl)::hyps) in
+  root, map
 
 let write_execution_result res hyps concl obj =
   let module ExecutionResult = Api.Builder.ExecutionResult in
@@ -31,22 +34,20 @@ let write_execution_result res hyps concl obj =
 
   (* Obtain the graph *)
   let updater =
-    let open Monad.Make(GB.M) in
-    let open Tactician_util.WithMonadNotations(GB.M) in
-    let* root = focus in
-    let* context_map = gen_proof_state hyps concl in
-    return (snd root, context_map) in
-  let graph, (root, context_map) = run_empty false Names.Cmap.empty updater in
+    let open Monad_util.WithMonadNotations(CICGraph) in
+    let open Monad.Make(CICGraph) in
+    let+ root, context_map = gen_proof_state hyps concl in
+    snd root, context_map in
+  let (definitions, (root, context_map)), nodes, paths =
+      CICGraph.run_empty ~follow_defs:true Names.Cmap.empty updater in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
-  let nodes = G.node_list graph.graph in
-  let edges = G.edge_list graph.graph in
 
   (* Write graph to capnp structure *)
   let new_state = ExecutionResult.new_state_init res in
   let capnp_graph = ExecutionResult.NewState.graph_init new_state in
-  write_graph capnp_graph (fun _ -> 0) nodes edges;
+  write_graph capnp_graph (fun _ -> 0) nodes;
   let state = ExecutionResult.NewState.state_init new_state in
   ProofState.root_set_int_exn state root;
   let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
@@ -109,7 +110,7 @@ let rec proof_object state tacs context_map =
               | Tactic.Argument.Undefined _ | Tactic.Argument.Unresolvable -> raise IllegalArgument
               | Tactic.Argument.Term t -> t
             ) tac_args in
-          let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Api.Reader.GlobalNode.node_index_get a)) tac_args in
+          let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Tactic.Argument.Term.node_index_get a)) tac_args in
           let tac, params = find_tactic tacs tac_id in
           if List.length params <> List.length tac_args then raise MismatchedArguments;
           let tac_args = List.map (find_argument context_map) tac_args in

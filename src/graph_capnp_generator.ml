@@ -1,115 +1,227 @@
 open Graph_def
 open Graph_extractor
 open Names
+open Tactician_ltac1_record_plugin
+open Ltac_plugin
 
 let dirpath = Global.current_dirpath ()
-module GlobalGraph = struct
+
+(* TODO: See if this can be merged with SimpleGraph *)
+type node = DirPath.t * int
+type edge_label = edge_type
+type node_label = node node_type
+type children = (edge_label * node) list
+module GlobalGraph : GraphMonadType
+  with type node_label = node_label
+   and type edge_label = edge_label
+   and type node = node
+   and type 'a repr_t = 'a * (node_label * children) list * DPset.t
+= struct
   type node = DirPath.t * int
-  type 'loc directed_edge =
-    { from : int
-    ; toward : 'loc * int }
-  type t =
-    { nodes : node_type list
-    ; paths : DPset.t
-    ; last  : int
-    ; assoc : DirPath.t directed_edge list }
-  let empty = { nodes = []; paths = DPset.empty; last = 0; assoc = [] }
+  type edge_label = edge_type
+  type node_label = node node_type
+  type children = (edge_label * node) list
+  type writer =
+    { nodes : (node_label * children) DList.t
+    ; paths : DPset.t }
+  module M = Monad_util.StateWriterMonad
+      (struct type s = int end)
+      (struct type w = writer
+        let id = { nodes = DList.nil; paths = DPset.empty }
+        let comb = fun
+          { nodes = n1; paths = p1 }
+          { nodes = n2; paths = p2 } ->
+          { nodes = DList.append n1 n2; paths = DPset.union p1 p2 } end)
+  include M
+  type 'a repr_t = 'a * (node_label * children) list * DPset.t
+  open Monad_util.WithMonadNotations(M)
   let index_to_node i = dirpath, i
-  let mk_node ({ nodes; last; _ } as g) typ =
-    index_to_node last, { g with nodes = typ::nodes; last = last + 1}
-  let mk_edge ({ assoc; paths; _ } as g) ~from:(fp, fi) ~toward:(tp, ti) =
-    assert (fp = dirpath);
-    { g with
-      assoc = { from = fi; toward = (tp, ti) } :: assoc
-    ; paths = DPset.add tp paths }
-  let node_list { nodes; _ } = List.rev nodes
-  let edge_list { assoc; _ } = List.rev assoc
+  let children_paths ch ps =
+    List.fold_left (fun ps (_, (p, _)) -> DPset.add p ps) ps ch
+  let mk_node nl ch =
+    let* i = get in
+    put (i + 1) >>
+    let+ () = tell { nodes = DList.singleton (nl, ch); paths = children_paths ch DPset.empty } in
+    index_to_node i
+  let with_delayed_node f =
+    let* i = get in
+    put (i + 1) >>
+    pass @@
+    let+ (v, nl, ch) = f (index_to_node i) in
+    v, fun { nodes; paths } -> { nodes = DList.cons (nl, ch) nodes; paths = children_paths ch paths }
+  let register_external (tp, _) =
+    tell { nodes = DList.nil; paths = DPset.singleton tp }
+  let run m =
+    let _, ({ nodes; paths }, res) = run m 0 in
+    res, DList.to_list nodes, paths
 end
+
+
 module G = GlobalGraph
-module GB = GraphBuilder(G)
+module CICGraph = struct
+  type node' = node
+  include CICGraphMonad(GlobalGraph)
+end
+module GB = GraphBuilder(CICGraph)
 
 module K = Graph_api.Make(Capnp.BytesMessage)
-let nt2nt (nt : node_type) cnt =
-  let open K.Builder.Classification in
+let nt2nt transformer (nt : G.node node_type) cnt =
+  let open K.Builder.Graph.Node.Label in
   match nt with
   | Root -> root_set cnt
-  | LocalDef id -> local_def_set cnt
-  | LocalDefType -> local_def_type_set cnt
-  | LocalDefTerm -> local_def_term_set cnt
-  | LocalAssum id -> local_assum_set cnt
-  | Const c -> const_set cnt
-  | ConstType -> const_type_set cnt
-  | ConstUndef -> const_undef_set cnt
-  | ConstDef -> const_def_set cnt
-  | ConstOpaqueDef -> const_opaque_def_set cnt
-  | ConstPrimitive -> const_primitive_set cnt
-  | Ind i -> ind_set cnt
-  | Construct c -> construct_set cnt
-  | Proj p -> proj_set cnt
-  | Sort -> sort_set cnt
-  | SProp -> s_prop_set cnt
-  | Prop -> prop_set cnt
-  | Set -> set_set cnt
-  | Type -> type_set cnt
+  | ContextDef id -> context_def_set cnt (Id.to_string id)
+  | ContextAssum id -> context_assum_set cnt (Id.to_string id)
+  | Definition { previous; def_type } ->
+    let cdef = definition_init cnt in
+    let open K.Builder.Definition in
+    (match def_type with
+    | TacticalConstant (c, proof) ->
+      let hash = Constant.UserOrd.hash c in
+      hash_set cdef (Stdint.Uint64.of_int hash);
+      name_set cdef (Constant.to_string c);
+      let tconst = tactical_constant_init cdef in
+      let arr = TacticalConstant.tactical_proof_init tconst (List.length proof) in
+      List.iteri (fun i ({ tactic; base_tactic; interm_tactic; tactic_hash; arguments; root; context; ps_string }
+                         : G.node tactical_step) ->
+          let arri = Capnp.Array.get arr i in
+          let state = K.Builder.ProofStep.state_init arri in
+          let capnp_tactic = K.Builder.ProofStep.tactic_init arri in
+          K.Builder.ProofState.root_set_int_exn state @@ snd root;
+          let _ = K.Builder.ProofState.context_set_list state
+              (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
+          K.Builder.ProofState.text_set state ps_string;
+          K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
+          K.Builder.Tactic.text_set capnp_tactic
+            (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) tactic));
+          K.Builder.Tactic.base_text_set capnp_tactic
+            (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) base_tactic));
+          K.Builder.Tactic.interm_text_set capnp_tactic
+            (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) interm_tactic));
+          let arg_arr = K.Builder.Tactic.arguments_init capnp_tactic (List.length arguments) in
+          List.iteri (fun i arg ->
+              let arri = Capnp.Array.get arg_arr i in
+              match arg with
+              | None -> K.Builder.Tactic.Argument.unresolvable_set arri
+              | Some (dep, index) ->
+                let node = K.Builder.Tactic.Argument.term_init arri in
+                K.Builder.Tactic.Argument.Term.dep_index_set_exn node @@ transformer dep;
+                K.Builder.Tactic.Argument.Term.node_index_set_int_exn node index
+            ) arguments;
+          ()
+        ) proof;
+    | ManualConst c ->
+      let hash = Constant.UserOrd.hash c in
+      hash_set cdef (Stdint.Uint64.of_int hash);
+      name_set cdef (Constant.to_string c);
+      manual_constant_set cdef
+    | Ind (m, i) ->
+      let hash = Hashtbl.hash (i, MutInd.UserOrd.hash m) in
+      hash_set cdef (Stdint.Uint64.of_int hash);
+      name_set cdef (Libnames.string_of_path @@ Nametab.path_of_global (GlobRef.IndRef (m, i)));
+      inductive_set cdef
+    | Construct ((m, i), j) ->
+      let hash = Hashtbl.hash (i, j, MutInd.UserOrd.hash m) in
+      hash_set cdef (Stdint.Uint64.of_int @@ hash);
+      name_set cdef (Libnames.string_of_path @@ Nametab.path_of_global (GlobRef.ConstructRef ((m, i), j)));
+      constructor_set cdef
+    | Proj p ->
+      let hash = Projection.Repr.UserOrd.hash p in
+      hash_set cdef @@ Stdint.Uint64.of_int hash; (* TODO: This is probably not a good hash *)
+      name_set cdef (projection_to_string p); (* TODO: Better name *)
+      projection_set cdef
+    )
+  | ConstEmpty -> const_empty_set cnt
+  | SortSProp -> sort_s_prop_set cnt
+  | SortProp -> sort_prop_set cnt
+  | SortSet -> sort_set_set cnt
+  | SortType -> sort_type_set cnt
   | Rel -> rel_set cnt
   | Var -> var_set cnt
-  | Evar n -> evar_set cnt (Stdint.Uint64.of_int n)
+  | Evar i ->
+    let p = evar_init cnt in
+    K.Builder.IntP.value_set p @@ Stdint.Uint64.of_int i
   | EvarSubst -> evar_subst_set cnt
   | Cast -> cast_set cnt
-  | CastTerm -> cast_term_set cnt
-  | CastType -> cast_type_set cnt
-  | Prod n -> prod_set cnt
-  | ProdType -> prod_type_set cnt
-  | ProdTerm -> prod_term_set cnt
-  | Lambda n -> lambda_set cnt
-  | LambdaType -> lambda_type_set cnt
-  | LambdaTerm -> lambda_term_set cnt
-  | LetIn n -> let_in_set cnt
-  | LetInDef -> let_in_def_set cnt
-  | LetInType -> let_in_type_set cnt
-  | LetInTerm -> let_in_term_set cnt
+  | Prod _ -> prod_set cnt
+  | Lambda _ -> lambda_set cnt
+  | LetIn _ -> let_in_set cnt
   | App -> app_set cnt
   | AppFun -> app_fun_set cnt
   | AppArg -> app_arg_set cnt
   | Case -> case_set cnt
-  | CaseTerm -> case_term_set cnt
-  | CaseReturn -> case_return_set cnt
   | CaseBranch -> case_branch_set cnt
-  | CBConstruct -> c_b_construct_set cnt
-  | CBTerm -> c_b_term_set cnt
   | Fix -> fix_set cnt
-  | FixFun n -> fix_fun_set cnt
-  | FixFunType -> fix_fun_type_set cnt
-  | FixFunTerm -> fix_fun_term_set cnt
-  | FixReturn -> fix_return_set cnt
+  | FixFun _ -> fix_fun_set cnt
   | CoFix -> co_fix_set cnt
-  | CoFixFun n -> co_fix_fun_set cnt
-  | CoFixFunType -> co_fix_fun_type_set cnt
-  | CoFixFunTerm -> co_fix_fun_term_set cnt
-  | CoFixReturn -> co_fix_return_set cnt
-  | Int i -> int_set cnt (Stdint.Uint64.of_int @@ snd @@ Uint63.to_int2 i)
-  | Float f -> float_set cnt (float64_to_float f)
+  | CoFixFun _ -> co_fix_fun_set cnt
+  | Int i ->
+    let p = int_init cnt in
+    K.Builder.IntP.value_set p @@ Stdint.Uint64.of_int @@ snd @@ Uint63.to_int2 i
+  | Float f ->
+    let p = float_init cnt in
+    K.Builder.FloatP.value_set p @@ float64_to_float f
   | Primitive p -> primitive_set cnt (CPrimitives.to_string p)
+let et2et (et : edge_type) =
+  let open K.Builder.EdgeClassification in
+  match et with
+  | ContextElem -> ContextElem
+  | ContextSubject -> ContextSubject
+  | ContextDefType -> ContextDefType
+  | ContextDefTerm -> ContextDefTerm
+  | ConstType -> ConstType
+  | ConstUndef -> ConstUndef
+  | ConstDef -> ConstDef
+  | ConstOpaqueDef -> ConstOpaqueDef
+  | ConstPrimitive -> ConstPrimitive
+  | IndType -> IndType
+  | IndConstruct -> IndConstruct
+  | ProjTerm -> ProjTerm
+  | ConstructTerm -> ConstructTerm
+  | CastTerm -> CastTerm
+  | CastType -> CastType
+  | ProdType -> ProdType
+  | ProdTerm -> ProdTerm
+  | LambdaType -> LambdaType
+  | LambdaTerm -> LambdaTerm
+  | LetInDef -> LetInDef
+  | LetInType -> LetInType
+  | LetInTerm -> LetInTerm
+  | AppFunPointer -> AppFunPointer
+  | AppFunValue -> AppFunValue
+  | AppArgPointer -> AppArgPointer
+  | AppArgValue -> AppArgValue
+  | AppArgOrder -> AppArgOrder
+  | CaseTerm -> CaseTerm
+  | CaseReturn -> CaseReturn
+  | CaseBranchPointer -> CaseBranchPointer
+  | CaseInd -> CaseInd
+  | CBConstruct -> CBConstruct
+  | CBTerm -> CBTerm
+  | FixMutual -> FixMutual
+  | FixReturn -> FixReturn
+  | FixFunType -> FixFunType
+  | FixFunTerm -> FixFunTerm
+  | CoFixMutual -> CoFixMutual
+  | CoFixReturn -> CoFixReturn
+  | CoFixFunType -> CoFixFunType
+  | CoFixFunTerm -> CoFixFunTerm
+  | RelPointer -> RelPointer
+  | VarPointer -> VarPointer
+  | EvarSubstPointer -> EvarSubstPointer
+  | EvarSubstOrder -> EvarSubstOrder
+  | EvarSubstValue -> EvarSubstValue
 
-let write_classification_list classification_arr nodes =
-  let arr = classification_arr (List.length nodes) in
-  List.iteri (fun i x ->
-      let arri = Capnp.Array.get arr i in
-      nt2nt x arri) nodes
-
-let write_edge_list edge_arr edges =
-  let open G in
-  let arr = edge_arr (List.length @@ edges) in
-  List.iteri (fun i { from; toward=(tp, ti) } ->
-      let arri = Capnp.Array.get arr i in
-      K.Builder.DirectedEdge.source_set_int_exn arri from;
-      let toward = K.Builder.DirectedEdge.target_get arri in
-      K.Builder.DirectedEdge.Target.dep_index_set_exn toward @@ tp;
-      K.Builder.DirectedEdge.Target.node_index_set_int_exn toward ti
-    ) edges
-
-let write_graph capnp_graph nodes edges =
-  let arr = K.Builder.Graph.classifications_init capnp_graph in
-  write_classification_list arr nodes;
-  let arr = K.Builder.Graph.edges_init capnp_graph in
-  write_edge_list arr edges
+let write_graph capnp_graph transformer nodes =
+  let cnodes = K.Builder.Graph.heap_init capnp_graph (List.length nodes) in
+  List.iteri (fun i (label, children) ->
+      let cnode = Capnp.Array.get cnodes i in
+      nt2nt transformer label @@ K.Builder.Graph.Node.label_get cnode;
+      let cchildren = K.Builder.Graph.Node.children_init cnode (List.length children) in
+      List.iteri (fun i (label, (tp, ti)) ->
+          let et = Capnp.Array.get cchildren i in
+          K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
+          let ctarget = K.Builder.Graph.EdgeTarget.target_get et in
+          K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
+          K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ ti
+        ) children
+    ) nodes

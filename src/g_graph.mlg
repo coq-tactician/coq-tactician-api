@@ -3,43 +3,20 @@ DECLARE PLUGIN "graph_plugin"
 {
 
 open Stdarg
+open Graph_visualizer
 
 }
 
-VERNAC COMMAND EXTEND Graph CLASSIFIED AS QUERY
-| [ "Graph" "Ident" global(x) ] -> { Graph_visualizer.make_global_graph x false }
-| [ "Full" "Graph" "Ident" global(x) ] -> { Graph_visualizer.make_global_graph x true }
-| [ "Graph" "Term" constr(x) ] -> { Graph_visualizer.make_constr_graph x false }
-| [ "Full" "Graph" "Term" constr(x) ] -> { Graph_visualizer.make_constr_graph x true }
-END
-
-VERNAC COMMAND EXTEND GraphProof CLASSIFIED AS QUERY STATE proof_query
-| [ "Graph" "Proof" ] -> { fun ~pstate -> Graph_visualizer.make_proof_graph pstate false }
-| [ "Full" "Graph" "Proof" ] -> { fun ~pstate -> Graph_visualizer.make_proof_graph pstate true }
-END
-
 VERNAC COMMAND EXTEND LGraph CLASSIFIED AS QUERY
-| [ "LGraph" "Ident" global(x) ] -> { Labelled_graph_visualizer.make_global_graph x false }
-| [ "Full" "LGraph" "Ident" global(x) ] -> { Labelled_graph_visualizer.make_global_graph x true }
-| [ "LGraph" "Term" constr(x) ] -> { Labelled_graph_visualizer.make_constr_graph x false }
-| [ "Full" "LGraph" "Term" constr(x) ] -> { Labelled_graph_visualizer.make_constr_graph x true }
+| [ "Graph" "Ident" global(x) ] -> { make_global_graph x false }
+| [ "Full" "Graph" "Ident" global(x) ] -> { make_global_graph x true }
+| [ "Graph" "Term" constr(x) ] -> { make_constr_graph x false }
+| [ "Full" "Graph" "Term" constr(x) ] -> { make_constr_graph x true }
 END
 
 VERNAC COMMAND EXTEND LGraphProof CLASSIFIED AS QUERY STATE proof_query
-| [ "LGraph" "Proof" ] -> { fun ~pstate -> Labelled_graph_visualizer.make_proof_graph pstate false }
-| [ "Full" "LGraph" "Proof" ] -> { fun ~pstate -> Labelled_graph_visualizer.make_proof_graph pstate true }
-END
-
-VERNAC COMMAND EXTEND DAG CLASSIFIED AS QUERY
-| [ "DAG" "Ident" global(x) ] -> { Dag_visualizer.make_global_graph x false }
-| [ "Full" "DAG" "Ident" global(x) ] -> { Dag_visualizer.make_global_graph x true }
-| [ "DAG" "Term" constr(x) ] -> { Dag_visualizer.make_constr_graph x false }
-| [ "Full" "DAG" "Term" constr(x) ] -> { Dag_visualizer.make_constr_graph x true }
-END
-
-VERNAC COMMAND EXTEND DAGProof CLASSIFIED AS QUERY STATE proof_query
-| [ "DAG" "Proof" ] -> { fun ~pstate -> Dag_visualizer.make_proof_graph pstate false }
-| [ "Full" "DAG" "Proof" ] -> { fun ~pstate -> Dag_visualizer.make_proof_graph pstate true }
+| [ "Graph" "Proof" ] -> { fun ~pstate -> make_proof_graph pstate false }
+| [ "Full" "Graph" "Proof" ] -> { fun ~pstate -> make_proof_graph pstate true }
 END
 
 VERNAC COMMAND EXTEND Reinforce CLASSIFIED AS QUERY

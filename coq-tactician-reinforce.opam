@@ -58,5 +58,5 @@ depends: [
   "ocaml" {>= "4.12~"} | ("ocaml" {< "4.12~"} & "lwt" {<= "5.1.1"})
 ]
 substs: [
-  "src/labelled_graph_generator_learner.ml"
+  "src/graph_generator_learner.ml"
 ]

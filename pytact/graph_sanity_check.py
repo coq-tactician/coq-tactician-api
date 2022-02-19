@@ -1,57 +1,235 @@
 import sys
+import argparse
+from multiprocessing import Pool
 import os
 from pathlib import Path
+from functools import partial
+from collections import Counter
+import math
 import capnp
-import graph_api_capnp
+capnp.remove_import_hook()
+import pytact.common
+graph_api_capnp = pytact.common.graph_api_capnp()
+graph_api_capnp = capnp.load(graph_api_capnp)
 
-max_node = {}
-node_total = 0
-edges_total = 0
+len_nodes = {}
 
-rootdir = sys.argv[1]
-os.chdir(rootdir)
-rootdir = Path(os.getcwd())
-file_list = [f for f in rootdir.glob('**/*.bin') if f.is_file()]
+def check_dep(fname, rootdir, _dep):
+    abs_dep = os.path.join(rootdir, _dep)
+    if abs_dep[-2:] == '.v':
+        abs_dep = abs_dep[:-2] + '.bin'    # remove .v -> .bin correction when datasets with .v are no longer used
+    if os.path.isfile(abs_dep):
+        # print(f"{fname}: Dependency file {abs_dep} present")
+        pass
+    else:
+        print(f"{fname}: Error: Dependency file does not exist: {abs_dep}")
+        raise Exception
 
-for f in file_list:
-    print(f)
-    f = open(f)
-    g = graph_api_capnp.Graph.read_packed(f, traversal_limit_in_words=2**64-1)
-    dep = g.dependencies[0]
-    node_count = len(g.classifications)
-    max_node[dep] = node_count
-    node_total += node_count
-    edges_total += len(g.edges)
-    print(max_node[dep])
+def process1(rootdir, args, fname):
+    with open(fname) as f:
+        file_tactical_definitions = []
+        file_base_tactics_text = set()
+        file_base_tactics_intermtext = set()
+        file_tactics = Counter()
+        proof_steps = 0
+        proof_steps_faithful = 0
+        proofs = 0
+        proofs_faithful = 0
+        unresolvable = 0
+        g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
+        dep0 = g.dependencies[0]
+        nodes_count = len(g.graph.heap)
+        edges_count = 0
+        print(f"{fname}: nodes {nodes_count}, edges {edges_count}, dep[0] {dep0}")
+        for n in g.tacticalDefinitions:
+            if g.graph.heap[n].label.which() != 'definition':
+                print(f'{fname}: TacticalDefinitions Problem A')
+                raise Exception
+            if g.graph.heap[n].label.definition.which() != 'tacticalConstant':
+                print(f'{fname}: TacticalDefinitions Problem B with '
+                      f'{g.graph.classifications[n].definition.which()}')
+                raise Exception
 
-print("Node total")
-print(node_total)
-print("Edge total")
-print(edges_total)
+        for n in g.graph.heap:
+            edges_count += len(n.children)
+            n = n.label
+            if (n.which() == 'definition'):
+                if (n.definition.which() == 'tacticalConstant'):
+                    file_tactical_definitions.append(n.definition.name)
+                    tc = n.definition.tacticalConstant
+                    faithful = True
+                    for p in tc.tacticalProof:
+                        proof_steps += 1
+                        if p.tactic.text == p.tactic.intermText:
+                            proof_steps_faithful += 1
+                        else:
+                            faithful = False
+                        file_tactics[p.tactic.ident] += 1
+                        file_base_tactics_text.add(p.tactic.baseText)
+                        file_base_tactics_intermtext.add(p.tactic.intermText)
+                        for a in p.tactic.arguments:
+                            if a.which() == 'unresolvable':
+                                unresolvable += 1
+                    proofs += 1
+                    if faithful:
+                        proofs_faithful += 1
+        if len(file_tactical_definitions) != len(g.tacticalDefinitions):
+            print(f'{fname}: tacticalDefinitions list is incorrect')
+            raise Exception
+        for _dep in g.dependencies:
+            check_dep(fname, rootdir, _dep)
 
-for f in file_list:
-    print(f)
-    f = open(f)
-    g = graph_api_capnp.Graph.read_packed(f, traversal_limit_in_words=2**64-1)
-    dep = g.dependencies[0]
-    local_max = 0
-    local_count = max_node[dep]
-    for x in g.edges:
-        myfrom = getattr(x, 'from')  # From collides with python reserved keywords
-        local_max = max(local_max, myfrom)
-        if x.toward.depIndex == 0:
-            local_max = max(local_max, x.toward.nodeIndex)
-        if local_count <= myfrom:
-            print(x)
-            print("ProblemA")
-        if max_node[g.dependencies[x.toward.depIndex]] <= x.toward.nodeIndex:
-            print(x)
-            print("ProblemB")
-    if local_max != local_count - 1:
-        print("ProblemC")
-    for x in g.proofSteps:
-        if local_count <= x.node:
-            print("ProblemD")
-        nt = g.classifications[x.node]
-        if nt.which() != 'root':
-            print("ProblemE")
+
+    return (fname, dep0, nodes_count, edges_count,
+            file_tactical_definitions, file_base_tactics_text,
+            file_base_tactics_intermtext, file_tactics, proof_steps, proof_steps_faithful, proofs, proofs_faithful,
+            unresolvable)
+
+def process2(rootdir, args, res):
+    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _  = res
+    with open(fname) as f:
+        print(fname)
+        g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
+        local_count = nodes_count
+        for s in g.graph.heap:
+            for t in s.children:
+                if not (t.target.depIndex < len(g.dependencies)):
+                    print(f"Error: in {fname} x.target.depIndex {x.target.depIndex} "
+                          f"but len(g.dependencies) is {len(g.dependencies)} "
+                          f"and g.dependencies = {g.dependencies}")
+                    raise Exception
+                _dep = g.dependencies[t.target.depIndex]
+                if _dep in len_nodes.keys():
+                    dep_len_nodes = len_nodes[g.dependencies[t.target.depIndex]]
+                else:
+                    print(f"WARNING: {fname} reference to {g.dependencies[x.target.depIndex]} "
+                          "is not in the index of bin files in a given dataset, "
+                          "following the reference outside ")
+                    check_dep(fname, rootdir, _dep)
+                    with open(_dep,'rb') as dep_f:
+                        dep_b = dep_f.read()
+                        dep_g = graph_api_capnp.Dataset.from_bytes_packed(dep_b, traversal_limit_in_words=2**64-1)
+                        dep_len_nodes = len(dep_g.graph.classifications)
+                if not t.target.nodeIndex < dep_len_nodes:
+                    print(f"in {fname} reference to {g.dependencies[x.target.depIndex]} "
+                          f"with node {x.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
+                          f"is {len_nodes[g.dependencies[x.target.depIndex]]}")
+                    raise Exception
+        for node_index in g.tacticalDefinitions:
+            node_classification = g.graph.heap[node_index].label
+            proof_steps = node_classification.definition.tacticalConstant.tacticalProof
+            for x in proof_steps:
+                if not (x.state.root < local_count):
+                    print(f"{fname}: root {x.state.root} of a state {x.state} is "
+                          f"outside local node count {local_count}")
+                    raise Exception
+                for c in x.state.context:
+                    if not (c < local_count):
+                        print(f"{fname}: ctx {x} of a state {x.state} is "
+                              f"outside local node count {local_count}")
+                        raise Exception
+                    cl = g.graph.heap[c].label.which()
+                    if not (cl == 'contextDef' or cl == 'contextAssum'):
+                        print(f"{fname}: ctx {x} of a state {x.state} "
+                              f"has the wrong node classification {cn.label}")
+                        raise Exception
+                for a in x.tactic.arguments:
+                    if a.which () == 'unresolvable':
+                        pass
+                    elif a.which() == 'term':
+                        if not (a.term.nodeIndex < len_nodes[g.dependencies[a.term.depIndex]]):
+                            print(f"{fname} argument {a} of proof step {x} is not resolvable")
+                            raise Exception
+                        # TODO: We should check that this node is actually a definition
+                    else:
+                        print(f"{fname}: unknown tactical argument {a}")
+
+def entropy(d):
+    n = sum(d.values())
+    return -sum([(c / n) * math.log(c / n, 2) for c in d.values()])
+
+def main():
+    parser = argparse.ArgumentParser(
+        description = 'sanity of check of *.bin dataset with labelled_graph_api',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument('dir',
+                        type=str,
+                        help='the directory of the dataset')
+    parser.add_argument('--jobs',
+                        type=int,
+                        default=4,
+                        help='number of parallel multiprocessing jobs to run')
+    parser.add_argument('--verbose',
+                       type = int,
+                       default = 0,
+                       help='level of being verbose 0,1..')
+
+    args = parser.parse_args()
+    rootdir = Path(os.path.expanduser(args.dir))
+
+    tactics = Counter()
+    base_tactics_text = set()
+    base_tactics_intermtext = set()
+    tactical_definitions = []
+    nodes_total = 0
+    edges_total = 0
+    proof_steps_total = 0
+    proof_steps_faithful_total = 0
+    proofs_total = 0
+    proofs_faithful_total = 0
+    unresolvable_total = 0
+
+    file_list = [f for f in rootdir.glob('**/*.bin') if f.is_file()]
+
+    process1_partial = partial(process1, rootdir, args)
+    with Pool(args.jobs) as pool:
+        results = pool.map(process1_partial, file_list, chunksize=20)
+
+    for res in results:
+        (fname, dep0, nodes_count, edges_count,
+         file_tactical_definitions, file_base_tactics_text,
+         file_base_tactics_intermtext,
+         file_tactics, proof_steps, proof_steps_faithful,
+         proofs, proofs_faithful, unresolvable) = res
+        len_nodes[dep0] = nodes_count
+        nodes_total += nodes_count
+        edges_total += edges_count
+        proof_steps_total += proof_steps
+        proof_steps_faithful_total += proof_steps_faithful
+        proofs_total += proofs
+        proofs_faithful_total += proofs_faithful
+        tactical_definitions.extend(file_tactical_definitions)
+        base_tactics_text.update(file_base_tactics_text)
+        base_tactics_intermtext.update(file_base_tactics_intermtext)
+        tactics += file_tactics
+        unresolvable_total += unresolvable
+
+    print(f"Nodes total {nodes_total}")
+    print(f"Edges total {edges_total}")
+    print(f"Tactics total {len(tactics)}")
+    print(f"Tactics entropy (bits) {entropy(tactics)}")
+    print(f"Tactics base text total {len(base_tactics_text)}")
+    print(f"Tactics base intermtext total {len(base_tactics_intermtext)}")
+    print(f"Tactical definitions total {len(tactical_definitions)}")
+    print(f"Proof steps total {proof_steps_total}")
+    print(f"Faithfully represented proof steps total {proof_steps_faithful_total}")
+    print(f"Proofs total {proofs_total}")
+    print(f"Faithful proofs total {proofs_faithful_total}")
+    print(f"Unresolvable tactic arguments {unresolvable_total}")
+
+    if (args.verbose >=1):
+        print("Tactics base text:")
+        for t in base_tactics_text:
+            print(t)
+        print("Tactics intermtext text:")
+        for t in base_tactics_intermtext:
+            print(t)
+
+    process2_partial = partial(process2, rootdir, args)
+    with Pool(args.jobs) as pool:
+        pool.map(process2_partial, results)
+
+
+if __name__ == '__main__':
+    main()
