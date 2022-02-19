@@ -35,6 +35,7 @@ def process1(rootdir, args, fname):
         proof_steps_faithful = 0
         proofs = 0
         proofs_faithful = 0
+        unresolvable = 0
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
         dep0 = g.dependencies[0]
         nodes_count = len(g.graph.heap)
@@ -66,19 +67,26 @@ def process1(rootdir, args, fname):
                         file_tactics[p.tactic.ident] += 1
                         file_base_tactics_text.add(p.tactic.baseText)
                         file_base_tactics_intermtext.add(p.tactic.intermText)
+                        for a in p.tactic.arguments:
+                            if a.which() == 'unresolvable':
+                                unresolvable += 1
                     proofs += 1
                     if faithful:
                         proofs_faithful += 1
+        if len(file_tactical_definitions) != len(g.tacticalDefinitions):
+            print(f'{fname}: tacticalDefinitions list is incorrect')
+            raise Exception
         for _dep in g.dependencies:
             check_dep(fname, rootdir, _dep)
 
 
     return (fname, dep0, nodes_count, edges_count,
             file_tactical_definitions, file_base_tactics_text,
-            file_base_tactics_intermtext, file_tactics, proof_steps, proof_steps_faithful, proofs, proofs_faithful)
+            file_base_tactics_intermtext, file_tactics, proof_steps, proof_steps_faithful, proofs, proofs_faithful,
+            unresolvable)
 
 def process2(rootdir, args, res):
-    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _  = res
+    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _  = res
     with open(fname) as f:
         print(fname)
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
@@ -115,6 +123,26 @@ def process2(rootdir, args, res):
                     print(f"{fname}: root {x.state.root} of a state {x.state} is "
                           f"outside local node count {local_count}")
                     raise Exception
+                for c in x.state.context:
+                    if not (c < local_count):
+                        print(f"{fname}: ctx {x} of a state {x.state} is "
+                              f"outside local node count {local_count}")
+                        raise Exception
+                    cl = g.graph.heap[c].label.which()
+                    if not (cl == 'contextDef' or cl == 'contextAssum'):
+                        print(f"{fname}: ctx {x} of a state {x.state} "
+                              f"has the wrong node classification {cn.label}")
+                        raise Exception
+                for a in x.tactic.arguments:
+                    if a.which () == 'unresolvable':
+                        pass
+                    elif a.which() == 'term':
+                        if not (a.term.nodeIndex < len_nodes[g.dependencies[a.term.depIndex]]):
+                            print(f"{fname} argument {a} of proof step {x} is not resolvable")
+                            raise Exception
+                        # TODO: We should check that this node is actually a definition
+                    else:
+                        print(f"{fname}: unknown tactical argument {a}")
 
 def entropy(d):
     n = sum(d.values())
@@ -150,6 +178,7 @@ def main():
     proof_steps_faithful_total = 0
     proofs_total = 0
     proofs_faithful_total = 0
+    unresolvable_total = 0
 
     file_list = [f for f in rootdir.glob('**/*.bin') if f.is_file()]
 
@@ -162,7 +191,7 @@ def main():
          file_tactical_definitions, file_base_tactics_text,
          file_base_tactics_intermtext,
          file_tactics, proof_steps, proof_steps_faithful,
-         proofs, proofs_faithful) = res
+         proofs, proofs_faithful, unresolvable) = res
         len_nodes[dep0] = nodes_count
         nodes_total += nodes_count
         edges_total += edges_count
@@ -174,6 +203,7 @@ def main():
         base_tactics_text.update(file_base_tactics_text)
         base_tactics_intermtext.update(file_base_tactics_intermtext)
         tactics += file_tactics
+        unresolvable_total += unresolvable
 
     print(f"Nodes total {nodes_total}")
     print(f"Edges total {edges_total}")
@@ -186,6 +216,7 @@ def main():
     print(f"Faithfully represented proof steps total {proof_steps_faithful_total}")
     print(f"Proofs total {proofs_total}")
     print(f"Faithful proofs total {proofs_faithful_total}")
+    print(f"Unresolvable tactic arguments {unresolvable_total}")
 
     if (args.verbose >=1):
         print("Tactics base text:")
