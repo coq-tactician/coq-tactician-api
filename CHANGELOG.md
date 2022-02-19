@@ -7,7 +7,7 @@ Changes to the Capn'proto format:
   This should allow consumers of the graph to implement graph-algorithms that operate directly on the capn'proto datastructure instead of
   first loading the graph into an intermediate format. This should help with efficiency.
   However, the new format does cause a significant space overhead, ever after optimization of the formt.
-  The dataset goes from 1.3Gb to 1.7Gb.
+  The dataset goes from 1.3GB to 1.7GB.
 - Improved in-memory storage requirements by wrapping some integers and floats into structs.
 - For tactic arguments, the `GlobalNode` struct has been inlined.
 
