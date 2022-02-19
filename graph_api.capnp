@@ -183,26 +183,6 @@ struct NodeClassification {
   }
 }
 
-# Struct is needed to work around
-# https://github.com/capnproto/capnp-ocaml/issues/81
-struct ConflatableEdges {
-  conflatable @0 :List(EdgeClassification);
-}
-const conflatableEdges :List(ConflatableEdges) =
-[ ( conflatable = [contextDefType, constType, indType, castType, prodType, lambdaType, letInType, fixFunType, coFixFunType] )
-, ( conflatable = [contextDefTerm, castTerm, prodTerm, lambdaTerm, letInTerm, fixFunTerm, coFixFunTerm] )
-# Not conflatable: projTerm, constructTerm, caseTerm, cBTerm
-, ( conflatable = [varPointer, relPointer] )
-, ( conflatable = [appArgOrder, evarSubstOrder] )
-];
-const importantEdges :List(EdgeClassification) =
-[ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
-, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFunPointer, appArgPointer, appArgOrder, relPointer, varPointer ];
-const lessImportantEdges :List(EdgeClassification) =
-[ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
-const leastImportantEdges :List(EdgeClassification) =
-[ constUndef, constPrimitive, projTerm, castTerm, castType, appFunValue, appArgValue, coFixReturn, coFixFunType, coFixFunTerm
-, coFixMutual, evarSubstPointer, evarSubstOrder, evarSubstValue ];
 enum EdgeClassification {
   # Contexts
   contextElem @0;
@@ -282,6 +262,27 @@ enum EdgeClassification {
   evarSubstOrder @44;
   evarSubstValue @45;
 }
+
+# Struct is needed to work around
+# https://github.com/capnproto/capnp-ocaml/issues/81
+struct ConflatableEdges {
+  conflatable @0 :List(EdgeClassification);
+}
+const conflatableEdges :List(ConflatableEdges) =
+[ ( conflatable = [contextDefType, constType, indType, castType, prodType, lambdaType, letInType, fixFunType, coFixFunType] )
+, ( conflatable = [contextDefTerm, castTerm, prodTerm, lambdaTerm, letInTerm, fixFunTerm, coFixFunTerm] )
+# Not conflatable: projTerm, constructTerm, caseTerm, cBTerm
+, ( conflatable = [varPointer, relPointer] )
+, ( conflatable = [appArgOrder, evarSubstOrder] )
+];
+const importantEdges :List(EdgeClassification) =
+[ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
+, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFunPointer, appArgPointer, appArgOrder, relPointer, varPointer ];
+const lessImportantEdges :List(EdgeClassification) =
+[ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
+const leastImportantEdges :List(EdgeClassification) =
+[ constUndef, constPrimitive, projTerm, castTerm, castType, appFunValue, appArgValue, coFixReturn, coFixFunType, coFixFunTerm
+, coFixMutual, evarSubstPointer, evarSubstOrder, evarSubstValue ];
 
 # WARNING: DO NOT USE
 # This is just for visualization purposes in order to drastically reduce the number of edges. You should not use it in networks
