@@ -254,6 +254,7 @@ module type GraphMonadType = sig
   type 'a repr_t
   val mk_node : node_label -> children -> node t
   val with_delayed_node : (node -> ('a * node_label * children) t) -> 'a t
+  val register_external : node -> unit t
   val run : 'a t -> 'a repr_t
 end
 
@@ -307,6 +308,7 @@ module SimpleGraph (D : sig type node_label type edge_label end) : GraphMonadTyp
     pass @@
     let+ (v, nl, ch) = f i in
     v, fun nls -> DList.cons (nl, ch) nls
+  let register_external _ = return ()
   let run m =
     let _, (ns, res) = run m 0 in
     res, DList.to_list ns

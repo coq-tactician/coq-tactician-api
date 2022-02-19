@@ -49,6 +49,8 @@ module GlobalGraph : GraphMonadType
     pass @@
     let+ (v, nl, ch) = f (index_to_node i) in
     v, fun { nodes; paths } -> { nodes = DList.cons (nl, ch) nodes; paths = children_paths ch paths }
+  let register_external (tp, _) =
+    tell { nodes = DList.nil; paths = DPset.singleton tp }
   let run m =
     let _, ({ nodes; paths }, res) = run m 0 in
     res, DList.to_list nodes, paths

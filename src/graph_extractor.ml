@@ -115,7 +115,6 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     | [] -> a
     | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
 
-
   let get_named_context =
     let+ context = ask in
     context.named
@@ -126,33 +125,41 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     | None -> Some x
     | Some _ -> CErrors.anomaly (Pp.str "Map update attempt while key already existed")
 
+  let option_map f o =
+    match o with
+    | None -> return None
+    | Some x -> let+ x = f x in Some x
+  let with_register_external n =
+    let+ () = lift @@ register_external n in
+    n
+
   let register_constant c n =
     let* ({ constants; _ } as s) = get in
     put { s with constants = Cmap.update c (update_error n) constants }
   let find_constant c =
-    let+ { constants; _ } = get in
-    Cmap.find_opt c constants
+    let* { constants; _ } = get in
+    option_map with_register_external @@ Cmap.find_opt c constants
 
   let register_inductive i n =
     let* ({ inductives; _ } as s) = get in
     put { s with inductives = Indmap.update i (update_error n) inductives }
   let find_inductive i =
-    let+ { inductives; _ } = get in
-    Indmap.find_opt i inductives
+    let* { inductives; _ } = get in
+    option_map with_register_external @@ Indmap.find_opt i inductives
 
   let register_constructor c n =
     let* ({ constructors; _ } as s) = get in
     put { s with constructors = Constrmap.update c (update_error n) constructors }
   let find_constructor c =
-    let+ { constructors; _ } = get in
-    Constrmap.find_opt c constructors
+    let* { constructors; _ } = get in
+    option_map with_register_external @@ Constrmap.find_opt c constructors
 
   let register_projection p n =
     let* ({ projections; _ } as s) = get in
     put { s with projections = ProjMap.update p (update_error n) projections }
   let find_projection p =
-    let+ { projections; _ } = get in
-    ProjMap.find_opt p projections
+    let* { projections; _ } = get in
+    option_map with_register_external @@ ProjMap.find_opt p projections
 
   (** Managing the local context *)
   let lookup_relative i =
