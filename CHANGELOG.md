@@ -1,4 +1,4 @@
-# stdlib-lgraph-intermediate-v5-global
+# stdlib-lgraph-intermediate-v6-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v6-global.tar.xz
 
 Changes to the Capn'proto format:
@@ -6,7 +6,7 @@ Changes to the Capn'proto format:
 - The storage format of the graph has been changed from an edge-list to an adjacency-list, giving us a much more natural representation.
   This should allow consumers of the graph to implement graph-algorithms that operate directly on the capn'proto datastructure instead of
   first loading the graph into an intermediate format. This should help with efficiency.
-  However, it the new format does cause a significant space overhead, ever after optimization of the formt.
+  However, the new format does cause a significant space overhead, ever after optimization of the formt.
   The dataset goes from 1.3Gb to 1.7Gb.
 - Improved in-memory storage requirements by wrapping some integers and floats into structs.
 - For tactic arguments, the `GlobalNode` struct has been inlined.
