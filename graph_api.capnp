@@ -36,7 +36,7 @@ struct Graph {
       # Constr nodes
       rel @9 :Void;
       var @10 :Void;
-      evar @11 :IntP;
+      evar @11 :IntP; #TODO: Resolve
       evarSubst @12 :Void;
       cast @13 :Void;
       prod @14 :Void;
@@ -62,6 +62,7 @@ struct Graph {
     childrenCount @30 :UInt16;
   }
   # The main memory store of the graph. It acts as a heap similar to the main memory of a C/C++ program.
+  # The heap is accessed by indexing the `nodes` list using a `NodeIndex` which returns a `Node`.
   # Every node has a label and a list of children, which is indicated as a range within the `edges` list using
   # `childrenIndex` and `childrenCount`. The targets of the edges can again be found in the `nodes` list of the
   # current file or of a dependency.
