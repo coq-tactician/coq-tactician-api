@@ -212,16 +212,22 @@ let et2et (et : edge_type) =
   | EvarSubstValue -> EvarSubstValue
 
 let write_graph capnp_graph transformer nodes =
-  let cnodes = K.Builder.Graph.heap_init capnp_graph (List.length nodes) in
-  List.iteri (fun i (label, children) ->
-      let cnode = Capnp.Array.get cnodes i in
-      nt2nt transformer label @@ K.Builder.Graph.Node.label_get cnode;
-      let cchildren = K.Builder.Graph.Node.children_init cnode (List.length children) in
-      List.iteri (fun i (label, (tp, ti)) ->
-          let et = Capnp.Array.get cchildren i in
+  let nc, ec = List.fold_left (fun (nc, ec) (_, ch) -> nc + 1, ec + List.length ch) (0, 0) nodes in
+  let cnodes = K.Builder.Graph.nodes_init capnp_graph nc in
+  let cedges = K.Builder.Graph.edges_init capnp_graph ec in
+  ignore (List.fold_left (fun (ni, ei) (label, children) ->
+      let cnode = Capnp.Array.get cnodes ni in
+      nt2nt transformer label @@ K.Builder.Graph.Node.label_init cnode;
+      let cc = List.length children in
+      K.Builder.Graph.Node.children_count_set_exn cnode cc;
+      K.Builder.Graph.Node.children_index_set_int_exn cnode (if cc = 0 then 0 else ei);
+      let ei = List.fold_left (fun ei (label, (tp, ti)) ->
+          let et = Capnp.Array.get cedges ei in
           K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
-          let ctarget = K.Builder.Graph.EdgeTarget.target_get et in
+          let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
           K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
-          K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ ti
-        ) children
-    ) nodes
+          K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ ti;
+          ei + 1
+        ) ei children in
+      ni + 1, ei
+    ) (0, 0) nodes)
