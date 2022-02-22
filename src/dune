@@ -2,7 +2,7 @@
 (library
  (name tactician_reinforce_plugin)
  (public_name coq-tactician-reinforce.plugin)
- (flags :standard -rectypes -w -27-53-55 -warn-error -A)
+ (flags :standard -rectypes -w -27-53-55)
  (modules (
    "g_graph"
     graph_extractor
