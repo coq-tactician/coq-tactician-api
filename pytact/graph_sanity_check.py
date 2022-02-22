@@ -38,20 +38,22 @@ def process1(rootdir, args, fname):
         unresolvable = 0
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
         dep0 = g.dependencies[0]
-        nodes_count = len(g.graph.heap)
-        edges_count = 0
+        nodes_count = len(g.graph.nodes)
+        edges_count = len(g.graph.edges)
         print(f"{fname}: nodes {nodes_count}, edges {edges_count}, dep[0] {dep0}")
         for n in g.tacticalDefinitions:
-            if g.graph.heap[n].label.which() != 'definition':
+            if g.graph.nodes[n].label.which() != 'definition':
                 print(f'{fname}: TacticalDefinitions Problem A')
                 raise Exception
-            if g.graph.heap[n].label.definition.which() != 'tacticalConstant':
+            if g.graph.nodes[n].label.definition.which() != 'tacticalConstant':
                 print(f'{fname}: TacticalDefinitions Problem B with '
                       f'{g.graph.classifications[n].definition.which()}')
                 raise Exception
 
-        for n in g.graph.heap:
-            edges_count += len(n.children)
+        for n in g.graph.nodes:
+            if not (n.childrenIndex + n.childrenCount <= edges_count):
+                print(f'{fname}: Children of node {n} are not valid indices of edges')
+                raise Exception
             n = n.label
             if (n.which() == 'definition'):
                 if (n.definition.which() == 'tacticalConstant'):
@@ -91,32 +93,31 @@ def process2(rootdir, args, res):
         print(fname)
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
         local_count = nodes_count
-        for s in g.graph.heap:
-            for t in s.children:
-                if not (t.target.depIndex < len(g.dependencies)):
-                    print(f"Error: in {fname} x.target.depIndex {x.target.depIndex} "
-                          f"but len(g.dependencies) is {len(g.dependencies)} "
-                          f"and g.dependencies = {g.dependencies}")
-                    raise Exception
-                _dep = g.dependencies[t.target.depIndex]
-                if _dep in len_nodes.keys():
-                    dep_len_nodes = len_nodes[g.dependencies[t.target.depIndex]]
-                else:
-                    print(f"WARNING: {fname} reference to {g.dependencies[x.target.depIndex]} "
-                          "is not in the index of bin files in a given dataset, "
-                          "following the reference outside ")
-                    check_dep(fname, rootdir, _dep)
-                    with open(_dep,'rb') as dep_f:
-                        dep_b = dep_f.read()
-                        dep_g = graph_api_capnp.Dataset.from_bytes_packed(dep_b, traversal_limit_in_words=2**64-1)
-                        dep_len_nodes = len(dep_g.graph.classifications)
-                if not t.target.nodeIndex < dep_len_nodes:
-                    print(f"in {fname} reference to {g.dependencies[x.target.depIndex]} "
-                          f"with node {x.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
-                          f"is {len_nodes[g.dependencies[x.target.depIndex]]}")
-                    raise Exception
+        for t in g.graph.edges:
+            if not (t.target.depIndex < len(g.dependencies)):
+                print(f"Error: in {fname} x.target.depIndex {x.target.depIndex} "
+                      f"but len(g.dependencies) is {len(g.dependencies)} "
+                      f"and g.dependencies = {g.dependencies}")
+                raise Exception
+            _dep = g.dependencies[t.target.depIndex]
+            if _dep in len_nodes.keys():
+                dep_len_nodes = len_nodes[g.dependencies[t.target.depIndex]]
+            else:
+                print(f"WARNING: {fname} reference to {g.dependencies[x.target.depIndex]} "
+                      "is not in the index of bin files in a given dataset, "
+                      "following the reference outside ")
+                check_dep(fname, rootdir, _dep)
+                with open(_dep,'rb') as dep_f:
+                    dep_b = dep_f.read()
+                    dep_g = graph_api_capnp.Dataset.from_bytes_packed(dep_b, traversal_limit_in_words=2**64-1)
+                    dep_len_nodes = len(dep_g.graph.classifications)
+            if not t.target.nodeIndex < dep_len_nodes:
+                print(f"in {fname} reference to {g.dependencies[x.target.depIndex]} "
+                      f"with node {x.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
+                      f"is {len_nodes[g.dependencies[x.target.depIndex]]}")
+                raise Exception
         for node_index in g.tacticalDefinitions:
-            node_classification = g.graph.heap[node_index].label
+            node_classification = g.graph.nodes[node_index].label
             proof_steps = node_classification.definition.tacticalConstant.tacticalProof
             for x in proof_steps:
                 if not (x.state.root < local_count):
@@ -128,7 +129,7 @@ def process2(rootdir, args, res):
                         print(f"{fname}: ctx {x} of a state {x.state} is "
                               f"outside local node count {local_count}")
                         raise Exception
-                    cl = g.graph.heap[c].label.which()
+                    cl = g.graph.nodes[c].label.which()
                     if not (cl == 'contextDef' or cl == 'contextAssum'):
                         print(f"{fname}: ctx {x} of a state {x.state} "
                               f"has the wrong node classification {cn.label}")

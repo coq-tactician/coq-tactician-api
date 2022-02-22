@@ -1,4 +1,4 @@
-@0xec525db4e04108d4; # v6
+@0xb9d31af01976cf9c; # v7
 
 using File = Text;
 using DepIndex = UInt16;
@@ -15,7 +15,7 @@ struct Graph {
       nodeIndex @2 :NodeIndex;
     }
   }
-  struct Node {
+  struct Node { # Fits exactly in 128 bits.
     label :union { # Inlined for efficiency purposes
       root @0 :Void;
 
@@ -36,7 +36,7 @@ struct Graph {
       # Constr nodes
       rel @9 :Void;
       var @10 :Void;
-      evar @11 :IntP;
+      evar @11 :IntP; #TODO: Resolve
       evarSubst @12 :Void;
       cast @13 :Void;
       prod @14 :Void;
@@ -58,14 +58,18 @@ struct Graph {
       primitive @28 :Text;
     }
 
-    children @29 :List(EdgeTarget);
+    childrenIndex @29 :UInt32;
+    childrenCount @30 :UInt16;
   }
   # The main memory store of the graph. It acts as a heap similar to the main memory of a C/C++ program.
-  # The heap is indexed using a `NodeIndex`, returning a `Node`. Every node has a label and a list of
-  # children, which can in turn be found in the heap or the heap of a dependency. Note that just like in
-  # C/C++ doing pointer arithmetic on the heap is undefined behavior, and you may encounter arbitrary
-  # garbage if you do this. In particular, iterating over the heap is discouraged.
-  heap @0 :List(Node);
+  # The heap is accessed by indexing the `nodes` list using a `NodeIndex` which returns a `Node`.
+  # Every node has a label and a list of children, which is indicated as a range within the `edges` list using
+  # `childrenIndex` and `childrenCount`. The targets of the edges can again be found in the `nodes` list of the
+  # current file or of a dependency.
+  # Note that just like in C/C++ doing pointer arithmetic on the heap is undefined behavior, and you may
+  # encounter arbitrary garbage if you do this. In particular, iterating over the heap is discouraged.
+  nodes @0 :List(Node);
+  edges @1 :List(EdgeTarget);
 }
 
 struct ProofState {

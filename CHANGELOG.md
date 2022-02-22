@@ -1,3 +1,11 @@
+# stdlib-lgraph-intermediate-v7-global
+http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v7-global.tar.xz
+
+Changes to the Capn'proto format:
+- Upgraded the magic id
+- The graph representation now uses one big edge array for children of nodes, instead of many small array.
+  This results in significant space savings, both in the memory representations and the on-disk representations.
+
 # stdlib-lgraph-intermediate-v6-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v6-global.tar.xz
 
