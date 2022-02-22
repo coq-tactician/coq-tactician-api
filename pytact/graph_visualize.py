@@ -21,21 +21,21 @@ for group in graph_api_capnp.groupedEdges:
         count += 1
 
 def visualize(graph, state, showLabel = False):
-    heap = graph.heap
+    nodes = graph.nodes
     root = state.root
     context = state.context
-    assert all(n < len(heap) for n in context)
+    assert all(n < len(nodes) for n in context)
 
     dot = graphviz.Digraph()
     dot.attr('graph', ordering="out")
-    for node, value in enumerate(heap):
+    for node, value in enumerate(nodes):
         label = value.label.which()
         if node in context: label = str(node) + ': ['+label+']'
         if node == root:
             label = "Root: "+label
         dot.node(str(node), label)
-    for node, value in enumerate(heap):
-        for edge in value.children:
+    for node, value in enumerate(nodes):
+        for edge in list(graph.edges)[value.childrenIndex:value.childrenIndex+value.childrenCount]:
             if showLabel:
                 label = str(edge.label)
             else:
