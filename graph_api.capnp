@@ -61,6 +61,7 @@ struct Graph {
     childrenIndex @29 :UInt32;
     childrenCount @30 :UInt16;
   }
+  # The main memory store of the graph. It acts as a heap similar to the main memory of a C/C++ program.
   # Every node has a label and a list of children, which is indicated as a range within the `edges` list using
   # `childrenIndex` and `childrenCount`. The targets of the edges can again be found in the `nodes` list of the
   # current file or of a dependency.
