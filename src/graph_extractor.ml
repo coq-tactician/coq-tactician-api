@@ -3,324 +3,542 @@ open Graph_def
 open Names
 open Declarations
 open Context
+open Ltac_plugin
+open Tacexpr
 
-module ReaderStateMonad (R : sig type r and s end) = struct
-  open R
-  type 'a t = (s * r) -> (s * 'a)
-  let return x = fun (s, _) -> s,x
-  let (>>=) x f = fun (s, r) -> let s, x = x (s, r) in f x (s, r)
-  let (>>) x y = fun (s, r) -> let s, () = x (s, r) in y (s, r)
-  let map f x = fun sr -> let s, x = x sr in s, f x
+module ProjMap = CMap.Make(Projection.Repr)
 
-  let put s = fun _ -> s, ()
-  let get = fun (s, _) -> s, s
+module type CICGraphMonadType = sig
 
-  let ask sr = sr
-  let local f x = fun (s, r) -> x (s, f r)
+  include Monad.Def
+  type node
+  type node_label
+  type edge_label
+  type children = (edge_label * node) list
+  type 'a repr_t
+
+  (** Graph drawing primitives *)
+  val mk_node : node_label -> children -> node t
+  val with_delayed_node : (node -> ('a * node_label * children) t) -> 'a t
+  val with_delayed_nodes : int -> (node list -> ('a * (node_label * children) list) t) -> 'a t
+
+  (** Registering and lookup of definitions *)
+  val register_constant : Constant.t -> node -> unit t
+  val find_constant : Constant.t -> node option t
+
+  val register_inductive : inductive -> node -> unit t
+  val find_inductive : inductive -> node option t
+
+  val register_constructor : constructor -> node -> unit t
+  val find_constructor : constructor -> node option t
+
+  val register_projection : Projection.Repr.t -> node -> unit t
+  val find_projection : Projection.Repr.t -> node option t
+
+  (** Managing the local context *)
+  val lookup_relative    : int -> node t
+  val lookup_named       : Id.t -> node t
+  val lookup_named_map   : node Id.Map.t t
+  val lookup_follow_defs : bool t
+  val lookup_proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t t
+
+  val get_named_context : node Id.Map.t t
+
+  val with_relative       : node -> 'a t -> 'a t
+  val with_relatives      : node list -> 'a t -> 'a t
+  val with_named          : Id.t -> node -> 'a t -> 'a t
+  val with_empty_contexts : 'a t -> 'a t
+
+  type definitions =
+    { constants            : node Cmap.t
+    ; inductives           : node Indmap.t
+    ; constructors         : node Constrmap.t
+    ; projections          : node ProjMap.t }
+
+  val run :
+    follow_defs:bool ->
+    known_definitions:definitions ->
+    (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
+    'a t -> (definitions * 'a) repr_t
+  val run_empty :
+  follow_defs:bool ->
+    (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
+    'a t -> (definitions * 'a) repr_t
 end
+module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
+  with type node = G.node
+   and type node_label = G.node_label
+   and type edge_label = G.edge_label
+   and type 'a repr_t = 'a G.repr_t = struct
 
-module GraphBuilder(G : Graph) = struct
+  include G
 
-  module ProjMap = CMap.Make(Projection.Repr)
-
-  type state =
-    { graph         : G.t
-    ; constants     : G.node Cmap.t
-    ; inductives    : G.node Indmap.t
-    ; constructors  : G.node Constrmap.t
-    ; projections   : G.node ProjMap.t }
-
+  type definitions =
+    { constants            : node Cmap.t
+    ; inductives           : node Indmap.t
+    ; constructors         : node Constrmap.t
+    ; projections          : node ProjMap.t }
   type context =
-    { relative    : G.node list
-    ; named       : G.node Id.Map.t
-    ; focus       : G.node
-    ; follow_defs : bool }
+    { relative    : node list
+    ; named       : node Id.Map.t
+    ; follow_defs : bool
+    ; proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t }
 
-  module M = ReaderStateMonad(struct type s = state and r = context end)
-  open M
-  open Tactician_util.WithMonadNotations(M)
+  module M = Monad_util.ReaderStateMonadT
+      (G)
+      (struct type r = context end)
+      (struct type s = definitions end)
   module OList = List
-  open Monad.Make(M)
+  open M
+  include Monad_util.WithMonadNotations(M)
 
-  let run_empty follow_defs m =
-    let focus, graph = G.mk_node G.empty Root in
-    let state =
-      { graph
-      ; constants = Cmap.empty
-      ; inductives = Indmap.empty
-      ; constructors = Constrmap.empty
-      ; projections = ProjMap.empty} in
-    let context = { relative = []; named = Id.Map.empty; focus; follow_defs } in
-    m (state, context)
+  (** Lifting of basic drawing primitives *)
+  let mk_node nl ch = M.lift @@ mk_node nl ch
+  let with_delayed_node f = unrun @@ fun c s ->
+    with_delayed_node (fun n ->
+        G.map (fun (s, (a, nl, ch)) -> (s, a), nl, ch) (run (f n) c s))
 
-  let const x _ = x
-  let ignore' m = map ignore m
+  (* This is a typical function that would benefit greatly from having sized vectors! *)
+  let with_delayed_nodes i f =
+    let rec aux i nodes =
+      if i = 0 then
+        f nodes
+      else
+        with_delayed_node @@ fun n ->
+          let+ a, chs = aux (i - 1) (n::nodes) in
+          match chs with
+          | [] -> CErrors.anomaly Pp.(str "with_delayed_nodes received to few children nodes")
+          | (nl, ch)::chs -> (a, chs), nl, ch
+    in
+    let+ a, chs = aux i [] in
+    match chs with
+    | [] -> a
+    | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
 
-  let mk_node nt =
-    let* ({ graph; _ } as g) = get in
-    let n, graph = G.mk_node graph nt in
-    let+ () = put { g with graph } in
+  let get_named_context =
+    let+ context = ask in
+    context.named
+
+  (** Registering and lookup of definitions *)
+
+  let update_error x = function
+    | None -> Some x
+    | Some _ -> CErrors.anomaly (Pp.str "Map update attempt while key already existed")
+
+  let option_map f o =
+    match o with
+    | None -> return None
+    | Some x -> let+ x = f x in Some x
+  let with_register_external n =
+    let+ () = lift @@ register_external n in
     n
-  let mk_edge from toward =
-    let* { graph; _ } as g = get in
-    put { g with graph = G.mk_edge graph ~from ~toward }
-  let relative_lookup i =
+
+  let register_constant c n =
+    let* ({ constants; _ } as s) = get in
+    put { s with constants = Cmap.update c (update_error n) constants }
+  let find_constant c =
+    let* { constants; _ } = get in
+    option_map with_register_external @@ Cmap.find_opt c constants
+
+  let register_inductive i n =
+    let* ({ inductives; _ } as s) = get in
+    put { s with inductives = Indmap.update i (update_error n) inductives }
+  let find_inductive i =
+    let* { inductives; _ } = get in
+    option_map with_register_external @@ Indmap.find_opt i inductives
+
+  let register_constructor c n =
+    let* ({ constructors; _ } as s) = get in
+    put { s with constructors = Constrmap.update c (update_error n) constructors }
+  let find_constructor c =
+    let* { constructors; _ } = get in
+    option_map with_register_external @@ Constrmap.find_opt c constructors
+
+  let register_projection p n =
+    let* ({ projections; _ } as s) = get in
+    put { s with projections = ProjMap.update p (update_error n) projections }
+  let find_projection p =
+    let* { projections; _ } = get in
+    option_map with_register_external @@ ProjMap.find_opt p projections
+
+  (** Managing the local context *)
+  let lookup_relative i =
     let+ { relative; _ } = ask in
     let rec find ctx i = match ctx, i with
       | node::_, 1 -> node
       | _::ctx, n -> find ctx (n - 1)
       | [], _ -> CErrors.anomaly (Pp.str "Invalid relative context") in
     find relative i
-  let named_lookup id =
+  let lookup_named_map =
     let+ { named; _ } = ask in
+    named
+  let lookup_named id =
+    let+ named = lookup_named_map in
     Id.Map.find id named
+  let lookup_follow_defs =
+    let+ { follow_defs; _ } = ask in
+    follow_defs
+  let lookup_proofs_map =
+    let+ { proofs_map; _ } = ask in
+    proofs_map
+
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
-  let with_var id var =
-    local (fun ({ named; _ } as c) -> { c with named = Id.Map.add id var named })
-  let focus =
-    let+ { focus; _ } = ask in focus
-  let with_focus focus =
-    local (fun c -> { c with focus })
   let with_relatives ns =
     local (fun ({ relative; _ } as c) ->
         let relative = OList.fold_left (fun ctx n -> n::ctx) ns relative in (* Funs are added backwards *)
         { c with relative })
-  let with_reset m =
+  let with_named id n =
+    local (fun ({ named; _ } as c) -> { c with named = Id.Map.update id (update_error n) named })
+  let with_empty_contexts m =
     local (fun c -> { c with named = Id.Map.empty; relative = [] }) m
 
-  let draw_toward n =
-    let* { focus; _ } = ask in
-    mk_edge focus n
-  let move_toward n m =
-    draw_toward n >>
-    local (fun c -> { c with focus = n }) m
-  let move_toward_new nt m =
-    let* n = mk_node nt in
-    move_toward n m >> return n
-  let move_toward_new' nt m = ignore' @@ move_toward_new nt m
-  let draw_toward_new nt =
-    move_toward_new nt (return ())
-  let draw_toward_new' nt = move_toward_new' nt (return ())
+  (** High level drawing commands that draw from a given focus *)
 
-  let register_ind i n =
-    let* ({ inductives; _ } as s) = get in
-    put { s with inductives = Indmap.add i n inductives }
-  let register_construct c n =
-    let* ({ constructors; _ } as s) = get in
-    put { s with constructors = Constrmap.add c n constructors }
-  let register_projection p n =
-    let* ({ projections; _ } as s) = get in
-    put { s with projections = ProjMap.add p n projections }
+  let run ~follow_defs ~known_definitions proofs_map m =
+    G.run @@
+    let context =
+      { relative = []; named = Id.Map.empty; follow_defs; proofs_map } in
+    run m context known_definitions
+  let run_empty ~follow_defs proofs_map m =
+    let known_definitions =
+      { constants = Cmap.empty
+      ; inductives = Indmap.empty
+      ; constructors = Constrmap.empty
+      ; projections = ProjMap.empty} in
+    run ~follow_defs ~known_definitions proofs_map m
+end
+
+module GraphBuilder
+    (G : sig
+       type node'
+       include CICGraphMonadType
+         with type node = node'
+          and type edge_label = edge_type
+          and type node_label = node' node_type
+    end) = struct
+
+  module OList = List
+  open G
+  open Monad.Make(G)
+  open Monad_util.WithMonadNotations(G)
+
+  let update_error x = function
+    | None -> Some x
+    | Some _ -> CErrors.anomaly (Pp.str "Map update attempt while key already existed")
+
+  let const x _ = x
+  let ignore' m = map ignore m
 
   let cached_gen_const c gen =
-    let* { constants; _ } = get in
-    match Cmap.find_opt c constants with
-    | Some c -> draw_toward c
+    let* n = find_constant c in
+    match n with
+    | Some c -> return c
     | None ->
-      let* n = with_reset gen in
-      let* ({ constants; _ } as s) = get in
-      put { s with constants = Cmap.add c n constants }
+      let* n = with_empty_contexts gen in
+      let+ () = register_constant c n in
+      n
 
   let with_named_context gen_constr c (m : 'a t) =
     Named.fold_inside (fun m d ->
         match d with
         | Named.Declaration.LocalAssum (id, typ) ->
-          let* var = move_toward_new (LocalAssum id.binder_name) @@ gen_constr typ in
-          with_var id.binder_name var m
+          let* typ = gen_constr typ in
+          let* var = mk_node (ContextAssum id.binder_name) [ContextDefType, typ] in
+          let+ (ctx, v) = with_named id.binder_name var m in
+          ((ContextElem, var)::ctx), v
         | Named.Declaration.LocalDef (id, term, typ) ->
-          let* var = move_toward_new (LocalDef id.binder_name)
-            (move_toward_new' LocalDefType @@ gen_constr typ >>
-             move_toward_new' LocalDefTerm @@ gen_constr term) in
-          with_var id.binder_name var m)
-      c ~init:m
+          let* typ = gen_constr typ in
+          let* term = gen_constr term in
+          let* var = mk_node (ContextDef id.binder_name) [ContextDefType, typ; ContextDefTerm, term] in
+          let+ (ctx, v) = with_named id.binder_name var m in
+          ((ContextElem, var)::ctx), v)
+      c ~init:(let+ m = m in [], m)
 
-  let rec gen_const c =
-      cached_gen_const c @@ move_toward_new (Const c) @@
+  let mk_definition def_type = Definition { previous = []; def_type }
+
+  (* Safe version of Learner_helper.proof_state_to_string *)
+  let proof_state_to_string_safe (hyps, concl) env evar_map =
+    let open Context in
+    let constr_str t = Pp.string_of_ppcmds (Sexpr.format_oneline (
+        Printer.safe_pr_constr_env env evar_map t)) in
+    let goal = constr_str concl in
+    let id_str id = Names.Id.to_string id.binder_name in
+    let hyps = OList.rev hyps in
+    let hyps = OList.map (function
+        | Named.Declaration.LocalAssum (id, typ) ->
+          id_str id ^ " : " ^ constr_str typ
+        | Named.Declaration.LocalDef (id, term, typ) ->
+          id_str id ^ " := " ^ constr_str term ^ " : " ^ constr_str typ
+      ) hyps in
+    String.concat ", " hyps ^ " |- " ^ goal
+
+  let follow_def alt m =
+    let* follow_defs = lookup_follow_defs in
+    if follow_defs then m else mk_node alt []
+
+  let rec gen_const c : G.node t =
+    (* Only process canonical constants *)
+    let c = Constant.make1 (Constant.canonical c) in
+    cached_gen_const c @@
+    let* proofs = lookup_proofs_map in
+    let proof = Cmap.find_opt c proofs in
+    let gen_const_aux d =
       let { const_hyps; const_body; const_type; _ } = Global.lookup_constant c in
-      with_named_context gen_constr const_hyps
-        (move_toward_new' ConstType @@ gen_constr const_type >>
-         match const_body with
-         | Undef _ -> draw_toward_new' ConstUndef
-         | Def c -> move_toward_new' ConstDef @@ gen_constr @@ Mod_subst.force_constr c
-         | OpaqueDef c ->
-           let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Global.opaque_tables ()) c in
-           move_toward_new' ConstOpaqueDef @@ gen_constr c
-         | Primitive p -> draw_toward_new' @@ Primitive p)
+      let* ctx, b = with_named_context gen_constr const_hyps @@
+        let* typ = gen_constr const_type in
+        let bt, b = match const_body with
+          | Undef _ -> ConstUndef, mk_node ConstEmpty []
+          | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
+          | OpaqueDef c ->
+            let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Global.opaque_tables ()) c in
+            ConstOpaqueDef, gen_constr c
+          | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
+        let+ b = b in
+        [ ConstType, typ; bt, b ] in
+      mk_node (mk_definition d) (b @ ctx)
+    in
+    let gen_tactical_proof (ps, tac) =
+      let gen_proof_state (hyps, concl) =
+        let+ ctx, (subject, map) = with_named_context gen_constr hyps @@
+          let* subject = gen_constr concl in
+          let+ map = lookup_named_map in
+          subject, map in
+        ((ContextSubject, subject)::ctx), map in
+      let* children, context_map = gen_proof_state ps in
+      let* root = mk_node Root children in
+      let tac_orig = Tactic_name_remove.tactic_name_remove tac in
+      let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
+      let args, interm_tactic = Tactic_one_variable.tactic_one_variable tac in
+      let tac = Extreme_tactic_normalize.tactic_normalize tac in
+      let context = Id.Map.bindings context_map in
+      let context_range = OList.map (fun (_, n) -> n) context in
+      let warn_arg id =
+        Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
+                                 Pptactic.pr_glob_tactic (Global.env ()) tac_orig (* ++ str " in context\n" ++ *)
+                                 (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
+      let check_default id = function
+        | None -> warn_arg id; None
+        | x -> x in
+      let+ arguments =
+        let open Tactic_one_variable in
+        List.map (function
+            | TVar id ->
+              return @@ check_default id @@
+              Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context
+            | TRef c ->
+              (match c with
+               | GlobRef.VarRef _ -> assert false
+               | GlobRef.ConstRef c ->
+                 let+ c = gen_const c in
+                 Some c
+               | GlobRef.IndRef i ->
+                 let+ c = gen_inductive i in
+                 Some c
+               | GlobRef.ConstructRef c ->
+                 let+ c = gen_constructor c in
+                 Some c
+              )
+            | TOther -> return None
+          ) args in
+      let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
+      { tactic = tac_orig; base_tactic = tac; interm_tactic
+      ; tactic_hash = Hashtbl.hash_param 255 255 tac
+      ; arguments
+      ; root; context = context_range; ps_string } in
+    match proof with
+    | None -> gen_const_aux (ManualConst c)
+    | Some proof ->
+      let proof = OList.concat @@ OList.map (fun (pss, tac) -> OList.map (fun ps -> ps, tac) pss) proof in
+      let* proof = List.map gen_tactical_proof proof in
+      gen_const_aux (TacticalConstant (c, proof))
   and gen_primitive_constructor ind proj_npars typ =
     let relctx, sort = Term.decompose_prod_assum typ in
     let real_arity = Rel.nhyps @@ CList.skipn proj_npars @@ OList.rev relctx in
-    snd @@ CList.fold_left (fun (reli, m) d ->
-        match d with
+    snd @@ CList.fold_left (fun (reli, m) -> function
         | Rel.Declaration.LocalAssum ({ binder_name = id; _ }, typ) ->
-          reli - 1, move_toward_new' (Prod id)
-            (let* prod = focus in
-             (match id with
-              | Name id when reli >= 0 ->
-                let proj = Projection.Repr.make
-                    ind ~proj_npars ~proj_arg:reli @@ Label.of_id id in
-                let* nproj = mk_node (Proj proj) in
-                register_projection proj nproj >>
-                with_focus nproj @@ draw_toward prod
-              | _ -> return ()) >>
-             move_toward_new' ProdType @@ gen_constr typ >>
-             with_relative prod @@ move_toward_new' ProdTerm m)
-        | Rel.Declaration.LocalDef ({ binder_name = id; _ }, term, typ) ->
-          reli, move_toward_new' (LetIn id)
-            (move_toward_new' LetInType @@ gen_constr typ >>
-             move_toward_new' LetInDef @@ gen_constr term >>
-             let* letin = focus in
-             with_relative letin @@ move_toward_new' LetInDef m))
-      (real_arity - 1, gen_constr sort) relctx
+          reli - 1, with_delayed_node @@ fun prod ->
+          (match id with
+           | Name id when reli >= 0 ->
+             let proj = Projection.Repr.make
+                 ind ~proj_npars ~proj_arg:reli @@ Label.of_id id in
+             let* nproj = mk_node (mk_definition (Proj proj)) [ProjTerm, prod] in
+             register_projection proj nproj
+           | _ -> return ()) >>
+          let* typ = gen_constr typ in
+          let+ cont = with_relative prod m in
+          prod, (Prod id), [ProdType, typ; ProdTerm, cont]
+        | Rel.Declaration.LocalDef ({ binder_name = id; _ }, def, typ) ->
+          reli, with_delayed_node @@ fun letin ->
+          let* typ = gen_constr typ in
+          let* def = gen_constr def in
+          let+ cont = with_relative letin m in
+          letin, (LetIn id), [LetInType, typ; LetInDef, def; LetInTerm, cont])
+      (real_arity - 1, (gen_constr sort)) relctx
   and gen_mutinductive_helper m =
-    let* { inductives; _ } = get in
-    match Indmap.find_opt (m, 0) inductives with
+    (* Only process canonical inductives *)
+    let m = MutInd.make1 (MutInd.canonical m) in
+    let* c = find_inductive (m, 0) in
+    match c with
     | Some mn -> return ()
     | None ->
-      with_reset @@
+      with_empty_contexts @@
       let ({ mind_hyps; mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
         Global.lookup_mind m in
-      with_named_context gen_constr mind_hyps @@
+      (* TODO: The elements of this named context were connected to the global root node before. This is not correct.
+         Now it is not connected to anything (children are ignored), which is probably also suboptimal. This will hopefully be solved by
+         converting this named context to be part of the global context. *)
+      map snd @@ with_named_context gen_constr mind_hyps @@
       let inds = OList.mapi (fun i ind -> i, ind) (Array.to_list mind_packets) in
-      let* inds = List.map (fun (i, ind) ->
-          let* n = mk_node @@ Ind (m, i) in
-          register_ind (m, i) n >> return (i, ind, n)) inds in
-      let indsn = OList.rev @@ OList.map (fun (_, _, n) -> n) inds in (* Backwards ordering w.r.t. Fun *)
-      List.iter (fun (i, ({ mind_user_lc; mind_consnames; _ } as ib), n) ->
+      with_delayed_nodes (OList.length inds) @@ fun indsn ->
+      let inds = OList.combine inds indsn in
+      let indsn = OList.rev indsn in (* Backwards ordering w.r.t. Fun *)
+      let+ inds = List.map (fun ((i, ({ mind_user_lc; mind_consnames; _ } as ib)), n) ->
+          register_inductive (m, i) n >>
           let gen_constr_typ typ = match mind_record with
             | NotRecord | FakeRecord -> gen_constr typ
             | PrimRecord _ -> gen_primitive_constructor (m, i) (OList.length mind_params_ctxt) typ in
           let constructs = OList.mapi (fun j x -> j, x) @@
             OList.combine (Array.to_list mind_user_lc) (Array.to_list mind_consnames) in
-          with_focus n
-            (List.iter (fun (j, (typ, id)) ->
-                 with_relatives indsn @@ move_toward_new (Construct ((m, i), j + 1)) @@ gen_constr_typ typ >>=
-                 register_construct ((m, i), j + 1)) constructs >>
-             let univs = Declareops.inductive_polymorphic_context mb in
-             let inst = Univ.make_abstract_instance univs in
-             let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) (Global.env ()) in
-             let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
-             gen_constr typ)) inds
-and gen_inductive ((m, _) as i) =
+          let+ children =
+            let* cstrs = List.map (fun (j, (typ, id)) ->
+                with_relatives indsn @@
+                let* typ = gen_constr_typ typ in
+                let* n = mk_node (mk_definition (Construct ((m, i), j + 1))) [ConstructTerm, typ] in
+                let+ () = register_constructor ((m, i), j + 1) n in
+                IndConstruct, n) constructs in
+            let univs = Declareops.inductive_polymorphic_context mb in
+            let inst = Univ.make_abstract_instance univs in
+            let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) (Global.env ()) in
+            let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
+            let+ n = gen_constr typ in
+            (IndType, n)::cstrs in
+          mk_definition (Ind (m, i)), children
+        ) inds in
+      (), inds
+  and gen_inductive ((m, _) as i) : G.node t =
     gen_mutinductive_helper m >>
-    let* { inductives; _ } = get in
-    match Indmap.find_opt i inductives with
-    | Some inn -> draw_toward inn
+    let+ n = find_inductive i in
+    match n with
+    | Some inn -> inn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
-  and gen_constructor (((m, _), _) as c) =
+  and gen_constructor (((m, _), _) as c) : G.node t =
     gen_mutinductive_helper m >>
-    let* { constructors; _ } = get in
-    match Constrmap.find_opt c constructors with
-    | Some cn -> draw_toward cn
+    let+ n = find_constructor c in
+    match n with
+    | Some cn -> cn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
   and gen_projection p =
     gen_mutinductive_helper (Projection.mind p) >>
-    let* { projections; _ } = get in
-    match ProjMap.find_opt (Projection.repr p) projections with
-    | Some cn -> draw_toward cn
+    let+ n = find_projection (Projection.repr p) in
+    match n with
+    | Some cn -> cn
     | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
-  and follow_def nt def =
-    let* ({ follow_defs; _ }) = ask in
-    if follow_defs then def else draw_toward_new' nt
-  and gen_constr  c = gen_kind_of_term @@ Constr.kind c
+  and gen_constr c = gen_kind_of_term @@ Constr.kind c
   and gen_kind_of_term = function
     | Rel i ->
-      let* ino = relative_lookup i in
-      move_toward_new' Rel @@ draw_toward ino
+      let* ino = lookup_relative i in
+      mk_node Rel [RelPointer, ino]
     | Var id ->
-      move_toward_new' Var (named_lookup id >>= draw_toward)
+      let* ino = lookup_named id in
+      mk_node Var [VarPointer, ino]
     | Meta i ->
       CErrors.anomaly (Pp.str "Unexpected meta")
     | Evar (ev, substs) -> (* TODO: Add type and proper substitution list *)
-      move_toward_new' (Evar (Evar.repr ev))
-        (match Array.to_list substs with
-         | [] -> return ()
-         | h::substs ->
-           let* head = move_toward_new EvarSubst @@ gen_constr h in
-           ignore' @@ List.fold_left (fun prev b ->
-               let* curr = move_toward_new EvarSubst @@ gen_constr b in
-               map (const curr) @@ mk_edge prev curr)
-             head substs)
+      let* substs = match Array.to_list substs with
+       | [] -> return []
+       | head::substs ->
+         let* head = gen_constr head in
+         let* head = mk_node (* EvarSubstPointer *) EvarSubst [EvarSubstValue, head] in
+         let+ _, substs = List.fold_left (fun (prev, acc) subst ->
+             let* subst = gen_constr subst in
+             let+ subst = mk_node EvarSubst [EvarSubstValue, subst; EvarSubstOrder, prev] in
+             subst, (EvarSubstPointer, prev)::acc)
+           (head, [EvarSubstPointer, head]) substs in
+         OList.rev substs in
+      mk_node (Evar (Evar.repr ev)) substs
     | Sort s ->
-      move_toward_new' Sort
-        (match s with
-         | Sorts.SProp -> draw_toward_new' SProp
-         | Sorts.Prop -> draw_toward_new' Prop
-         | Sorts.Set -> draw_toward_new' Set
-         | Sorts.Type _ -> draw_toward_new' Type)
+      mk_node (match s with
+          | Sorts.SProp -> SortSProp
+          | Sorts.Prop -> SortProp
+          | Sorts.Set -> SortSet
+          | Sorts.Type _ -> SortType) []
     | Cast (term, kind, typ) ->
-      move_toward_new' Cast
-        (move_toward_new' CastTerm @@ gen_constr term >>
-         move_toward_new' CastType @@ gen_constr typ)
+      let* term = gen_constr term in
+      let* typ = gen_constr typ in
+      mk_node Cast [CastTerm, term; CastType, typ]
     | Prod (id, bi, conc) ->
-      move_toward_new' (Prod id.binder_name)
-        (move_toward_new' ProdType @@ gen_constr bi >>
-         let* prod = focus in
-         move_toward_new' ProdTerm @@ with_relative prod @@ gen_constr conc)
+      let* bi = gen_constr bi in
+      with_delayed_node @@ fun prod ->
+      let+ conc = with_relative prod @@ gen_constr conc in
+      prod, (Prod id.binder_name), [ProdType, bi; ProdTerm, conc]
     | Lambda (id, typ, term) ->
-      move_toward_new' (Lambda id.binder_name)
-        (move_toward_new' LambdaType @@ gen_constr typ >>
-         let* lambda = focus in
-         move_toward_new' LambdaTerm @@ with_relative lambda @@ gen_constr term)
+      let* typ = gen_constr typ in
+      with_delayed_node @@ fun lambda ->
+      let+ term = with_relative lambda @@ gen_constr term in
+      lambda, (Lambda id.binder_name), [LambdaType, typ; LambdaTerm, term]
     | LetIn (id, def, typ, term) ->
-      move_toward_new' (LetIn id.binder_name)
-        (move_toward_new' LetInDef @@ gen_constr def >>
-         move_toward_new' LetInType @@ gen_constr typ >>
-         let* letin = focus in
-         move_toward_new' LetInTerm @@ with_relative letin @@ gen_constr term)
+      let* def = gen_constr def in
+      let* typ = gen_constr typ in
+      with_delayed_node @@ fun letin ->
+      let+ term = with_relative letin @@ gen_constr term in
+      letin, (LetIn id.binder_name), [LetInType, typ; LetInDef, def; LetInTerm, term]
     | App (f, args) ->
-      move_toward_new' App @@
-      let* fn = move_toward_new AppFun @@ gen_constr f in
-      ignore' @@ List.fold_left (fun prev b ->
-          let* curr = move_toward_new AppArg @@ gen_constr b in
-          map (const curr) @@ mk_edge prev curr)
-        fn (Array.to_list args)
+      let* f = gen_constr f in
+      let* fn = mk_node AppFun [AppFunValue, f] in
+      let* (_, args) = List.fold_left (fun (prev, acc) arg ->
+          let* arg = gen_constr arg in
+          let+ arg = mk_node AppArg [AppArgValue, arg; AppArgOrder, prev] in
+          arg, (AppArgPointer, arg)::acc)
+          (fn, [AppFunPointer, fn]) @@ Array.to_list args in
+      mk_node App (OList.rev args)
     | Const (c, u) ->
-      follow_def (Const c) @@ gen_const c
+      follow_def (mk_definition (ManualConst c)) @@ gen_const c
     | Ind (i, u) ->
-      follow_def (Ind i) @@ gen_inductive i
+      follow_def (mk_definition (Ind i)) @@ gen_inductive i
     | Construct (c, u) ->
-      follow_def (Construct c) @@ gen_constructor c
+      follow_def (mk_definition (Construct c)) @@ gen_constructor c
     | Case (i, ret, term, branches) ->
-      move_toward_new' Case
-        (follow_def (Ind i.ci_ind) @@ gen_inductive i.ci_ind >>
-         move_toward_new' CaseReturn @@ gen_constr ret >>
-         move_toward_new' CaseTerm @@ gen_constr term >>
-         List.iter (fun (c, branch) ->
-             move_toward_new' CaseBranch
-               (move_toward_new' CBConstruct @@
-                follow_def (Construct (i.ci_ind, c + 1)) @@ gen_constructor (i.ci_ind, c + 1) >>
-                move_toward_new' CBTerm @@ gen_constr branch))
-           (OList.mapi (fun i x -> i, x) @@ Array.to_list branches))
+      let* ind = follow_def (mk_definition (Ind i.ci_ind)) @@ gen_inductive i.ci_ind in
+      let* ret = gen_constr ret in
+      let* term = gen_constr term in
+      let* branches = List.map (fun (c, branch) ->
+          let* cstr = follow_def (mk_definition (Construct (i.ci_ind, c + 1))) @@ gen_constructor (i.ci_ind, c + 1) in
+          let* term = gen_constr branch in
+          let+ branch = mk_node CaseBranch [CBConstruct, cstr; CBTerm, term] in
+          CaseBranchPointer, branch)
+          (OList.mapi (fun i x -> i, x) @@ Array.to_list branches) in
+      mk_node Case ([CaseInd, ind; CaseReturn, ret; CaseTerm, term]@branches)
     | Fix ((offset, ret), (ids, typs, terms)) ->
-      move_toward_new' Fix @@
-      let* funs = List.map (fun id -> mk_node @@ FixFun id.binder_name) (Array.to_list ids) in
-      let combined = OList.combine funs (OList.combine (Array.to_list typs) (Array.to_list terms)) in
-      List.iter (fun (fn, (typ, term)) ->
-          move_toward fn
-            (move_toward_new' FixFunType @@ gen_constr typ >>
-             move_toward_new' FixFunTerm @@ with_relatives funs @@ gen_constr term))
-        combined >>
-      move_toward_new' FixReturn @@ draw_toward (OList.nth funs ret)
+      let* funs = with_delayed_nodes (Array.length ids) @@ fun funs ->
+        let combined = OList.combine funs @@ OList.combine (Array.to_list ids) @@ OList.combine (Array.to_list typs) (Array.to_list terms) in
+        let+ children = List.map (fun (fn, (id, (typ, term))) ->
+            let* typ = gen_constr typ in
+            let+ term = with_relatives (OList.rev funs) @@ gen_constr term in
+            (FixFun id.binder_name), [FixFunType, typ; FixFunTerm, term])
+            combined in
+        funs, children in
+      mk_node Fix @@ (FixReturn, (OList.nth funs ret))::(OList.map (fun f -> FixMutual, f) funs)
     | CoFix (ret, (ids, typs, terms)) ->
-      move_toward_new' CoFix @@
-      let* funs = List.map (fun id -> mk_node @@ CoFixFun id.binder_name) (Array.to_list ids) in
-      let combined = OList.combine funs (OList.combine (Array.to_list typs) (Array.to_list terms)) in
-      List.iter (fun (fn, (typ, term)) ->
-          move_toward fn
-            (move_toward_new' CoFixFunType @@ gen_constr typ >>
-             move_toward_new' CoFixFunTerm @@ with_relatives funs @@ gen_constr term))
-        combined >>
-      move_toward_new' CoFixReturn @@ draw_toward (OList.nth funs ret)
+      let* funs = with_delayed_nodes (Array.length ids) @@ fun funs ->
+        let combined = OList.combine funs @@ OList.combine (Array.to_list ids) @@ OList.combine (Array.to_list typs) (Array.to_list terms) in
+        let+ children = List.map (fun (fn, (id, (typ, term))) ->
+            let* typ = gen_constr typ in
+            let+ term = with_relatives (OList.rev funs) @@ gen_constr term in
+            (CoFixFun id.binder_name), [CoFixFunType, typ; CoFixFunTerm, term])
+            combined in
+        funs, children in
+      mk_node CoFix @@ (CoFixReturn, (OList.nth funs ret))::(OList.map (fun f -> CoFixMutual, f) funs)
     | Proj (p, term) ->
-      move_toward_new' App @@
-      let* fn = move_toward_new AppFun @@ follow_def (Proj (Projection.repr p)) @@ gen_projection p in
-      let* arg = move_toward_new AppArg @@ gen_constr term in
-      mk_edge fn arg
+      let* fn = follow_def (mk_definition (Proj (Projection.repr p))) @@ gen_projection p in
+      let* fn = mk_node AppFun [AppFunValue, fn] in
+      let* term = gen_constr term in
+      let* arg = mk_node AppArg [AppArgValue, term; AppArgOrder, fn] in
+      mk_node App [AppFunPointer, fn; AppArgPointer, arg]
     | Int n ->
-      draw_toward_new' @@ Int n
+      mk_node (Int n) []
     | Float f ->
-      draw_toward_new' @@ Float f
+      mk_node (Float f) []
 
   let with_named_context ctx m = with_named_context gen_constr ctx m
 
@@ -336,8 +554,9 @@ and gen_inductive ((m, _) as i) =
         let hyps = Proofview.Goal.hyps g in
         let sigma = Proofview.Goal.sigma g in
         let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
-        let ret = with_named_context hyps @@ gen_constr (EConstr.to_constr sigma concl)
-      in Proofview.tclUNIT ret)
+        Proofview.tclUNIT @@
+        let* hyps, concl = with_named_context hyps @@ gen_constr (* ContextSubject *) (EConstr.to_constr sigma concl) in
+        mk_node Root ((ContextSubject, concl)::hyps))
 
   let gen_globref = function
     | GlobRef.VarRef _ -> CErrors.anomaly (Pp.str "not handled yet")

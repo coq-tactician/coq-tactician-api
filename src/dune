@@ -2,31 +2,18 @@
 (library
  (name tactician_reinforce_plugin)
  (public_name coq-tactician-reinforce.plugin)
- (flags :standard -rectypes -w -27-53-55 -warn-error -A)
+ (flags :standard -rectypes -w -27-53-55)
  (modules (
    "g_graph"
-    labelled_graph_extractor
     graph_extractor
-    labelled_graph_def
     graph_def
-    dag_def
-    dag_extractor
-    dag_visualizer
     graph_visualizer
-    labelled_graph_visualizer
-    nn_embedding_learner
+    ; nn_embedding_learner
     reinforce
     tactic_availability_learner
-    labelled_graph_generator_learner
     graph_generator_learner
-    dag_generator_learner
-    dag_capnp_generator
     graph_capnp_generator
-    labelled_graph_capnp_generator
     graph_api
-    dag_api
-    labelled_graph_api
-    extreme_tactic_normalize
     tactic_one_variable
     ))
   (libraries
@@ -47,24 +34,14 @@
 )
 
 (rule
- (targets labelled_graph_api.ml labelled_graph_api.mli)
- (deps    ../labelled_graph_api.capnp)
- (action (run capnp compile -o %{bin:capnpc-ocaml} %{deps})))
-
-(rule
  (targets graph_api.ml graph_api.mli)
  (deps    ../graph_api.capnp)
  (action (run capnp compile -o %{bin:capnpc-ocaml} %{deps})))
 
 (rule
- (targets dag_api.ml dag_api.mli)
- (deps    ../dag_api.capnp)
- (action (run capnp compile -o %{bin:capnpc-ocaml} %{deps})))
-
-(rule
- (targets labelled_graph_generator_learner.ml)
+ (targets graph_generator_learner.ml)
  ; When installed through opam, we perform substitutions through the 'substs' directive in the opam file.
  ; It also works using this rule, but running opam during an installation can be risky due to sandboxing issues.
  (mode fallback)
- (deps labelled_graph_generator_learner.ml.in)
+ (deps graph_generator_learner.ml.in)
  (action (run opam config subst %{targets})))

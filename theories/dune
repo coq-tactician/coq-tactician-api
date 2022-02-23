@@ -30,7 +30,7 @@
 
 (install
  (package coq-tactician-reinforce)
- (files (../labelled_graph_api.capnp as labelled_graph_api.capnp))
+ (files (../graph_api.capnp as graph_api.capnp))
  (section share)
 )
 

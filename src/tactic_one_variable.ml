@@ -2,7 +2,7 @@ open Tactician_ltac1_record_plugin
 open Map_all_the_things
 open Genarg
 open Names
-open Tactician_util
+open Monad_util
 open Glob_term
 
 type var_type =
@@ -12,7 +12,7 @@ type var_type =
 
 module FreeVarsDef = struct
   module M = ReaderWriterMonad
-      (struct type r = Id.t list type w = var_type list let id = [] let comb = List.append end)
+      (struct type w = var_type list let id = [] let comb = List.append end)(struct type r = Id.t list end)
   include MapDefTemplate (M)
   let map_sort = "one_free_variable"
   let warnProblem wit =
@@ -77,4 +77,4 @@ let mapper = { FreeVarsDef.default_mapper with
              }
 
 let tactic_one_variable t =
-  M.run [] @@ FreeVarsMapper.glob_tactic_expr_map mapper t
+  M.run (FreeVarsMapper.glob_tactic_expr_map mapper t) []

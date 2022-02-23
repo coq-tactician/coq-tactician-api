@@ -1,3 +1,39 @@
+# stdlib-lgraph-intermediate-v7-global
+http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v7-global.tar.xz
+
+Changes to the Capn'proto format:
+- Upgraded the magic id
+- The graph representation now uses one big edge array for children of nodes, instead of many small array.
+  This results in significant space savings, both in the memory representations and the on-disk representations.
+
+# stdlib-lgraph-intermediate-v6-global
+http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v6-global.tar.xz
+
+Changes to the Capn'proto format:
+- Upgraded the magic id
+- The storage format of the graph has been changed from an edge-list to an adjacency-list, giving us a much more natural representation.
+  This should allow consumers of the graph to implement graph-algorithms that operate directly on the capn'proto datastructure instead of
+  first loading the graph into an intermediate format. This should help with efficiency.
+  However, the new format does cause a significant space overhead, ever after optimization of the formt.
+  The dataset goes from 1.3GB to 1.7GB.
+- Improved in-memory storage requirements by wrapping some integers and floats into structs.
+- For tactic arguments, the `GlobalNode` struct has been inlined.
+
+Changes to the graph representation:
+- Fixed a bug that caused mutual (co)fixpoints to be cross-connected (unclear wether or not this bug was observable in datasets).
+- Fixed a bug causing section contexts variables to be children of inappropriate nodes. This was likely not observable in previous datasets.
+- We are generating less superfluous nodes (526) and edges (87392). Note, however, that this still does not guarantee the absence of garbage.
+  One should still take care to only access nodes that are reachable through forward graph traversal.
+- Switched the orientation of order-indicating edges between arguments of function application nodes and existential-variable substitution nodes.
+  In the current dataset, this change is expected to have little to no impact.
+  However, the current orientation is incorrect nonetheless. This incorrectness will/would be visible when we start performing node-sharing in the graph.
+
+Other changes:
+- The code to generate the older 'graph' and 'dag' datasets have been removed. The maintenance burden was to great.
+  Now only the 'labelled graph' remains. Many of the advantages of the 'dag' version have now been integrated into 'labelled_graph', and the labelled graph
+  can relatively easily be modified to be acyclic. The 'graph' version has been removed due to lack of interest.
+- Now that we do no longer have to distinguish between 'graph' and 'labelled graph', we rename all modules to not mention 'labelled' anymore.
+
 # stdlib-lgraph-intermediate-v5-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v5-global.tar.xz
 
