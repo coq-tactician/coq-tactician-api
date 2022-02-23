@@ -29,6 +29,8 @@ cd coq-tactician-reinforce
 opam install ./coq-tactician-reinforce.opam --yes
 ```
 
+If you want maximum performance, it is recommended that you use an OCaml version with `flambda` enabled. On newer versions of Opam you can achieve this by installing `ocaml-option-flambda`.
+
 ## Available Commands
 
 These commands will create a graph of some object, and write it to `graph.pdf` (if `graphviz` is available).
