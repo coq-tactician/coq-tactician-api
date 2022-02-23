@@ -50,12 +50,18 @@ end
 module Dot = Graph.Graphviz.Dot(GraphvizGraph)
 module CICGraph = struct
   type node' = int
-  include CICGraphMonad(SimpleGraph(struct type edge_label = edge_type type node_label = node' node_type end))
+  include CICGraphMonad(SimpleGraph(
+      struct
+        type result = (node' node_type * (edge_type * int) list) DList.t
+        type edge_label = edge_type
+        type node_label = node' node_type end))
 end
 module Builder = GraphBuilder(CICGraph)
 
 (* TODO: Probably not the most beautiful and efficient solution *)
 let cic_graph_to_dot_graph ns =
+  let ns = ns (fun ~node_count:_ ~edge_count:_ -> DList.nil) (fun ns nl ch -> DList.cons (nl, ch) ns) in
+  let ns = DList.to_list ns in
   let nm, g = CList.fold_left_i (fun tag (nm, g) (label, _) ->
       let node = { tag; label } in
       Int.Map.add tag node nm, GraphvizGraph.add_vertex g node) 0 (Int.Map.empty, GraphvizGraph.empty) ns in

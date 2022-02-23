@@ -11,29 +11,36 @@ type node = DirPath.t * int
 type edge_label = edge_type
 type node_label = node node_type
 type children = (edge_label * node) list
-module GlobalGraph : GraphMonadType
+type 'result builder =
+  { paths : DPset.t
+  ; node_count : int
+  ; edge_count : int
+  ; builder : 'result -> ('result -> node_label -> (edge_label * (DirPath.t * int)) list -> 'result) -> 'result }
+module GlobalGraph(D : sig type result end) : GraphMonadType
   with type node_label = node_label
    and type edge_label = edge_label
    and type node = node
-   and type 'a repr_t = 'a * (node_label * children) list * DPset.t
+   and type 'a repr_t = 'a * D.result builder
 = struct
+  open D
   type node = DirPath.t * int
   type edge_label = edge_type
   type node_label = node node_type
   type children = (edge_label * node) list
   type writer =
-    { nodes : (node_label * children) DList.t
-    ; paths : DPset.t }
+    { nodes : (result -> node_label -> children -> result) -> result -> result
+    ; paths : DPset.t
+    ; edge_count : int }
   module M = Monad_util.StateWriterMonad
       (struct type s = int end)
       (struct type w = writer
-        let id = { nodes = DList.nil; paths = DPset.empty }
+        let id = { nodes = (fun _ r -> r); paths = DPset.empty; edge_count = 0 }
         let comb = fun
-          { nodes = n1; paths = p1 }
-          { nodes = n2; paths = p2 } ->
-          { nodes = DList.append n1 n2; paths = DPset.union p1 p2 } end)
+          { nodes = f1; paths = p1; edge_count = ec1 }
+          { nodes = f2; paths = p2; edge_count = ec2 } ->
+          { nodes = (fun c r -> f1 c (f2 c r)); paths = DPset.union p1 p2; edge_count = ec1 + ec2 } end)
   include M
-  type 'a repr_t = 'a * (node_label * children) list * DPset.t
+  type nonrec 'a repr_t = 'a * D.result builder
   open Monad_util.WithMonadNotations(M)
   let index_to_node i = dirpath, i
   let children_paths ch ps =
@@ -41,30 +48,35 @@ module GlobalGraph : GraphMonadType
   let mk_node nl ch =
     let* i = get in
     put (i + 1) >>
-    let+ () = tell { nodes = DList.singleton (nl, ch); paths = children_paths ch DPset.empty } in
+    let+ () = tell { nodes = (fun c r -> c r nl ch); paths = children_paths ch DPset.empty
+                   ; edge_count = List.length ch } in
     index_to_node i
   let with_delayed_node f =
     let* i = get in
     put (i + 1) >>
     pass @@
     let+ (v, nl, ch) = f (index_to_node i) in
-    v, fun { nodes; paths } -> { nodes = DList.cons (nl, ch) nodes; paths = children_paths ch paths }
+    v, fun { nodes; paths; edge_count } -> { nodes = (fun c r -> c (nodes c r) nl ch)
+                                           ; paths = children_paths ch paths
+                                           ; edge_count = edge_count + List.length ch }
   let register_external (tp, _) =
-    tell { nodes = DList.nil; paths = DPset.singleton tp }
+    tell { nodes = (fun _ r -> r); paths = DPset.singleton tp; edge_count = 0 }
   let run m =
-    let _, ({ nodes; paths }, res) = run m 0 in
-    res, DList.to_list nodes, paths
+    let node_count, ({ nodes; paths; edge_count }, result) = run m 0 in
+    result, { paths; node_count; edge_count
+            ; builder = (fun r c -> nodes c r) }
 end
 
+module K = Graph_api.Make(Capnp.BytesMessage)
 
-module G = GlobalGraph
+type graph_state = { node_index : int; edge_index : int }
+module G = GlobalGraph(struct type result = graph_state end)
 module CICGraph = struct
   type node' = node
-  include CICGraphMonad(GlobalGraph)
+  include CICGraphMonad(G)
 end
 module GB = GraphBuilder(CICGraph)
 
-module K = Graph_api.Make(Capnp.BytesMessage)
 let nt2nt transformer (nt : G.node node_type) cnt =
   let open K.Builder.Graph.Node.Label in
   match nt with
@@ -211,23 +223,24 @@ let et2et (et : edge_type) =
   | EvarSubstOrder -> EvarSubstOrder
   | EvarSubstValue -> EvarSubstValue
 
-let write_graph capnp_graph transformer nodes =
-  let nc, ec = List.fold_left (fun (nc, ec) (_, ch) -> nc + 1, ec + List.length ch) (0, 0) nodes in
-  let cnodes = K.Builder.Graph.nodes_init capnp_graph nc in
-  let cedges = K.Builder.Graph.edges_init capnp_graph ec in
-  ignore (List.fold_left (fun (ni, ei) (label, children) ->
-      let cnode = Capnp.Array.get cnodes ni in
-      nt2nt transformer label @@ K.Builder.Graph.Node.label_init cnode;
-      let cc = List.length children in
-      K.Builder.Graph.Node.children_count_set_exn cnode cc;
-      K.Builder.Graph.Node.children_index_set_int_exn cnode (if cc = 0 then 0 else ei);
-      let ei = List.fold_left (fun ei (label, (tp, ti)) ->
-          let et = Capnp.Array.get cedges ei in
-          K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
-          let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
-          K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
-          K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ ti;
-          ei + 1
-        ) ei children in
-      ni + 1, ei
-    ) (0, 0) nodes)
+let write_graph capnp_graph transformer
+    { node_count; edge_count; builder; _ } =
+  let nodes = K.Builder.Graph.nodes_init capnp_graph node_count in
+  let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
+  let state = { node_index = node_count - 1; edge_index = 0 } in
+  let arrays_add { node_index; edge_index } label children =
+    let node = Capnp.Array.get nodes node_index in
+    nt2nt transformer label @@ K.Builder.Graph.Node.label_init node;
+    let cc = List.length children in
+    K.Builder.Graph.Node.children_count_set_exn node cc;
+    K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);
+    let edge_index = List.fold_left (fun ei (label, (tp, ti)) ->
+        let et = Capnp.Array.get edges ei in
+        K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
+        let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
+        K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
+        K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ ti;
+        ei + 1
+      ) edge_index children in
+    { node_index = node_index - 1; edge_index } in
+  ignore(builder state arrays_add)

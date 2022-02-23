@@ -280,36 +280,51 @@ type ('s, 't, 'edge_label) directed_edge =
   { source : 's
   ; target : 't
   ; label  : 'edge_label }
-module SimpleGraph (D : sig type node_label type edge_label end) : GraphMonadType
+module SimpleGraph
+    (D : sig
+       type node_label
+       type edge_label
+       type result
+     end)
+  : GraphMonadType
   with type node_label = D.node_label
    and type edge_label = D.edge_label
    and type node = int
-   and type 'a repr_t = 'a * (D.node_label * (D.edge_label * int) list) list = struct
+   and type 'a repr_t =
+         'a *
+         ((node_count:int -> edge_count:int -> D.result) ->
+          (D.result -> D.node_label -> (D.edge_label * int) list -> D.result) ->
+          D.result)
+= struct
   include D
   type node = int
   type children = (edge_label * node) list
-  type writer = (node_label * children) DList.t
+  type writer = int * ((result -> node_label -> (edge_label * int) list -> result) -> result -> result)
   module M = Monad_util.StateWriterMonad
       (struct type s = node end)
       (struct type w = writer
-        let id = DList.nil
-        let comb = fun nls1 nls2 -> DList.append nls1 nls2 end)
+        let id = 0, fun _ r -> r
+        let comb (ec1, f1) (ec2, f2) = ec1 + ec2, fun c r -> f1 c (f2 c r) end)
   include M
-  type 'a repr_t = 'a * (node_label * children) list
+  type 'a repr_t =
+    'a *
+    ((node_count:int -> edge_count:int -> D.result) ->
+     (result -> node_label -> (edge_label * int) list -> result) ->
+     result)
   open Monad_util.WithMonadNotations(M)
   let mk_node nl ch =
     let* i = get in
     put (i + 1) >>
-    let+ () = tell @@ DList.singleton (nl, ch) in
+    let+ () = tell (0, fun c r -> c r nl ch) in
     i
   let with_delayed_node f =
     let* i = get in
     put (i + 1) >>
     pass @@
     let+ (v, nl, ch) = f i in
-    v, fun nls -> DList.cons (nl, ch) nls
+    v, fun (ec, nls) -> (ec + List.length ch), fun c r -> c (nls c r) nl ch
   let register_external _ = return ()
-  let run m =
-    let _, (ns, res) = run m 0 in
-    res, DList.to_list ns
+  let run m : 'a repr_t =
+    let node_count, ((edge_count, ns), res) = run m 0 in
+    res, fun mki c -> let r = mki ~node_count ~edge_count in ns c r
 end

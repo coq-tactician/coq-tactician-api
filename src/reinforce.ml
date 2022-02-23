@@ -38,7 +38,7 @@ let write_execution_result res hyps concl obj =
     let open Monad.Make(CICGraph) in
     let+ root, context_map = gen_proof_state hyps concl in
     snd root, context_map in
-  let (definitions, (root, context_map)), nodes, paths =
+  let (definitions, (root, context_map)), builder =
       CICGraph.run_empty ~follow_defs:true Names.Cmap.empty updater in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
@@ -47,7 +47,7 @@ let write_execution_result res hyps concl obj =
   (* Write graph to capnp structure *)
   let new_state = ExecutionResult.new_state_init res in
   let capnp_graph = ExecutionResult.NewState.graph_init new_state in
-  write_graph capnp_graph (fun _ -> 0) nodes;
+  write_graph capnp_graph (fun _ -> 0) builder;
   let state = ExecutionResult.NewState.state_init new_state in
   ProofState.root_set_int_exn state root;
   let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
