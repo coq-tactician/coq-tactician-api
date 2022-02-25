@@ -161,7 +161,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         ; constructors = !global_nodes.constructors
         ; projections = !global_nodes.projections } in
     let (known_definitions, constant_nodes), builder =
-      CICGraph.run ~follow_defs:true ~known_definitions proofs_map updater in
+      CICGraph.run ~known_definitions proofs_map updater in
     let tactical_constants = OList.filter_map (fun (c, n) ->
         match Cmap.mem c proofs_map with
         | true -> Some n

@@ -49,6 +49,31 @@ def visualize(graph, state, showLabel = False):
 
     dot.render('python_graph', view=False)
 
+def visualize_defs(graph, defs, showLabel = False):
+    nodes = graph.nodes
+    assert all(n < len(nodes) for n in defs)
+
+    dot = graphviz.Digraph()
+    dot.attr('graph', ordering="out")
+    for node, value in enumerate(nodes):
+        label = value.label.which()
+        if node in defs: label = str(node) + ': ' + value.label.definition.name
+        dot.node(str(node), label)
+    for node, value in enumerate(nodes):
+        for edge in list(graph.edges)[value.childrenIndex:value.childrenIndex+value.childrenCount]:
+            if showLabel:
+                label = str(edge.label)
+            else:
+                label = ""
+            if str(edge.label) in ["appArgOrder", "evarSubstOrder"]:
+                constraint = "false"
+            else:
+                constraint = "true"
+            dot.edge(str(node), str(edge.target.nodeIndex), label=label,
+                     arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
+
+    dot.render('python_graph', view=False)
+
 def visualize_exception(reason):
     dot = graphviz.Digraph()
     dot.node(str(reason), str(reason))

@@ -8,7 +8,7 @@
     graph_extractor
     graph_def
     graph_visualizer
-    ; nn_embedding_learner
+    neural_learner
     reinforce
     tactic_availability_learner
     graph_generator_learner

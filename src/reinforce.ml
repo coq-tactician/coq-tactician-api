@@ -5,7 +5,6 @@ open Ltac_plugin
 
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 open Capnp_rpc_lwt
-open Lwt.Infix
 
 module G = GlobalGraph
 open GB
@@ -39,7 +38,7 @@ let write_execution_result res hyps concl obj =
     let+ root, context_map = gen_proof_state hyps concl in
     snd root, context_map in
   let (definitions, (root, context_map)), builder =
-      CICGraph.run_empty ~follow_defs:true Names.Cmap.empty updater in
+      CICGraph.run_empty ~def_truncate:true Names.Cmap.empty updater in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
@@ -184,9 +183,10 @@ let pull_reinforce =
       release_param_caps ();
       let response, results = Service.Response.create Results.init_pointer in
 
-      let learner = Tactic_learner_internal.learner_get () in
-      let preds = learner.predict () [] in
-      let preds = List.map (fun p -> Tactic_learner_internal.TS.(p.tactic)) @@ IStream.to_list preds in
+      Tactic_learner_internal.process_queue ();
+      let tacs = Neural_learner.(!last_model) in
+      print_endline (string_of_int (List.length tacs));
+      let tacs = List.map (fun t -> t, Hashtbl.hash_param 255 255 t) tacs in
       let map = List.fold_left (fun map tac ->
           let open Tactic_learner_internal.TS in
           let tac = tactic_repr tac in
@@ -194,7 +194,7 @@ let pull_reinforce =
           let args, tac = Tactic_abstract.tactic_abstract tac in
           TacticMap.add
             (tactic_hash (tactic_make tac)) (tac, args) map)
-          TacticMap.empty preds in
+          TacticMap.empty tacs in
       let capability = available_tactics map in
       Results.available_set results (Some capability);
       Capability.dec_ref capability;
@@ -217,29 +217,6 @@ let pull_reinforce =
       Service.return response
   end
 
-let capnp_main conn =
-  let module Main = Api.Service.Main in
-  Main.local @@ object
-    inherit Main.service
-
-    method initialize_impl params release_param_caps =
-      let open Main.Initialize in
-      let response, results = Service.Response.create Results.init_pointer in
-      let x = Params.push_get params in
-      (* let callback s = *)
-      (*   let open Api.Client.PushReinforce.Reinforce in *)
-      (*   let request, params = Capability.Request.create Params.init_pointer in *)
-      (*   let res = Params.result_init params in *)
-      (*   execution_result res; *)
-      (*   Capability.call_for_unit_exn s method_id request in *)
-      Service.return_lwt @@ fun () -> Capability.with_ref (Option.get x) @@ fun s ->
-      (* callback s *) Lwt.return_unit >>= fun () ->
-      Results.pull_set results (Some pull_reinforce);
-      release_param_caps ();
-      Lwt.return @@ Ok response
-  end
-
-
 let () =
   Logs.set_level (Some Logs.Warning);
   Logs.set_reporter (Logs_fmt.reporter ())
@@ -251,7 +228,7 @@ let reinforce () =
                   |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
                     ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
                     ~switch in
-   let restore = Capnp_rpc_net.Restorer.single service_name (capnp_main endpoint) in
+   let restore = Capnp_rpc_net.Restorer.single service_name pull_reinforce in
    let _ : Capnp_rpc_unix.CapTP.t = Capnp_rpc_unix.CapTP.connect ~restore endpoint in
    let w, f = Lwt.wait () in
    Lwt_switch.add_hook (Some switch) (fun () -> Lwt.return @@ Lwt.wakeup f ());
