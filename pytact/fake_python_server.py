@@ -16,10 +16,23 @@ graph_api_capnp = capnp.load(graph_api_capnp)
 
 class PredictionContextImpl(graph_api_capnp.PredictionContext.Server):
 
-    def __init__(self, tacs):
+    def __init__(self, tacs):   # currently is initiliazed with a list of tactics that have 0 arguments
         self.tacs = tacs
 
     def predict(self, graph, state, _context):
+        '''
+        graph: Graph - proof state graph (dynamical graph per proof state)
+        state: ProofState (root, context, text), where context is the list of pointers to graph (text is not implemented)
+
+        returns List(Prediction)
+        Prediction is tactic + list of arguments *sorted* by decreasing confidence
+        # (currently the confidence itself is not used)
+        # the information is passed through the *sorted* order
+        where argument is a global node
+        where dep 0 stands for this local dynamical graph of the proof state
+        where dep 1 stands for the global graph with which we instantiated the predictionContext
+
+        '''
         print('New prediction request')
         gv.visualize(graph, state)
         preds = [{'tactic': {'ident': t, 'arguments': []}, 'confidence': 0.5} for t in self.tacs]
@@ -31,6 +44,13 @@ class PredictionContextImpl(graph_api_capnp.PredictionContext.Server):
 class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
 
     def predictionContext(self, available, graph, definitions, _context):
+        '''
+
+        available: AvailableTactics (interface implemented in coq)
+        graph: this is the global graph
+        definitions: the list of pointers to that graph
+        _context: is boilerplate for capnp
+        '''
         print('---------------- New prediction context -----------------')
 
         gv.visualize_defs(graph, definitions)
@@ -40,7 +60,8 @@ class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
             tacs = list(tacs.tactics)
             singleArgs = [t.ident for t in tacs if t.parameters == 0]
             print(singleArgs)
-            setattr(_context.results, 'result', PredictionContextImpl(singleArgs))
+            setattr(_context.results, 'result', PredictionContextImpl(singleArgs))    #set the result to return to coq
+                                                                                      # PredictionContextImpl(singleArgs)
             def printTacs2(text, tacs):
                 print(text)
                 return printTacs(tacs)
