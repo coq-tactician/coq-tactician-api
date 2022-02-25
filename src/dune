@@ -10,7 +10,6 @@
     graph_visualizer
     neural_learner
     reinforce
-    tactic_availability_learner
     graph_generator_learner
     graph_capnp_generator
     graph_api
