@@ -6,7 +6,7 @@ COPY --chown=coq:coq . coq-tactician-reinforce
 
 WORKDIR coq-tactician-reinforce
 
-RUN eval $(opam env) \
+RUN eval $(opam env) && opam update \
     && opam install -t ./coq-tactician-reinforce.opam -y
 
 RUN pip install .
