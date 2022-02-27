@@ -232,7 +232,6 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   let empty () = []
   let learn db _origin _outcomes tac =
-    print_endline "learning";
     let tac = tactic_repr tac in
     let db = tac::db in
     last_model := db;
