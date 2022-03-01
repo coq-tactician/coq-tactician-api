@@ -18,10 +18,6 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   open Capnp_rpc_lwt
   open Lwt.Infix
 
-  (* module G = GlobalGraph *)
-  (* module GB = DAGBuilder(G) *)
-  (* open GB *)
-
   let gen_proof_state ps =
     let open GB in
     let hyps = proof_state_hypotheses ps in
@@ -132,7 +128,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
           let conf = Prediction.confidence_get p in
           tac, conf
         ) in
-      let e = Event.send response_chan preds in
+      let e = Event.send response_chan (`Prediction preds) in
       Event.sync e;
       predict tacs t
     | `Init (tacs, env) ->
@@ -189,44 +185,62 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     Capability.call_and_wait t method_id request >>= function
     | Ok (res, release) ->
       let predictor = Option.get @@ Results.result_get res in
+      let e = Event.send response_chan `Initialized in
+      Event.sync e;
       Capability.with_ref predictor (predict map) >>= fun (init, env) ->
       release ();
       predict_init t init env
     (* let emb = Results.emb_get res in *)
     | Error _ -> CErrors.anomaly Pp.(str "Capnp protocol error")
 
-  let prediction_loop service =
-    let e = Event.receive request_chan in
-    match Event.sync e with
-    | `Predict _ -> CErrors.anomaly Pp.(str "Coq <-> Lwt protocol error")
-    | `Init (tacs, env) ->
-      predict_init service tacs env
+  let rec prediction_loop () =
+    Lwt.catch
+      (fun () ->
+         let e = Event.receive request_chan in
+         match Event.sync e with
+         | `Predict _ -> CErrors.anomaly Pp.(str "Coq <-> Lwt protocol error")
+         | `Init (tacs, env) ->
+           let ours, theirs = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+           Lwt_process.with_process_none ~stdin:(`FD_move theirs) ("", [| "pytact-server" |]) @@ fun p ->
+           Lwt.choose
+             [ (p#status >>= function
+               | WEXITED 0 -> Lwt.return_unit
+               | _ -> CErrors.anomaly Pp.(str "Neural process died unexpectedly"))
+             ; Lwt_switch.with_switch @@ fun switch ->
+                 let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr ours)
+                                |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
+                                  ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
+                                  ~switch in
+                 let conn = Capnp_rpc_unix.CapTP.connect ~restore:Capnp_rpc_net.Restorer.none endpoint in
+                 let main = Capnp_rpc_unix.CapTP.bootstrap conn service_name in
+                 Capability.with_ref main (fun service -> predict_init service tacs env) ])
+      (fun e ->
+         let s = Event.send response_chan (`Exception e) in
+         Event.sync s;
+         prediction_loop ())
 
   let () =
-    let ours, theirs = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-    ignore(Unix.create_process
-             "pytact-server" [| "pytact-server" |] theirs Unix.stdout Unix.stderr);
-    let predictor () =
-      Lwt_main.run @@
-      Lwt_switch.with_switch @@ fun switch ->
-       let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr ours)
-                      |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
-                        ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
-                        ~switch in
-       let conn = Capnp_rpc_unix.CapTP.connect ~restore:Capnp_rpc_net.Restorer.none endpoint in
-       let main = Capnp_rpc_unix.CapTP.bootstrap conn service_name in
-       Capability.with_ref main prediction_loop in
-    ignore(Thread.create predictor ())
+    ignore(Thread.create (fun () ->
+        try Lwt_main.run @@ prediction_loop ()
+        with Sys.Break -> print_endline "break received"; raise Sys.Break ) ())
 
   let init_predict tacs env =
     let e = Event.send request_chan (`Init (tacs, env)) in
-    Event.sync e
+    Event.sync e;
+    let e = Event.receive response_chan in
+    match Event.sync e with
+    | `Prediction p -> CErrors.anomaly Pp.(str "Coq <-> Lwt protocol error")
+    | `Initialized -> ()
+    | `Exception e -> raise e
 
   let predict ps =
     let e = Event.send request_chan (`Predict ps) in
     Event.sync e;
     let e = Event.receive response_chan in
-    Event.sync e
+    match Event.sync e with
+    | `Prediction p -> p
+    | `Initialized -> CErrors.anomaly Pp.(str "Coq <-> Lwt protocol error")
+    | `Exception e -> raise e
 
   type model = glob_tactic_expr list
 

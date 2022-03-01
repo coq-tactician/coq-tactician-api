@@ -38,7 +38,7 @@ class PredictionContextImpl(graph_api_capnp.PredictionContext.Server):
         preds = [{'tactic': {'ident': t, 'arguments': []}, 'confidence': 0.5} for t in self.tacs]
         print(preds)
         import time
-        time.sleep(5)
+        time.sleep(1)
         return preds
 
 class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
@@ -68,7 +68,7 @@ class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
             def printTacs(tacs):
                 if tacs == []:
                     import time
-                    time.sleep(5)
+                    time.sleep(1)
                 else:
                     return available.printTactic(tacs[0].ident).then(
                         lambda text: printTacs2(text, tacs[1:]))
