@@ -11,6 +11,7 @@ open GB
 
 module TacticMap = Int.Map
 
+open Lwt.Infix
 let debug_option = Goptions.declare_bool_option_and_ref
     ~depr:false ~name:"debug reinforce"
     ~key:["Tactician"; "Reinforce"; "Debug"]
