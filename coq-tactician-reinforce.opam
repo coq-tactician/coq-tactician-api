@@ -48,6 +48,7 @@ depends: [
   "fmt"
   "capnp-rpc-unix"
   "capnp-rpc-lwt"
+  "lwt_ppx"
   "ppx_deriving"
   "ocamlgraph"
   "dune" {>= "2.9"}

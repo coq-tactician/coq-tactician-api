@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 import graphviz
 
@@ -9,19 +10,24 @@ capnp.remove_import_hook()
 
 import pytact.common
 
-graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+
+labelled_graph_api = capnp.load(pytact.common.labelled_graph_api_filename)
 
 arrow_heads = [ "dot", "inv", "odot", "invdot", "invodot" ]
 edge_arrow_map = {}
-for group in graph_api_capnp.groupedEdges:
-    count = 0
-    for sort in group.conflatable:
-        edge_arrow_map[sort] = arrow_heads[count]
-        count += 1
 
-def visualize(graph, state, showLabel = False):
+logger = logging.getLogger(__name__)
+
+
+for group in labelled_graph_api.groupedEdges:
+    cnt = 0
+    for sort in group.conflatable:
+        edge_arrow_map[sort] = arrow_heads[cnt]
+        cnt += 1
+
+def visualize(graph, state, showLabel = False, filename='python_graph', cleanup=True):
     nodes = graph.nodes
+    edges = graph.edges
     root = state.root
     context = state.context
     assert all(n < len(nodes) for n in context)
@@ -72,9 +78,34 @@ def visualize_defs(graph, defs, showLabel = False):
             dot.edge(str(node), str(edge.target.nodeIndex), label=label,
                      arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
 
-    dot.render('python_graph', view=False)
+    dot.render(filename, view=False, cleanup=cleanup)
 
-def visualize_exception(reason):
+def visualize_exception(reason, filename='python_graph', cleanup=True):
     dot = graphviz.Digraph()
     dot.node(str(reason), str(reason))
-    dot.render('python_graph', view=False)
+    dot.render(filename, view=False, cleanup=cleanup)
+
+
+class Visualizer:
+    def __init__(self, filename, count, show_labels, cleanup):
+        self.filename = filename
+        self.cnt = 0
+        self.count = count
+        self.show_labels = show_labels
+        self.cleanup = cleanup
+        logger.error("with self.count %d", self.count)
+    def _visualize(self, filename, result):
+        if result.which() == 'newState':
+            visualize(result.newState.graph, result.newState.state,
+                         filename=filename, showLabel=self.show_labels, cleanup=self.cleanup)
+        else:
+            visualize_exception(result, filename=self.filename, cleanup=self.cleanup)
+
+    def render(self, result):
+        filename = self.filename
+        if self.count:
+            filename += str(self.cnt)
+            self.cnt += 1
+
+        self._visualize(filename, result)
+

@@ -11,7 +11,6 @@ import pytact.common
 import capnp
 capnp.remove_import_hook()
 
-
 graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
 
@@ -71,7 +70,7 @@ async def main():
                         action='store_true',
                         help='drop to the python shell after proof execution')
 
-    test_filename = pytact.common.test_filename()
+    test_filename = pytact.common.test_filename_stdin
 
     parser.add_argument('--file', type=str, default=test_filename,
                         help='path to coq source code file (.v extension) to execute in coq-tactician-reinforce')
@@ -85,7 +84,7 @@ async def main():
     write_task = asyncio.create_task(write_loop(client, writer))
     coroutines = [read_loop(client, reader, write_task), write_task]
     tasks = asyncio.gather(*coroutines, return_exceptions=True)
-    pull = client.bootstrap().cast_as(graph_api_capnp.PullReinforce)
+    main = client.bootstrap().cast_as(graph_api.Main)
 
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
     proc = await asyncio.create_subprocess_exec(
