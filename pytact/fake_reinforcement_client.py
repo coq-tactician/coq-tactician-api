@@ -12,7 +12,7 @@ import capnp
 capnp.remove_import_hook()
 
 graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+graph_api = capnp.load(graph_api_capnp)
 
 # Boilerplate code needed to have cap'n proto communicate through asyncio
 async def read_loop(client, reader, write_task):

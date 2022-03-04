@@ -16,8 +16,8 @@ import functools
 from typing import List
 import capnp
 
-labelled_graph_api_filename = pkg_resources.resource_filename('pytact','labelled_graph_api.capnp')
-api_filename = labelled_graph_api_filename
+graph_api_filename = pkg_resources.resource_filename('pytact','graph_api.capnp')
+api_filename = graph_api_filename
 
 test_filename_stdin = pkg_resources.resource_filename('pytact','tests/TestReinforceStdin.v')
 test_filename_tcp  =  pkg_resources.resource_filename('pytact','tests/TestReinforceTcp.v')
@@ -140,7 +140,7 @@ class Proving(Connection):
     this is a higher level wrapper over Connection class that
     provides higher level run_prover method that takes as an input
     and runs your function prover and provides
-    to prover the pull object of labelled_graph_api.capnp schema
+    to prover the pull object of graph_api.capnp schema
 
     Example:
 
@@ -164,7 +164,7 @@ class Proving(Connection):
         logger.info("ping responded: %s", resp.result)
 
         logger.info("calling Main initialize")
-        initialized = await coq_main.initialize(api.PushReinforce.Server()).a_wait()
+        initialized = await coq_main.initialize(api.LegacyPushReinforce.Server()).a_wait()
 
         pull = initialized.pull
         await prover(pull)
@@ -172,13 +172,13 @@ class Proving(Connection):
     async def run_prover(self, prover):
         """
         The method run_prover runs your function prover in coq 
-        evaluation session  using capnp protocol labelled_graph_api.capnp schema
+        evaluation session  using capnp protocol graph_api.capnp schema
 
         Your function prover should take one argument
 
         pull
 
-        that is an object defined by labelled_graph_api.capnp schema
+        that is an object defined by graph_api.capnp schema
 
         You can start the  proving session in your functin prover
         by opening coq proving environment with a call to pull as follows:
@@ -190,10 +190,10 @@ class Proving(Connection):
         available = await response.available.tactics().a_wait
 
         You get the context and goal packed in response.result 
-        as specified in labelled_graph_api.capnp schema
+        as specified in graph_api.capnp schema
 
         NOTICE: the implementation of this class depends on the particular naming
-        and data structures we have chosen in labelled_graph_api.capnp schema
+        and data structures we have chosen in graph_api.capnp schema
 
         This is subject to change
         """
@@ -211,7 +211,7 @@ def capnpLocalTactic(ident: int, local_arguments: List[int]):
     returns capnpTactic argument given  ident and a list of local nodes
     """
     res = {'ident': ident,
-            'arguments': [globalNode(nodeIndex) for nodeIndex in local_arguments]}
+            'arguments': [{'term': globalNode(nodeIndex)} for nodeIndex in local_arguments]}
     return res
 
 def graph_api_capnp():
@@ -233,6 +233,11 @@ async def runTactic(obj, tactic, vis=None):
         logger.debug('with context: %s', repr(context))
     if vis is not None:
         vis.render(result)
+
+    if result.which() == 'protocolError':
+        logger.error('received protocolError %s', result.protocolError.which())
+    #    raise ProtocolError  # our code is wrong
+        
     return result
 
 

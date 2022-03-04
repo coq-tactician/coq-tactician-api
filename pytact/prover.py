@@ -105,16 +105,18 @@ async def search_dfs(result, tactics, limit) -> Optional[List[capnpLocalTactic]]
 
 
 async def example_script_prover(args, pull):
+    TAC_INTROS = 126567959
+    TAC_APPLY = 165468576
     result, _ = await open_proof(pull, "forall A B C : Prop, (A -> B -> C) -> A -> B -> C", args.vis)
-    result = await runTactic(result.newState.obj, capnpLocalTactic(870093143, []))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(870093143, []))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(870093143, []))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(870093143, []))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(870093143, []))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(870093143, []))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(165468576, [7]))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(165468576, [13]))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(165468576, [15]))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [11]))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [13]))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [15]))
     assert result.which() == 'complete'  # if this is correct proof
 
 

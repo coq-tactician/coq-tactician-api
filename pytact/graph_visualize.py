@@ -11,7 +11,7 @@ capnp.remove_import_hook()
 import pytact.common
 
 
-labelled_graph_api = capnp.load(pytact.common.labelled_graph_api_filename)
+labelled_graph_api = capnp.load(pytact.common.graph_api_filename)
 
 arrow_heads = [ "dot", "inv", "odot", "invdot", "invodot" ]
 edge_arrow_map = {}
