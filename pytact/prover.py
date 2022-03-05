@@ -9,6 +9,7 @@ import argparse
 import functools
 import logging
 import itertools
+import time
 
 from typing import List, Optional, Iterable
 
@@ -153,6 +154,7 @@ async def client_connected_cb(counter, args, reader, writer):
         await proving.run_prover(functools.partial(example_script_prover, args))
 
     counter.dec()
+    logger.info("client connected cb finished %d", counter.cnt)
 
 
 def my_parse_args():
@@ -293,17 +295,20 @@ async def a_main(args):
         logger.info("starting a tcp/ip server on %s %d", py_ip, py_port)
         server = await asyncio.start_server(call_back, host=py_ip, port=py_port)
         if args.with_coq:
-            print("Python: launching coqc in subprocess", file=sys.stderr)
+            print("Python: launching coqc in subprocess!!", file=sys.stderr)
             proc = await asyncio.create_subprocess_exec(
                 'tactician', 'exec', 'coqc', args.coqfile,
                 stdin=None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE)
-            coqout, coqerr = await proc.communicate()
-            with open('coq_out.txt','wb') as f:
-                f.write(coqout)
-            with open('coq_err.txt','wb') as f:
-                f.write(coqerr)
+            #coqout, coqerr = await proc.communicate()
+            #print("proc finished!!", file=sys.stderr, flush=True)
+
+
+            #with open('coq_out.txt','wb') as f:
+            #    f.write(coqout)
+            #with open('coq_err.txt','wb') as f:
+            #    f.write(coqerr)
 
         async with server:
             server_task = asyncio.create_task(server.serve_forever())
@@ -321,7 +326,7 @@ async def a_main(args):
               file=sys.stderr)
 
         py_sock, coq_sock = socket.socketpair()
-
+        print(f"running tactician exec coqc {args.coqfile}")
         proc = await asyncio.create_subprocess_exec(
             'tactician', 'exec', 'coqc', args.coqfile,
             stdin=coq_sock,
@@ -330,12 +335,25 @@ async def a_main(args):
 
         reader, writer = await asyncio.open_connection(sock=py_sock)
         await call_back(reader, writer)
-        print(f"Python: call_back is returned")
-        coqout, coqerr = await proc.communicate()
-        with open('coq_out.txt','wb') as f:
-            f.write(coqout)
-        with open('coq_err.txt','wb') as f:
-            f.write(coqerr)
+        print(f"Python: call_back is returned!")
+        #await proc.wait()
+
+
+        # print(f"Python: proc finished")
+        
+        #coqout, coqerr = await proc.communicate()
+        #try: 
+        #    coqout, coqerr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+        #except:
+        #    print('TIMEOUT')
+        #print(f"Python: proc.communicate returned")
+        # debug_text = await proc.stdout.readline()
+        # print(f"Python: debug_text", debug_text, flush=True)
+        
+        # with open('coq_out.txt','wb') as f:
+        #     f.write(await proc.stdout.read(1000))
+        # with open('coq_err.txt','wb') as f:
+        #     f.write(await proc.stderr.read(1000))
 
 
 
