@@ -31,6 +31,7 @@ def process1(rootdir, args, fname):
         file_base_tactics_text = set()
         file_base_tactics_intermtext = set()
         file_tactics = Counter()
+        file_tactic_arguments = {}
         proof_steps = 0
         proof_steps_faithful = 0
         proofs = 0
@@ -67,6 +68,10 @@ def process1(rootdir, args, fname):
                         else:
                             faithful = False
                         file_tactics[p.tactic.ident] += 1
+                        file_tactic_arguments.setdefault(p.tactic.ident, len(p.tactic.arguments))
+                        if file_tactic_arguments[p.tactic.ident] != len(p.tactic.arguments):
+                            print(f'{fname}: Tactic with two different argument lengths detected')
+                            raise Exception
                         file_base_tactics_text.add(p.tactic.baseText)
                         file_base_tactics_intermtext.add(p.tactic.intermText)
                         for a in p.tactic.arguments:
@@ -84,11 +89,11 @@ def process1(rootdir, args, fname):
 
     return (fname, dep0, nodes_count, edges_count,
             file_tactical_definitions, file_base_tactics_text,
-            file_base_tactics_intermtext, file_tactics, proof_steps, proof_steps_faithful, proofs, proofs_faithful,
-            unresolvable)
+            file_base_tactics_intermtext, file_tactics, file_tactic_arguments,
+            proof_steps, proof_steps_faithful, proofs, proofs_faithful, unresolvable)
 
 def process2(rootdir, args, res):
-    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _  = res
+    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _  = res
     with open(fname) as f:
         print(fname)
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
@@ -170,6 +175,7 @@ def main():
     rootdir = Path(os.path.expanduser(args.dir))
 
     tactics = Counter()
+    tactic_arguments = {}
     base_tactics_text = set()
     base_tactics_intermtext = set()
     tactical_definitions = []
@@ -191,7 +197,7 @@ def main():
         (fname, dep0, nodes_count, edges_count,
          file_tactical_definitions, file_base_tactics_text,
          file_base_tactics_intermtext,
-         file_tactics, proof_steps, proof_steps_faithful,
+         file_tactics, file_tactic_arguments, proof_steps, proof_steps_faithful,
          proofs, proofs_faithful, unresolvable) = res
         len_nodes[dep0] = nodes_count
         nodes_total += nodes_count
@@ -204,6 +210,12 @@ def main():
         base_tactics_text.update(file_base_tactics_text)
         base_tactics_intermtext.update(file_base_tactics_intermtext)
         tactics += file_tactics
+        for tac, length in file_tactic_arguments.items():
+            tactic_arguments.setdefault(tac, length)
+            if tactic_arguments[tac] != length:
+                print(f'{fname}: Tactic with two different argument lengths detected')
+                raise Exception
+
         unresolvable_total += unresolvable
 
     print(f"Nodes total {nodes_total}")
