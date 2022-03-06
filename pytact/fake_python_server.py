@@ -2,9 +2,6 @@ import os
 import sys
 
 import socket
-import asyncio
-
-from pathlib import Path
 
 import capnp
 import pytact.common
@@ -14,98 +11,59 @@ capnp.remove_import_hook()
 graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
 
-class PredictionContextImpl(graph_api_capnp.PredictionContext.Server):
-
-    def __init__(self, tacs):   # currently is initiliazed with a list of tactics that have 0 arguments
-        self.tacs = tacs
-
-    def predict(self, graph, state, _context):
-        '''
-        graph: Graph - proof state graph (dynamical graph per proof state)
-        state: ProofState (root, context, text), where context is the list of pointers to graph (text is not implemented)
-
-        returns List(Prediction)
-        Prediction is tactic + list of arguments *sorted* by decreasing confidence
-        # (currently the confidence itself is not used)
-        # the information is passed through the *sorted* order
-        where argument is a global node
-        where dep 0 stands for this local dynamical graph of the proof state
-        where dep 1 stands for the global graph with which we instantiated the predictionContext
-
-        '''
-        print('New prediction request')
-        gv.visualize(graph, state)
-        preds = [{'tactic': {'ident': t, 'arguments': []}, 'confidence': 0.5} for t in self.tacs]
-        print(preds)
-        import time
-        time.sleep(1)
-        return preds
-
-class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
-
-    def predictionContext(self, available, graph, definitions, _context):
-        '''
-
-        available: AvailableTactics (interface implemented in coq)
-        graph: this is the global graph
-        definitions: the list of pointers to that graph
-        _context: is boilerplate for capnp
-        '''
-        print('---------------- New prediction context -----------------')
-
-        gv.visualize_defs(graph, definitions)
-
-        def cont(tacs):
-            print(tacs)
-            tacs = list(tacs.tactics)
-            singleArgs = [t.ident for t in tacs if t.parameters == 0]
-            print(singleArgs)
-            setattr(_context.results, 'result', PredictionContextImpl(singleArgs))    #set the result to return to coq
-                                                                                      # PredictionContextImpl(singleArgs)
-            def printTacs2(text, tacs):
-                print(text)
-                return printTacs(tacs)
-            def printTacs(tacs):
-                if tacs == []:
-                    import time
-                    time.sleep(1)
-                else:
-                    return available.printTactic(tacs[0].ident).then(
-                        lambda text: printTacs2(text, tacs[1:]))
-            return printTacs(tacs)
-        print("Available tactics:")
-        return available.tactics().then(cont)
-
-async def readloop(reader, server, write_task):
-    while not reader.at_eof():
-        data = await reader.read(4096)
-        await server.write(data)
-    write_task.cancel()
-
-
-async def writeloop(writer, server):
+def prediction_loop(r, s, tacs):
     while True:
-        data = await server.read(4096)
-        writer.write(data.tobytes())
+        g = next(r)
+        msg_type = g.which()
+        if msg_type == "predict":
+            gv.visualize(g.predict.graph, g.predict.state)
+            preds = [{'tactic': {'ident': t, 'arguments': []}, 'confidence': 0.5} for t in tacs]
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
+            print(response)
+            response.write_packed(s)
+            import time
+            time.sleep(1)
+        elif msg_type == "synchronize":
+            print(g)
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
+            print(response)
+            response.write_packed(s)
+        elif msg_type == "initialize":
+            return g
+        else:
+            print("Capnp protocol error")
+            raise Exception
 
+def initialize_loop(r, s):
+    g = next(r)
+    msg_type = g.which()
+    if msg_type == "initialize":
+        while True:
+            print('---------------- New prediction context -----------------')
+            gv.visualize_defs(g.initialize.graph, g.initialize.definitions)
+            print(g.initialize.tactics)
+            tacs = list(g.initialize.tactics)
+            singleArgs = [t.ident for t in tacs if t.parameters == 0]
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+            response.write_packed(s)
+            print(response)
+            import time
+            time.sleep(5)
+            g = prediction_loop(r, s, singleArgs)
+    elif msg_type == "synchronize":
+        print(g)
+        response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
+        print(response)
+        response.write_packed(s)
+        initialize_loop(r, s)
+    else:
+        print("Capnp protocol error")
+        raise Exception
 
-async def serve_capnp(reader, writer):
-    server = capnp.TwoPartyServer(bootstrap=PushReinforceImpl())
-
-    write_task = asyncio.create_task(writeloop(writer, server))
-    coroutines = [write_task, readloop(reader, server, write_task)]
-
-    tasks = asyncio.gather(*coroutines, return_exceptions=True)
-    await tasks
-
-
-async def main():
+def main():
     s = socket.socket(fileno=sys.stdin.fileno())
-    reader, writer = await asyncio.open_connection(sock=s)
-    await serve_capnp(reader, writer)
-
-def run_main():
-    asyncio.run(main())
+    r = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(s, traversal_limit_in_words=2**64-1)
+    initialize_loop(r, s)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
