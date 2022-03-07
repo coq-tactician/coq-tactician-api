@@ -328,7 +328,7 @@ module GraphBuilder
       let* root = mk_node Root children in
       let tac_orig = Tactic_name_remove.tactic_name_remove tac in
       let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
-      let args, interm_tactic = Tactic_one_variable.tactic_one_variable tac in
+      let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
       let tac = Extreme_tactic_normalize.tactic_normalize tac in
       let context = Id.Map.bindings context_map in
       let context_range = OList.map (fun (_, n) -> n) context in
