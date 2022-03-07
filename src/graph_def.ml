@@ -52,6 +52,7 @@ type 'node tactical_step =
   ; interm_tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
   ; tactic_hash : int
   ; arguments : 'node option list
+  ; tactic_exact : bool
   ; root : 'node
   ; context : 'node list }
 

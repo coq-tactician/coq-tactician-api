@@ -1,4 +1,4 @@
-@0xb9d31af01976cf9c; # v7
+@0x915afe00e8a4a2e1; # v8
 
 using File = Text;
 using DepIndex = UInt16;
@@ -103,6 +103,13 @@ struct Tactic {
   # Coq's internal AST of tactics. As such, there are slightly more unique `ident`'s than `bareText`'s in the dataset.
   baseText @3 :Text;
   intermText @4 :Text;
+
+  # Indicates whether or not `ident` + `arguments` is faithfully reversible into the original "strictified" tactic.
+  # Note that this does not necessarily mean that it represents exactly the tactic that was inputted by the user.
+  # All tactics are modified to be 'strict' (meaning that tactics that have delayed variables in them break).
+  # This flag measures the faithfulness of the representation w.r.t. the strict version of the tactic, not the
+  # original tactic inputted by the user.
+  exact @5 :Bool;
 }
 
 struct Dataset {

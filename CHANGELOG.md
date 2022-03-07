@@ -1,3 +1,10 @@
+# Unreleased
+
+Changes to the Capn'proto format:
+- Upgraded the magic id
+- Tactics now have a flag `exact` which indicates whether or not the representation faithfully represents
+  the original tactic. This comes with a caveat, please read the corresponding note in the `.capnp` API file.
+
 # stdlib-lgraph-intermediate-v7-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v7-global.tar.xz
 

@@ -363,7 +363,7 @@ module GraphBuilder
       let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
       { tactic = tac_orig; base_tactic = tac; interm_tactic
       ; tactic_hash = Hashtbl.hash_param 255 255 tac
-      ; arguments
+      ; arguments; tactic_exact
       ; root; context = context_range; ps_string } in
     match proof with
     | None -> gen_const_aux (ManualConst c)

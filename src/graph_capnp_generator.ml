@@ -93,7 +93,8 @@ let nt2nt transformer (nt : G.node node_type) cnt =
       name_set cdef (Constant.to_string c);
       let tconst = tactical_constant_init cdef in
       let arr = TacticalConstant.tactical_proof_init tconst (List.length proof) in
-      List.iteri (fun i ({ tactic; base_tactic; interm_tactic; tactic_hash; arguments; root; context; ps_string }
+      List.iteri (fun i ({ tactic; base_tactic; interm_tactic; tactic_hash; arguments; tactic_exact
+                         ; root; context; ps_string }
                          : G.node tactical_step) ->
           let arri = Capnp.Array.get arr i in
           let state = K.Builder.ProofStep.state_init arri in
@@ -103,6 +104,7 @@ let nt2nt transformer (nt : G.node node_type) cnt =
               (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
           K.Builder.ProofState.text_set state ps_string;
           K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
+          K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
           K.Builder.Tactic.text_set capnp_tactic
             (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) tactic));
           K.Builder.Tactic.base_text_set capnp_tactic
