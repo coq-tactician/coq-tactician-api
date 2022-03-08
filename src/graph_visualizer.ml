@@ -78,27 +78,27 @@ let make_graph graph =
   close_out chan;
   ignore @@ Sys.command "dot -Tpdf graph.dot -o graph.pdf"
 
-let make_global_graph x follow_defs =
+let make_global_graph ?def_depth x =
   let x =
     try
       Smartlocate.locate_global_with_alias x
     with Not_found -> CErrors.user_err (Pp.str "Invalid ident given") in
-  let (_, _), ns = CICGraph.run_empty ~follow_defs Names.Cmap.empty @@ Builder.gen_globref x in
+  let (_, _), ns = CICGraph.run_empty ?def_depth Names.Cmap.empty @@ Builder.gen_globref x in
   make_graph ns
 
-let make_constr_graph c follow_defs =
+let make_constr_graph ?def_depth c =
   let env = Global.env () in
   let sigma = Evd.from_env env in
   let evd, c = Constrintern.interp_constr_evars env sigma c in
-  let (_, _), ns = CICGraph.run_empty ~follow_defs Names.Cmap.empty @@
+  let (_, _), ns = CICGraph.run_empty ?def_depth Names.Cmap.empty @@
     Builder.gen_constr (EConstr.to_constr evd c) in
   make_graph ns
 
-let make_proof_graph state follow_defs =
+let make_proof_graph ?def_depth state =
   let _ =
     Pfedit.solve (Goal_select.get_default_goal_selector ()) None
       (Proofview.tclBIND Builder.gen_proof_state (fun res ->
-           let (_, _), ns = CICGraph.run_empty ~follow_defs Names.Cmap.empty res in
+           let (_, _), ns = CICGraph.run_empty ?def_depth Names.Cmap.empty res in
            make_graph ns;
            Proofview.tclUNIT ()))
       (Proof_global.get_proof state) in ()

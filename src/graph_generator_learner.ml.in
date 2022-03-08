@@ -3,11 +3,20 @@ open Tactic_learner
 open Names
 open Graph_extractor
 open Graph_capnp_generator
+open Graph_def
 
 let dirpath = Global.current_dirpath ()
 let data_file () = match Tactician_util.base_filename with
   | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
   | Some f -> f ^ ".bin"
+
+module G = GlobalGraph(DPset)(struct type result = graph_state end)
+module CICGraph = struct
+  type node' = DirPath.t * int
+  include CICGraphMonad(G)
+end
+module GB = GraphBuilder(CICGraph)
+module CapnpGraphWriter = CapnpGraphWriter(struct type path = DirPath.t end)(G)
 
 module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
@@ -99,7 +108,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let transformer tp =
       DPmap.find tp path_index in
     let capnp_graph = K.Builder.Dataset.graph_init g in
-    write_graph capnp_graph transformer builder;
+    CapnpGraphWriter.write_graph capnp_graph transformer builder;
     Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) (data_file ())
 
   open GB
@@ -161,7 +170,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         ; constructors = !global_nodes.constructors
         ; projections = !global_nodes.projections } in
     let (known_definitions, constant_nodes), builder =
-      CICGraph.run ~follow_defs:true ~known_definitions proofs_map updater in
+      CICGraph.run ~known_definitions proofs_map updater (Global.current_dirpath ()) in
     let tactical_constants = OList.filter_map (fun (c, n) ->
         match Cmap.mem c proofs_map with
         | true -> Some n

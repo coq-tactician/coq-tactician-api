@@ -1,4 +1,4 @@
-@0xb9d31af01976cf9c; # v7
+@0x915afe00e8a4a2e1; # v8
 
 using File = Text;
 using DepIndex = UInt16;
@@ -97,12 +97,20 @@ struct Tactic {
 
   ident @0 :TacticId;
   arguments @1 :List(Argument);
+
   text @2 :Text; # WARNING: This is currently not 1-to-1 isomorphic to (ident, arguments)!
   # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
   # Note, however, that this is a slight under-approximation, because tactic printing is not 100% isomorphic to
   # Coq's internal AST of tactics. As such, there are slightly more unique `ident`'s than `bareText`'s in the dataset.
   baseText @3 :Text;
   intermText @4 :Text;
+
+  # Indicates whether or not `ident` + `arguments` is faithfully reversible into the original "strictified" tactic.
+  # Note that this does not necessarily mean that it represents exactly the tactic that was inputted by the user.
+  # All tactics are modified to be 'strict' (meaning that tactics that have delayed variables in them break).
+  # This flag measures the faithfulness of the representation w.r.t. the strict version of the tactic, not the
+  # original tactic inputted by the user.
+  exact @5 :Bool;
 }
 
 struct Dataset {
@@ -149,12 +157,41 @@ interface PullReinforce {
 
 interface PushReinforce {
   reinforce @0 (result :ExecutionResult);
-  embed @1 (graph :Graph, root :NodeIndex) -> (emb :List(Float64));
 }
 
-interface Main {
-  initialize @0 (push :PushReinforce) -> (pull :PullReinforce);
+struct PredictionProtocol {
+  struct Request {
+    union {
+      # Start a context for making tactical predictions for proof search. The context includes the tactics
+      # that are currently available, the definitions that are available. Definitions are currently represented only
+      # by their root node, the body of the definition is immediately truncated.
+      initialize :group {
+        tactics @0 :List(AbstractTactic);
+        graph @1 :Graph;
+        definitions @2 :List(NodeIndex);
+      }
+      # Predict a list of tactics given the graph of a proof state. The graph is truncated when it finds a definition.
+      # Output is a list of predictions with a confidence. The list is expected to be sorted by decreasing confidence.
+      predict :group {
+        graph @3 :Graph;
+        state @4 :ProofState;
+      }
+      synchronize @5 :UInt64;
+    }
+  }
+  struct Prediction {
+    tactic @0 :Tactic;
+    confidence @1 :Float64;
+  }
+  struct Response {
+    union {
+      initialized @0 :Void;
+      prediction @1 :List(Prediction);
+      synchronized @2 :UInt64;
+    }
+  }
 }
+
 
 struct ProofStep {
   state @0 :ProofState;
