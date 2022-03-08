@@ -97,6 +97,7 @@ struct Tactic {
 
   ident @0 :TacticId;
   arguments @1 :List(Argument);
+
   text @2 :Text; # WARNING: This is currently not 1-to-1 isomorphic to (ident, arguments)!
   # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
   # Note, however, that this is a slight under-approximation, because tactic printing is not 100% isomorphic to

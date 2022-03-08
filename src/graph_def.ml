@@ -329,3 +329,65 @@ module SimpleGraph
     let node_count, ((edge_count, ns), res) = run m 0 in
     res, fun mki c -> let r = mki ~node_count ~edge_count in ns c r
 end
+
+(* TODO: See if this can be merged with SimpleGraph *)
+type edge_label = edge_type
+type ('path, 'paths, 'result) builder =
+  { paths : 'paths
+  ; node_count : int
+  ; edge_count : int
+  ; builder : 'result -> ('result -> ('path * int) node_type -> (edge_label * ('path * int)) list -> 'result) -> 'result }
+module GlobalGraph(S : Set.S)(D : sig type result end) : GraphMonadType
+  with type node_label = (S.elt * int) node_type
+   and type edge_label = edge_label
+   and type node = S.elt * int
+   and type 'a repr_t = S.elt -> 'a * (S.elt, S.t, D.result) builder
+= struct
+  open D
+  type node = S.elt * int
+  type edge_label = edge_type
+  type node_label = node node_type
+  type children = (edge_label * node) list
+  type writer =
+    { nodes : (result -> node_label -> children -> result) -> result -> result
+    ; paths : S.t
+    ; edge_count : int }
+  module M = Monad_util.ReaderStateWriterMonad
+      (struct type r = S.elt end)
+      (struct type s = int end)
+      (struct type w = writer
+        let id = { nodes = (fun _ r -> r); paths = S.empty; edge_count = 0 }
+        let comb = fun
+          { nodes = f1; paths = p1; edge_count = ec1 }
+          { nodes = f2; paths = p2; edge_count = ec2 } ->
+          { nodes = (fun c r -> f1 c (f2 c r)); paths = S.union p1 p2; edge_count = ec1 + ec2 } end)
+  include M
+  type nonrec 'a repr_t = S.elt -> 'a * (S.elt, S.t, D.result) builder
+  open Monad_util.WithMonadNotations(M)
+  let index_to_node i =
+    let+ current = ask in
+    current, i
+  let children_paths ch ps =
+    List.fold_left (fun ps (_, (p, _)) -> S.add p ps) ps ch
+  let mk_node nl ch =
+    let* i = get in
+    put (i + 1) >>
+    let* () = tell { nodes = (fun c r -> c r nl ch); paths = children_paths ch S.empty
+                   ; edge_count = List.length ch } in
+    index_to_node i
+  let with_delayed_node f =
+    let* i = get in
+    put (i + 1) >>
+    pass @@
+    let* n = index_to_node i in
+    let+ (v, nl, ch) = f n in
+    v, fun { nodes; paths; edge_count } -> { nodes = (fun c r -> c (nodes c r) nl ch)
+                                           ; paths = children_paths ch paths
+                                           ; edge_count = edge_count + List.length ch }
+  let register_external (tp, _) =
+    tell { nodes = (fun _ r -> r); paths = S.singleton tp; edge_count = 0 }
+  let run m current =
+    let node_count, ({ nodes; paths; edge_count }, result) = run m current 0 in
+    result, { paths; node_count; edge_count
+            ; builder = (fun r c -> nodes c r) }
+end
