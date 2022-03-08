@@ -85,6 +85,8 @@ def process1(rootdir, args, fname):
             raise Exception
         for _dep in g.dependencies:
             check_dep(fname, rootdir, _dep)
+        # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
+        g.total_size
 
 
     return (fname, dep0, nodes_count, edges_count,
@@ -116,6 +118,8 @@ def process2(rootdir, args, res):
                     dep_b = dep_f.read()
                     dep_g = graph_api_capnp.Dataset.from_bytes_packed(dep_b, traversal_limit_in_words=2**64-1)
                     dep_len_nodes = len(dep_g.graph.classifications)
+                    # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
+                    g.total_size
             if not t.target.nodeIndex < dep_len_nodes:
                 print(f"in {fname} reference to {g.dependencies[x.target.depIndex]} "
                       f"with node {x.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
@@ -149,6 +153,8 @@ def process2(rootdir, args, res):
                         # TODO: We should check that this node is actually a definition
                     else:
                         print(f"{fname}: unknown tactical argument {a}")
+        # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
+        g.total_size
 
 def entropy(d):
     n = sum(d.values())
