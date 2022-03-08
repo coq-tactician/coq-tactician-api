@@ -36,10 +36,11 @@ module type CICGraphMonadType = sig
   val find_projection : Projection.Repr.t -> node option t
 
   (** Managing the local context *)
-  val lookup_relative    : int -> node t
-  val lookup_named       : Id.t -> node t
-  val lookup_named_map   : node Id.Map.t t
-  val lookup_follow_defs : bool t
+  val lookup_relative     : int -> node t
+  val lookup_named        : Id.t -> node t
+  val lookup_named_map    : node Id.Map.t t
+  val lookup_def_depth    : int option t
+  val lookup_def_truncate : bool t
   val lookup_proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t t
 
   val get_named_context : node Id.Map.t t
@@ -48,6 +49,7 @@ module type CICGraphMonadType = sig
   val with_relatives      : node list -> 'a t -> 'a t
   val with_named          : Id.t -> node -> 'a t -> 'a t
   val with_empty_contexts : 'a t -> 'a t
+  val with_decremented_def_depth : 'a t -> 'a t
 
   type definitions =
     { constants            : node Cmap.t
@@ -56,12 +58,12 @@ module type CICGraphMonadType = sig
     ; projections          : node ProjMap.t }
 
   val run :
-    follow_defs:bool ->
+    ?def_truncate:bool -> ?def_depth:int ->
     known_definitions:definitions ->
     (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
     'a t -> (definitions * 'a) repr_t
   val run_empty :
-  follow_defs:bool ->
+    ?def_truncate:bool -> ?def_depth:int ->
     (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
     'a t -> (definitions * 'a) repr_t
 end
@@ -79,9 +81,10 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     ; constructors         : node Constrmap.t
     ; projections          : node ProjMap.t }
   type context =
-    { relative    : node list
-    ; named       : node Id.Map.t
-    ; follow_defs : bool
+    { relative     : node list
+    ; named        : node Id.Map.t
+    ; def_depth    : int option
+    ; def_truncate : bool
     ; proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t }
 
   module M = Monad_util.ReaderStateMonadT
@@ -175,9 +178,12 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let lookup_named id =
     let+ named = lookup_named_map in
     Id.Map.find id named
-  let lookup_follow_defs =
-    let+ { follow_defs; _ } = ask in
-    follow_defs
+  let lookup_def_depth =
+    let+ { def_depth; _ } = ask in
+    def_depth
+  let lookup_def_truncate =
+    let+ { def_truncate; _ } = ask in
+    def_truncate
   let lookup_proofs_map =
     let+ { proofs_map; _ } = ask in
     proofs_map
@@ -192,21 +198,24 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     local (fun ({ named; _ } as c) -> { c with named = Id.Map.update id (update_error n) named })
   let with_empty_contexts m =
     local (fun c -> { c with named = Id.Map.empty; relative = [] }) m
+  let with_decremented_def_depth m =
+    local (fun ({ def_depth; _ } as c) ->
+        { c with def_depth = Option.map (fun def_depth -> assert (def_depth > 0); def_depth - 1) def_depth }) m
 
   (** High level drawing commands that draw from a given focus *)
 
-  let run ~follow_defs ~known_definitions proofs_map m =
+  let run ?(def_truncate=false) ?def_depth ~known_definitions proofs_map m =
     G.run @@
     let context =
-      { relative = []; named = Id.Map.empty; follow_defs; proofs_map } in
+      { relative = []; named = Id.Map.empty; def_depth; def_truncate; proofs_map } in
     run m context known_definitions
-  let run_empty ~follow_defs proofs_map m =
+  let run_empty ?(def_truncate=false) ?def_depth proofs_map m =
     let known_definitions =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
       ; constructors = Constrmap.empty
       ; projections = ProjMap.empty} in
-    run ~follow_defs ~known_definitions proofs_map m
+    run ~def_truncate ?def_depth ~known_definitions proofs_map m
 end
 
 module GraphBuilder
@@ -274,29 +283,39 @@ module GraphBuilder
     String.concat ", " hyps ^ " |- " ^ goal
 
   let follow_def alt m =
-    let* follow_defs = lookup_follow_defs in
-    if follow_defs then m else mk_node alt []
+    let* follow_defs = lookup_def_depth in
+    match follow_defs with
+    | None -> m
+    | Some follow_defs ->
+      if follow_defs > 0 then with_decremented_def_depth m else mk_node alt []
+
+  let if_not_truncate alt m =
+    let* truncate = lookup_def_truncate in
+    if truncate then alt else m
 
   let rec gen_const c : G.node t =
     (* Only process canonical constants *)
     let c = Constant.make1 (Constant.canonical c) in
+    follow_def (mk_definition @@ ManualConst c) @@
     cached_gen_const c @@
     let* proofs = lookup_proofs_map in
     let proof = Cmap.find_opt c proofs in
     let gen_const_aux d =
       let { const_hyps; const_body; const_type; _ } = Global.lookup_constant c in
-      let* ctx, b = with_named_context gen_constr const_hyps @@
-        let* typ = gen_constr const_type in
-        let bt, b = match const_body with
-          | Undef _ -> ConstUndef, mk_node ConstEmpty []
-          | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
-          | OpaqueDef c ->
-            let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Global.opaque_tables ()) c in
-            ConstOpaqueDef, gen_constr c
-          | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
-        let+ b = b in
-        [ ConstType, typ; bt, b ] in
-      mk_node (mk_definition d) (b @ ctx)
+      let* children = if_not_truncate (return []) @@
+        let+ ctx, b = with_named_context gen_constr const_hyps @@
+          let* typ = gen_constr const_type in
+          let bt, b = match const_body with
+            | Undef _ -> ConstUndef, mk_node ConstEmpty []
+            | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
+            | OpaqueDef c ->
+              let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Global.opaque_tables ()) c in
+              ConstOpaqueDef, gen_constr c
+            | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
+          let+ b = b in
+          [ ConstType, typ; bt, b ] in
+        b@ctx in
+      mk_node (mk_definition d) children
     in
     let gen_tactical_proof (ps, tac) =
       let gen_proof_state (hyps, concl) =
@@ -309,10 +328,9 @@ module GraphBuilder
       let* root = mk_node Root children in
       let tac_orig = Tactic_name_remove.tactic_name_remove tac in
       let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
-      let args, interm_tactic = Tactic_one_variable.tactic_one_variable tac in
-      let tac = Extreme_tactic_normalize.tactic_normalize tac in
-      let context = Id.Map.bindings context_map in
-      let context_range = OList.map (fun (_, n) -> n) context in
+      let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
+      let base_tactic = Tactic_one_variable.tactic_strip tac in
+      let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings context_map in
       let warn_arg id =
         Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
                                  Pptactic.pr_glob_tactic (Global.env ()) tac_orig (* ++ str " in context\n" ++ *)
@@ -325,10 +343,15 @@ module GraphBuilder
         List.map (function
             | TVar id ->
               return @@ check_default id @@
-              Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context
+              Id.Map.find_opt id context_map
             | TRef c ->
               (match c with
-               | GlobRef.VarRef _ -> assert false
+               | GlobRef.VarRef id ->
+                 (* TODO: Currently this is not reversible, because we cannot detect the difference between
+                    TVar _ and TRef (VarRef _). This should be fixable by making section variables not part
+                    of the local context. *)
+                 return @@ check_default id @@
+                 Id.Map.find_opt id context_map
                | GlobRef.ConstRef c ->
                  let+ c = gen_const c in
                  Some c
@@ -342,9 +365,9 @@ module GraphBuilder
             | TOther -> return None
           ) args in
       let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
-      { tactic = tac_orig; base_tactic = tac; interm_tactic
-      ; tactic_hash = Hashtbl.hash_param 255 255 tac
-      ; arguments
+      { tactic = tac_orig; base_tactic; interm_tactic
+      ; tactic_hash = Hashtbl.hash_param 255 255 base_tactic
+      ; arguments; tactic_exact
       ; root; context = context_range; ps_string } in
     match proof with
     | None -> gen_const_aux (ManualConst c)
@@ -417,23 +440,26 @@ module GraphBuilder
         ) inds in
       (), inds
   and gen_inductive ((m, _) as i) : G.node t =
-    gen_mutinductive_helper m >>
-    let+ n = find_inductive i in
-    match n with
-    | Some inn -> inn
-    | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
+    follow_def (mk_definition @@ Ind i)
+      (gen_mutinductive_helper m >>
+       let+ n = find_inductive i in
+       match n with
+       | Some inn -> inn
+       | None -> CErrors.anomaly (Pp.str "Inductive generation problem"))
   and gen_constructor (((m, _), _) as c) : G.node t =
-    gen_mutinductive_helper m >>
-    let+ n = find_constructor c in
-    match n with
-    | Some cn -> cn
-    | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
+    follow_def (mk_definition @@ Construct c)
+      (gen_mutinductive_helper m >>
+       let+ n = find_constructor c in
+       match n with
+       | Some cn -> cn
+       | None -> CErrors.anomaly (Pp.str "Inductive generation problem"))
   and gen_projection p =
-    gen_mutinductive_helper (Projection.mind p) >>
-    let+ n = find_projection (Projection.repr p) in
-    match n with
-    | Some cn -> cn
-    | None -> CErrors.anomaly (Pp.str "Inductive generation problem")
+    follow_def (mk_definition @@ Proj (Projection.repr p))
+      (gen_mutinductive_helper (Projection.mind p) >>
+       let+ n = find_projection (Projection.repr p) in
+       match n with
+       | Some cn -> cn
+       | None -> CErrors.anomaly (Pp.str "Inductive generation problem"))
   and gen_constr c = gen_kind_of_term @@ Constr.kind c
   and gen_kind_of_term = function
     | Rel i ->
@@ -492,18 +518,15 @@ module GraphBuilder
           arg, (AppArgPointer, arg)::acc)
           (fn, [AppFunPointer, fn]) @@ Array.to_list args in
       mk_node App (OList.rev args)
-    | Const (c, u) ->
-      follow_def (mk_definition (ManualConst c)) @@ gen_const c
-    | Ind (i, u) ->
-      follow_def (mk_definition (Ind i)) @@ gen_inductive i
-    | Construct (c, u) ->
-      follow_def (mk_definition (Construct c)) @@ gen_constructor c
+    | Const (c, u) -> gen_const c
+    | Ind (i, u) -> gen_inductive i
+    | Construct (c, u) -> gen_constructor c
     | Case (i, ret, term, branches) ->
-      let* ind = follow_def (mk_definition (Ind i.ci_ind)) @@ gen_inductive i.ci_ind in
+      let* ind = gen_inductive i.ci_ind in
       let* ret = gen_constr ret in
       let* term = gen_constr term in
       let* branches = List.map (fun (c, branch) ->
-          let* cstr = follow_def (mk_definition (Construct (i.ci_ind, c + 1))) @@ gen_constructor (i.ci_ind, c + 1) in
+          let* cstr = gen_constructor (i.ci_ind, c + 1) in
           let* term = gen_constr branch in
           let+ branch = mk_node CaseBranch [CBConstruct, cstr; CBTerm, term] in
           CaseBranchPointer, branch)
@@ -530,7 +553,7 @@ module GraphBuilder
         funs, children in
       mk_node CoFix @@ (CoFixReturn, (OList.nth funs ret))::(OList.map (fun f -> CoFixMutual, f) funs)
     | Proj (p, term) ->
-      let* fn = follow_def (mk_definition (Proj (Projection.repr p))) @@ gen_projection p in
+      let* fn = gen_projection p in
       let* fn = mk_node AppFun [AppFunValue, fn] in
       let* term = gen_constr term in
       let* arg = mk_node AppArg [AppArgValue, term; AppArgOrder, fn] in

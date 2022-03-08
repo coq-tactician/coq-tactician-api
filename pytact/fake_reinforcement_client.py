@@ -28,29 +28,6 @@ async def write_loop(client, writer):
         writer.write(data.tobytes())
         await writer.drain()
 
-# A class that implements reinforcement learning when it is initiated from Coq's side
-class PushReinforceImpl(graph_api_capnp.PushReinforce.Server):
-
-    # This function is tricky, because you cannot use asyncio in it. You have to use
-    # the C++ async library, which uses 'then()' as a chaining mechanism. This may cause
-    # some poblems.
-    def reinforce(self, result, _context):
-        print('Fake Reinforcer: reinforce')
-        print(result)
-        def imp(result, x):
-            if x == 0:
-                return
-            else:
-                return result.newState.obj.runTactic({ 'id': x, 'arguments': []}).then(
-                    lambda p: imp(p.result, x - 1))
-        return imp(result, 20)
-
-    def embed(self, graph, root, _context):
-        print('Fake Reinforcer: embed')
-        print(graph)
-        print(root)
-        return [1, 2, 3, 4, 5]
-
 # Helper function to visualize an execution result
 def visualize(state):
     kind = state.which()
@@ -108,7 +85,7 @@ async def main():
     write_task = asyncio.create_task(write_loop(client, writer))
     coroutines = [read_loop(client, reader, write_task), write_task]
     tasks = asyncio.gather(*coroutines, return_exceptions=True)
-    main = client.bootstrap().cast_as(graph_api_capnp.Main)
+    pull = client.bootstrap().cast_as(graph_api_capnp.PullReinforce)
 
     # Start Coq, giving the other end of the socket as stdin, and sending stdout to our stdout
     proc = await asyncio.create_subprocess_exec(
@@ -118,15 +95,9 @@ async def main():
         stdout=None,
         stderr=None)
 
-    # Initialize the connection. This sends an object to Coq, that it can call to initiate
-    # a reinforcement session, or cache an embedding. In this way, python also acts a a server,
-    # even though the connection is initiated as if python is the client.
-    initialized = await main.initialize(PushReinforceImpl()).a_wait()
-
     # Here, we initiate a reinforcement session from python's side. This is reasonably nice,
     # because you can wrap the code into asyncio using 'a_wait'. It is still slow though.
     # Bigger problems occur in 'PushReinforceImpl', where we cannot wrap in asyncio.
-    pull = initialized.pull
 
     state, tacs = await reinforce(pull, "forall A B C : Prop, (A -> B -> C) -> A -> B -> C")
     state = await runTactic(state.newState.obj, 126567959, [])

@@ -8,15 +8,15 @@ open Graph_visualizer
 }
 
 VERNAC COMMAND EXTEND LGraph CLASSIFIED AS QUERY
-| [ "Graph" "Ident" global(x) ] -> { make_global_graph x false }
-| [ "Full" "Graph" "Ident" global(x) ] -> { make_global_graph x true }
-| [ "Graph" "Term" constr(x) ] -> { make_constr_graph x false }
-| [ "Full" "Graph" "Term" constr(x) ] -> { make_constr_graph x true }
+| [ "Graph" "Ident" global(x) ] -> { make_global_graph x }
+| [ "Graph" "Depth" int(d) "Ident" global(x) ] -> { make_global_graph ~def_depth:d x }
+| [ "Graph" "Term" constr(x) ] -> { make_constr_graph x }
+| [ "Graph" "Depth" int(d) "Term" constr(x) ] -> { make_constr_graph ~def_depth:d x }
 END
 
 VERNAC COMMAND EXTEND LGraphProof CLASSIFIED AS QUERY STATE proof_query
-| [ "Graph" "Proof" ] -> { fun ~pstate -> make_proof_graph pstate false }
-| [ "Full" "Graph" "Proof" ] -> { fun ~pstate -> make_proof_graph pstate true }
+| [ "Graph" "Proof" ] -> { fun ~pstate -> make_proof_graph pstate }
+| [ "Graph" "Depth" int(d) "Proof" ] -> { fun ~pstate -> make_proof_graph ~def_depth:d pstate }
 END
 
 VERNAC COMMAND EXTEND Reinforce CLASSIFIED AS QUERY

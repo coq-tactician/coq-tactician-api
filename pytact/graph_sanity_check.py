@@ -31,6 +31,7 @@ def process1(rootdir, args, fname):
         file_base_tactics_text = set()
         file_base_tactics_intermtext = set()
         file_tactics = Counter()
+        file_tactic_arguments = {}
         proof_steps = 0
         proof_steps_faithful = 0
         proofs = 0
@@ -67,6 +68,10 @@ def process1(rootdir, args, fname):
                         else:
                             faithful = False
                         file_tactics[p.tactic.ident] += 1
+                        file_tactic_arguments.setdefault(p.tactic.ident, len(p.tactic.arguments))
+                        if file_tactic_arguments[p.tactic.ident] != len(p.tactic.arguments):
+                            print(f'{fname}: Tactic with two different argument lengths detected')
+                            raise Exception
                         file_base_tactics_text.add(p.tactic.baseText)
                         file_base_tactics_intermtext.add(p.tactic.intermText)
                         for a in p.tactic.arguments:
@@ -80,15 +85,17 @@ def process1(rootdir, args, fname):
             raise Exception
         for _dep in g.dependencies:
             check_dep(fname, rootdir, _dep)
+        # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
+        g.total_size
 
 
     return (fname, dep0, nodes_count, edges_count,
             file_tactical_definitions, file_base_tactics_text,
-            file_base_tactics_intermtext, file_tactics, proof_steps, proof_steps_faithful, proofs, proofs_faithful,
-            unresolvable)
+            file_base_tactics_intermtext, file_tactics, file_tactic_arguments,
+            proof_steps, proof_steps_faithful, proofs, proofs_faithful, unresolvable)
 
 def process2(rootdir, args, res):
-    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _  = res
+    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _  = res
     with open(fname) as f:
         print(fname)
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
@@ -111,6 +118,8 @@ def process2(rootdir, args, res):
                     dep_b = dep_f.read()
                     dep_g = graph_api_capnp.Dataset.from_bytes_packed(dep_b, traversal_limit_in_words=2**64-1)
                     dep_len_nodes = len(dep_g.graph.classifications)
+                    # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
+                    g.total_size
             if not t.target.nodeIndex < dep_len_nodes:
                 print(f"in {fname} reference to {g.dependencies[x.target.depIndex]} "
                       f"with node {x.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
@@ -144,6 +153,8 @@ def process2(rootdir, args, res):
                         # TODO: We should check that this node is actually a definition
                     else:
                         print(f"{fname}: unknown tactical argument {a}")
+        # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
+        g.total_size
 
 def entropy(d):
     n = sum(d.values())
@@ -170,6 +181,7 @@ def main():
     rootdir = Path(os.path.expanduser(args.dir))
 
     tactics = Counter()
+    tactic_arguments = {}
     base_tactics_text = set()
     base_tactics_intermtext = set()
     tactical_definitions = []
@@ -191,7 +203,7 @@ def main():
         (fname, dep0, nodes_count, edges_count,
          file_tactical_definitions, file_base_tactics_text,
          file_base_tactics_intermtext,
-         file_tactics, proof_steps, proof_steps_faithful,
+         file_tactics, file_tactic_arguments, proof_steps, proof_steps_faithful,
          proofs, proofs_faithful, unresolvable) = res
         len_nodes[dep0] = nodes_count
         nodes_total += nodes_count
@@ -204,6 +216,12 @@ def main():
         base_tactics_text.update(file_base_tactics_text)
         base_tactics_intermtext.update(file_base_tactics_intermtext)
         tactics += file_tactics
+        for tac, length in file_tactic_arguments.items():
+            tactic_arguments.setdefault(tac, length)
+            if tactic_arguments[tac] != length:
+                print(f'{fname}: Tactic with two different argument lengths detected')
+                raise Exception
+
         unresolvable_total += unresolvable
 
     print(f"Nodes total {nodes_total}")
