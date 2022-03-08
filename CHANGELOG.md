@@ -1,4 +1,18 @@
-# Unreleased
+# stdlib-lgraph-intermediate-v8-global
+http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v8-global.tar.xz
+
+The main goal of this release is to align the tactics in the dataset to tactics that can be read and interpreted
+by Coq during interactive proof search. As such, the hashes of the base tactics have changed, and the way that
+arguments are extracted is also different. These changes are internal to the Coq plugin and the Capnp API is not
+meaningfully changed. For every tactic, it has been checked that we can substitute the extracted arguments back
+to obtain the same result as is represented textually by the `intermText` field.
+Note that this does not mean that such tactics represent exactly what the user originally wrote!
+
+As a result, the amount of unique tactics and related statistics have changed slightly. However, the most
+significant change is that the number of unresolvable arguments has increased from 3809 to 5770. It is not
+clear as of yet which change caused this increase (but it is likely unavoidable).
+
+Additionally, the number of proofs we can faithfully represent has decreased from 6258 to 6205.
 
 Changes to the Capn'proto format:
 - Upgraded the magic id
