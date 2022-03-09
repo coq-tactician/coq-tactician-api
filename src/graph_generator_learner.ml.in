@@ -70,7 +70,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     if Libnames.is_dirpath_prefix_of dirp (Libnames.dirpath name) then `File else `Dependency
 
   let empty () = []
-  let learn db (path, _status) outcomes tac =
+  let learn db (path, status) outcomes tac =
     match cache_type path with
     | `File ->
       let proof_states = List.map (fun x -> x.before) outcomes in
@@ -78,7 +78,10 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         | (ls, ppath)::data when Libnames.eq_full_path path ppath ->
           ((proof_states, tac)::ls, ppath)::data
         | _ -> ([proof_states, tac], path)::db in
-      last_model := db; db
+      (match status with
+       | QedTime -> last_model := db
+       | _ -> ());
+      db
     | `Dependency -> db
   let predict db situations = IStream.empty
   let evaluate db _ _ = 0., db
@@ -155,13 +158,17 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
     (* Correctness check *)
     let lemmas = OList.map snd proof_states in
-    let context_lemmas = OList.map (fun x -> Nametab.path_of_global (Names.GlobRef.ConstRef x)) constants in
-    let lemmas = OList.filter (fun x -> not @@ OList.exists (fun y -> Libnames.eq_full_path x y ) context_lemmas) lemmas in
+    let global_context = OList.map (fun x -> Nametab.path_of_global (Names.GlobRef.ConstRef x)) @@
+      Cset.elements @@ Cmap_env.fold (fun c _ m ->
+        let c = Constant.make1 @@ Constant.canonical c in
+        Cset.add c m) globrefs.constants Cset.empty in
+    let lemmas = OList.filter (fun x ->
+        not @@  OList.exists (Libnames.eq_full_path x) global_context) lemmas in
     OList.iter (fun x ->
         let base = Libnames.basename x in
-        let candidates = OList.filter (fun x -> Names.Id.equal (Libnames.basename x) base ) context_lemmas in
-        CErrors.user_err Pp.(str "Unknown lemma: " ++ Libnames.pr_path x ++ str "\nAlternatives:\n" ++
-                                 prlist_with_sep (fun () -> str "\n") Libnames.pr_path candidates)) lemmas;
+        let candidates = OList.filter (fun x -> Names.Id.equal (Libnames.basename x) base ) global_context in
+        CErrors.anomaly Pp.(str "Unknown lemma: " ++ Libnames.pr_path x ++ str "\nAlternatives:\n" ++
+                            prlist_with_sep (fun () -> str "\n") Libnames.pr_path candidates)) lemmas;
     (* End correctness check *)
 
     let env = Global.env () in
