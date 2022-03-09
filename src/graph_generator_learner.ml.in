@@ -28,21 +28,33 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
   let last_model = Summary.ref ~name:"dataset-generator-learner-lastmodel" []
 
+  type glob_ref2 =
+    | GConstant of constant
+    | GInductive of inductive
+    | GConstructor of constructor
+    | GProjection of Projection.Repr.t
+
   open CICGraph
-  let merge_global_nodes gn1 gn2 =
-    let mexn _ _ _ = CErrors.anomaly (Pp.str "Duplicate global nodes found") in
-    { constants = Cmap.union mexn gn1.constants gn2.constants
-    ; inductives = Indmap.union mexn gn1.inductives gn2.inductives
-    ; constructors = Constrmap.union mexn gn1.constructors gn2.constructors
-    ; projections = ProjMap.union mexn gn1.projections gn2.projections }
   let global_nodes = Summary.ref ~name:"TacticianGraphGlobalNodes"
       { constants = Cmap.empty
       ; inductives = Indmap.empty
       ; constructors = Constrmap.empty
       ; projections = ProjMap.empty }
-  let in_global_nodes : definitions -> Libobject.obj =
+
+  let update_error x = function
+    | None -> Some x
+    | Some _ -> CErrors.anomaly (Pp.str "Map update attempt while key already existed")
+  let in_global_nodes : node * glob_ref2 -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object "LTACRECORDGRAPHNODES"
-                 ~cache:(fun (_, gn') -> global_nodes := merge_global_nodes !global_nodes gn')
+                 ~cache:(fun (_, (n, gr)) ->
+                     let gn = !global_nodes in
+                     global_nodes := match gr with
+                       | GConstant c -> { gn with constants = Cmap.update c (update_error n) gn.constants }
+                       | GInductive i -> { gn with inductives = Indmap.update i (update_error n) gn.inductives }
+                       | GConstructor c ->
+                         { gn with constructors = Constrmap.update c (update_error n) gn.constructors }
+                       | GProjection p -> { gn with projections = ProjMap.update p (update_error n) gn.projections }
+                   )
                  ~subst:None
                  ~discharge:(fun x -> Some (snd x)))
 
@@ -167,29 +179,26 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         c, n) constants
       and+ () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       cnodes in
-    let known_definitions =
-        { constants = !global_nodes.constants
-        ; inductives = !global_nodes.inductives
-        ; constructors = !global_nodes.constructors
-        ; projections = !global_nodes.projections } in
     let (known_definitions, constant_nodes), builder =
-      CICGraph.run ~known_definitions updater (Global.current_dirpath ()) in
+      CICGraph.run ~known_definitions:!global_nodes updater (Global.current_dirpath ()) in
     let tactical_constants = OList.filter_map (fun (c, n) ->
         match Cmap.mem c env_extra with
         | true -> Some n
         | false -> None) constant_nodes in
-    let global_node =
-      { constants = Cmap.filter
-            (fun c _ -> not @@ Cmap.mem c !global_nodes.constants) known_definitions.constants
-      ; inductives = Indmap.filter
-            (fun i _ -> not @@ Indmap.mem i !global_nodes.inductives) known_definitions.inductives
-      ; constructors = Constrmap.filter
-            (fun c _ -> not @@ Constrmap.mem c !global_nodes.constructors) known_definitions.constructors
-      ; projections = ProjMap.filter
-            (fun p _ -> not @@ ProjMap.mem p !global_nodes.projections) known_definitions.projections } in
+    Cmap.iter
+      (fun c n -> if not @@ Cmap.mem c !global_nodes.constants then
+          Lib.add_anonymous_leaf @@ in_global_nodes (n, GConstant c)) known_definitions.constants;
+    Indmap.iter
+      (fun i n -> if not @@ Indmap.mem i !global_nodes.inductives then
+          Lib.add_anonymous_leaf @@ in_global_nodes (n, GInductive i)) known_definitions.inductives;
+    Constrmap.iter
+    (fun c n -> if not @@ Constrmap.mem c !global_nodes.constructors then
+        Lib.add_anonymous_leaf @@ in_global_nodes (n, GConstructor c)) known_definitions.constructors;
+    ProjMap.iter
+      (fun p n -> if not @@ ProjMap.mem p !global_nodes.projections then
+          Lib.add_anonymous_leaf @@ in_global_nodes (n, GProjection p)) known_definitions.projections;
     Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()));
-    write_graph builder tactical_constants;
-    Lib.add_anonymous_leaf @@ in_global_nodes global_node
+    write_graph builder tactical_constants
 
   let () = Declaremods.append_end_library_hook endline_hook
 end
