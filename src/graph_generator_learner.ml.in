@@ -133,19 +133,25 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     (List.map (map_named term_repr) hyps, term_repr concl)
 
   let endline_hook () = print_endline "writing";
+    let err_msg c = Pp.(str "Unexpected definition" ++ ws 1 ++ c ++ ws 1 ++ str "encountered. " ++
+                        str "Did you forget to install a dependency without Tactician injected?") in
     let globrefs = Environ.Globals.view (Global.env ()).env_globals in
-    let constants = Cset_env.elements @@ Cmap_env.domain @@ Cmap_env.filter
+    let constants = Cmap_env.filter
         (fun c _ -> not @@ Cmap.mem c !global_nodes.constants) globrefs.constants in
     (* We are only interested in canonical constants *)
-    let constants = Cset.elements @@ OList.fold_left (fun m c ->
+    let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
         let c = Constant.make1 @@ Constant.canonical c in
-        Cset.add c m) Cset.empty constants in
-    let minductives = Mindmap_env.Set.elements @@ Mindmap_env.domain @@ Mindmap_env.filter
+        if not @@ DirPath.equal dirpath @@ ModPath.dp @@ Constant.modpath c then
+          CErrors.user_err (err_msg (Constant.print c));
+        Cset.add c m) constants Cset.empty in
+    let minductives = Mindmap_env.filter
         (fun m _ -> not @@ Indmap.mem (m, 0) !global_nodes.inductives) globrefs.inductives in
     (* We are only interested in canonical inductives *)
-    let minductives = Mindset.elements @@ OList.fold_left (fun m c ->
+    let minductives = Mindset.elements @@ Mindmap_env.fold (fun c _ m ->
         let c = MutInd.make1 @@ MutInd.canonical c in
-        Mindset.add c m) Mindset.empty minductives in
+        if not @@ DirPath.equal dirpath @@ ModPath.dp @@ MutInd.modpath c then
+          CErrors.user_err (err_msg (MutInd.print c));
+        Mindset.add c m) minductives Mindset.empty in
     let open Monad_util.WithMonadNotations(CICGraph) in
     let open Monad.Make(CICGraph) in
 
@@ -159,7 +165,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     OList.iter (fun x ->
         let base = Libnames.basename x in
         let candidates = OList.filter (fun x -> Names.Id.equal (Libnames.basename x) base ) context_lemmas in
-        Feedback.msg_warning Pp.(str "Unknown lemma: " ++ Libnames.pr_path x ++ str "\nAlternatives:\n" ++
+        CErrors.user_err Pp.(str "Unknown lemma: " ++ Libnames.pr_path x ++ str "\nAlternatives:\n" ++
                                  prlist_with_sep (fun () -> str "\n") Libnames.pr_path candidates)) lemmas;
     (* End correctness check *)
 
@@ -185,18 +191,32 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         match Cmap.mem c env_extra with
         | true -> Some n
         | false -> None) constant_nodes in
+
     Cmap.iter
-      (fun c n -> if not @@ Cmap.mem c !global_nodes.constants then
-          Lib.add_anonymous_leaf @@ in_global_nodes (n, GConstant c)) known_definitions.constants;
+      (fun c n -> if not @@ Cmap.mem c !global_nodes.constants then begin
+          if not @@ CList.exists (Constant.CanOrd.equal c) constants then
+            CErrors.user_err (err_msg @@ Constant.print c);
+          Lib.add_anonymous_leaf @@ in_global_nodes (n, GConstant c)
+        end) known_definitions.constants;
     Indmap.iter
-      (fun i n -> if not @@ Indmap.mem i !global_nodes.inductives then
-          Lib.add_anonymous_leaf @@ in_global_nodes (n, GInductive i)) known_definitions.inductives;
+      (fun i n -> if not @@ Indmap.mem i !global_nodes.inductives then begin
+           if not @@ CList.exists (MutInd.CanOrd.equal (fst i)) minductives then
+             CErrors.user_err (err_msg @@  MutInd.print (fst i));
+           Lib.add_anonymous_leaf @@ in_global_nodes (n, GInductive i)
+         end) known_definitions.inductives;
     Constrmap.iter
-    (fun c n -> if not @@ Constrmap.mem c !global_nodes.constructors then
-        Lib.add_anonymous_leaf @@ in_global_nodes (n, GConstructor c)) known_definitions.constructors;
+    (fun c n -> if not @@ Constrmap.mem c !global_nodes.constructors then begin
+        if not @@ CList.exists (MutInd.CanOrd.equal (fst (fst c))) minductives then
+          CErrors.user_err (err_msg @@  MutInd.print (fst (fst c)));
+        Lib.add_anonymous_leaf @@ in_global_nodes (n, GConstructor c)
+      end) known_definitions.constructors;
     ProjMap.iter
-      (fun p n -> if not @@ ProjMap.mem p !global_nodes.projections then
-          Lib.add_anonymous_leaf @@ in_global_nodes (n, GProjection p)) known_definitions.projections;
+      (fun p n -> if not @@ ProjMap.mem p !global_nodes.projections then begin
+           if not @@ CList.exists (MutInd.CanOrd.equal (Projection.Repr.mind p)) minductives then
+             CErrors.user_err (err_msg @@  MutInd.print (Projection.Repr.mind p));
+           Lib.add_anonymous_leaf @@ in_global_nodes (n, GProjection p)
+         end) known_definitions.projections;
+
     Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()));
     write_graph builder tactical_constants
 
