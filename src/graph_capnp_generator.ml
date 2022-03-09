@@ -158,7 +158,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | EvarSubstValue -> EvarSubstValue
 
   let write_graph capnp_graph transformer
-      { node_count; edge_count; builder; _ } =
+      node_count edge_count builder =
     let nodes = K.Builder.Graph.nodes_init capnp_graph node_count in
     let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
     let state = { node_index = node_count - 1; edge_index = 0 } in

@@ -332,37 +332,48 @@ end
 
 (* TODO: See if this can be merged with SimpleGraph *)
 type edge_label = edge_type
-type ('path, 'paths, 'result) builder =
-  { paths : 'paths
-  ; node_count : int
-  ; edge_count : int
-  ; builder : 'result -> ('result -> ('path * int) node_type -> (edge_label * ('path * int)) list -> 'result) -> 'result }
-module GlobalGraph(S : Set.S)(D : sig type result end) : GraphMonadType
+module GlobalGraph(S : Set.S)(D : sig type result end) : sig
+  open D
+  type builder =
+    { paths : S.t
+    ; node_count : int
+    ; edge_count : int
+    ; builder : result ->
+        (result -> (S.elt * int) node_type -> (edge_label * (S.elt * int)) list -> result) -> result }
+  val builder_nil : builder
+  include GraphMonadType
   with type node_label = (S.elt * int) node_type
    and type edge_label = edge_label
    and type node = S.elt * int
-   and type 'a repr_t = S.elt -> 'a * (S.elt, S.t, D.result) builder
-= struct
+   and type 'a repr_t = builder -> S.elt -> 'a * builder
+end = struct
   open D
+  type builder =
+    { paths : S.t
+    ; node_count : int
+    ; edge_count : int
+    ; builder : result ->
+        (result -> (S.elt * int) node_type -> (edge_label * (S.elt * int)) list -> result) -> result }
+  let builder_nil = { paths = S.empty; node_count = 0; edge_count = 0; builder = fun r _ -> r }
   type node = S.elt * int
   type edge_label = edge_type
   type node_label = node node_type
   type children = (edge_label * node) list
   type writer =
-    { nodes : (result -> node_label -> children -> result) -> result -> result
+    { nodes : result -> (result -> node_label -> children -> result) -> result
     ; paths : S.t
     ; edge_count : int }
   module M = Monad_util.ReaderStateWriterMonad
       (struct type r = S.elt end)
       (struct type s = int end)
       (struct type w = writer
-        let id = { nodes = (fun _ r -> r); paths = S.empty; edge_count = 0 }
+        let id = { nodes = (fun r _ -> r); paths = S.empty; edge_count = 0 }
         let comb = fun
           { nodes = f1; paths = p1; edge_count = ec1 }
           { nodes = f2; paths = p2; edge_count = ec2 } ->
-          { nodes = (fun c r -> f1 c (f2 c r)); paths = S.union p1 p2; edge_count = ec1 + ec2 } end)
+          { nodes = (fun r c -> f1 (f2 r c) c); paths = S.union p1 p2; edge_count = ec1 + ec2 } end)
   include M
-  type nonrec 'a repr_t = S.elt -> 'a * (S.elt, S.t, D.result) builder
+  type nonrec 'a repr_t = builder -> S.elt -> 'a * builder
   open Monad_util.WithMonadNotations(M)
   let index_to_node i =
     let+ current = ask in
@@ -372,7 +383,7 @@ module GlobalGraph(S : Set.S)(D : sig type result end) : GraphMonadType
   let mk_node nl ch =
     let* i = get in
     put (i + 1) >>
-    let* () = tell { nodes = (fun c r -> c r nl ch); paths = children_paths ch S.empty
+    let* () = tell { nodes = (fun r c -> c r nl ch); paths = children_paths ch S.empty
                    ; edge_count = List.length ch } in
     index_to_node i
   let with_delayed_node f =
@@ -381,13 +392,15 @@ module GlobalGraph(S : Set.S)(D : sig type result end) : GraphMonadType
     pass @@
     let* n = index_to_node i in
     let+ (v, nl, ch) = f n in
-    v, fun { nodes; paths; edge_count } -> { nodes = (fun c r -> c (nodes c r) nl ch)
+    v, fun { nodes; paths; edge_count } -> { nodes = (fun r c -> c (nodes r c) nl ch)
                                            ; paths = children_paths ch paths
                                            ; edge_count = edge_count + List.length ch }
   let register_external (tp, _) =
-    tell { nodes = (fun _ r -> r); paths = S.singleton tp; edge_count = 0 }
-  let run m current =
-    let node_count, ({ nodes; paths; edge_count }, result) = run m current 0 in
+    tell { nodes = (fun r _ -> r); paths = S.singleton tp; edge_count = 0 }
+  let run m { paths; node_count; edge_count; builder } current =
+    let node_count, ({ nodes; paths; edge_count }, result) =
+      let m = tell { nodes=builder; paths; edge_count } >> m in
+      run m current node_count in
     result, { paths; node_count; edge_count
-            ; builder = (fun r c -> nodes c r) }
+            ; builder = nodes }
 end

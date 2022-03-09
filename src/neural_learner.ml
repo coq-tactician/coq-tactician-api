@@ -73,7 +73,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         constructors map in
     let map = ProjMap.fold (fun c (_, node) m ->
         Feedback.msg_notice Pp.(str (Graph_def.projection_to_string c));
-        (* TODO: At some point we have to deal with this *) assert false)
+        (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
+        assert false)
         projections map in
     fun id ->
       match Int.Map.find_opt id map with
@@ -102,7 +103,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
             let+ _ = gen_const env Cmap.empty c in ()) constants in
         List.iter (gen_mutinductive_helper env Cmap.empty) minductives in
       let (known_definitions, ()), builder =
-        CICGraph.run_empty ~def_truncate:true updater Global in
+        CICGraph.run_empty ~def_truncate:true updater G.builder_nil Global in
       builder, known_definitions in
 
     let module Request = Api.Builder.PredictionProtocol.Request in
@@ -124,7 +125,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       (TacticMap.bindings tacs);
 
     let graph = Request.Initialize.graph_init init in
-    CapnpGraphWriter.write_graph graph (fun _ -> 0) builder;
+    CapnpGraphWriter.write_graph graph (fun _ -> 0) builder.node_count builder.edge_count builder.builder;
 
     let definitions =
       let f (_, (_, n)) = Stdint.Uint32.of_int n in
@@ -155,12 +156,12 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open Monad_util.WithMonadNotations(CICGraph) in
       let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
-    let (definitions, (root, context_map)), builder =
-      CICGraph.run ~known_definitions updater Local in
+    let (definitions, (root, context_map)), G.{ paths=_; node_count; edge_count; builder } =
+      CICGraph.run ~known_definitions updater G.builder_nil Local in
     let context_range = List.map (fun (_, (_, n)) -> n) @@ Id.Map.bindings context_map in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
-    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) builder;
+    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) node_count edge_count builder;
     let state = Request.Predict.state_init predict in
     ProofState.root_set_int_exn state root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in

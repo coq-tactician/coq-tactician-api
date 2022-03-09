@@ -110,21 +110,6 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     Sys.chdir pwd;
     relative_deps
 
-  module K = Graph_api.Make(Capnp.BytesMessage)
-  let write_graph ({ paths; _ } as builder) tactical_constants =
-    let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
-    let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
-    let resolved_dependencies = resolve_dependencies depslist in
-    let g = K.Builder.Dataset.init_root () in
-    let _ = K.Builder.Dataset.dependencies_set_list g resolved_dependencies in
-    let _ = K.Builder.Dataset.tactical_definitions_set_list g @@
-      List.map (fun n -> Stdint.Uint32.of_int @@ snd n) tactical_constants in
-    let transformer tp =
-      DPmap.find tp path_index in
-    let capnp_graph = K.Builder.Dataset.graph_init g in
-    CapnpGraphWriter.write_graph capnp_graph transformer builder;
-    Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) (data_file ())
-
   open GB
 
   let proof_state_to_pair ps =
@@ -132,7 +117,10 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let hyps = proof_state_hypotheses ps in
     (List.map (map_named term_repr) hyps, term_repr concl)
 
-  let endline_hook () = print_endline "writing";
+  let graph_builder = ref G.builder_nil
+  let tactical_constants = ref []
+
+  let update_graph () =
     let err_msg c = Pp.(str "Unexpected definition" ++ ws 1 ++ c ++ ws 1 ++ str "encountered. " ++
                         str "Did you forget to install a dependency without Tactician injected?") in
     let globrefs = Environ.Globals.view (Global.env ()).env_globals in
@@ -186,11 +174,13 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       and+ () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       cnodes in
     let (known_definitions, constant_nodes), builder =
-      CICGraph.run ~known_definitions:!global_nodes updater (Global.current_dirpath ()) in
-    let tactical_constants = OList.filter_map (fun (c, n) ->
+      CICGraph.run ~known_definitions:!global_nodes updater !graph_builder (Global.current_dirpath ()) in
+    graph_builder := builder;
+    let tactical_constants' = OList.filter_map (fun (c, n) ->
         match Cmap.mem c env_extra with
         | true -> Some n
         | false -> None) constant_nodes in
+    tactical_constants := tactical_constants' @ !tactical_constants;
 
     Cmap.iter
       (fun c n -> if not @@ Cmap.mem c !global_nodes.constants then begin
@@ -215,12 +205,29 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
            if not @@ CList.exists (MutInd.CanOrd.equal (Projection.Repr.mind p)) minductives then
              CErrors.user_err (err_msg @@  MutInd.print (Projection.Repr.mind p));
            Lib.add_anonymous_leaf @@ in_global_nodes (n, GProjection p)
-         end) known_definitions.projections;
+         end) known_definitions.projections
 
+  module K = Graph_api.Make(Capnp.BytesMessage)
+  let write_graph G.{ paths; node_count; edge_count; builder } tactical_constants =
+    let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
+    let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
+    let resolved_dependencies = resolve_dependencies depslist in
+    let g = K.Builder.Dataset.init_root () in
+    let _ = K.Builder.Dataset.dependencies_set_list g resolved_dependencies in
+    let _ = K.Builder.Dataset.tactical_definitions_set_list g @@
+      List.map (fun n -> Stdint.Uint32.of_int @@ snd n) tactical_constants in
+    let transformer tp =
+      DPmap.find tp path_index in
+    let capnp_graph = K.Builder.Dataset.graph_init g in
+    CapnpGraphWriter.write_graph capnp_graph transformer node_count edge_count builder;
+    Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) (data_file ())
+
+  let () = Declaremods.append_end_library_hook @@ fun () ->
+    print_endline "writing";
+    update_graph ();
     Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()));
-    write_graph builder tactical_constants
+    write_graph !graph_builder !tactical_constants
 
-  let () = Declaremods.append_end_library_hook endline_hook
 end
 
 (* let () = register_online_learner "Dataset Generator Learner" (module GraphGeneratorLearner) *)

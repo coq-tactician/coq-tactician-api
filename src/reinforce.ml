@@ -40,7 +40,7 @@ let write_execution_result env res hyps concl obj =
     let+ root, context_map = gen_proof_state env hyps concl in
     snd root, context_map in
   let (definitions, (root, context_map)), builder =
-    CICGraph.run_empty ~def_truncate:true updater Local in
+    CICGraph.run_empty ~def_truncate:true updater G.builder_nil Local in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
@@ -48,7 +48,8 @@ let write_execution_result env res hyps concl obj =
   (* Write graph to capnp structure *)
   let new_state = ExecutionResult.new_state_init res in
   let capnp_graph = ExecutionResult.NewState.graph_init new_state in
-  Neural_learner.CapnpGraphWriter.write_graph capnp_graph (fun _ -> 0) builder;
+  Neural_learner.CapnpGraphWriter.write_graph capnp_graph (fun _ -> 0)
+    builder.node_count builder.edge_count builder.builder;
   let state = ExecutionResult.NewState.state_init new_state in
   ProofState.root_set_int_exn state root;
   let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
