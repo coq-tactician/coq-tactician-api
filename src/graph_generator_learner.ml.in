@@ -119,13 +119,20 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
   let graph_builder = ref G.builder_nil
   let tactical_constants = ref []
+  let grandfathered_constants =
+    [ match Coqlib.lib_ref "tactician.private_constant_placeholder" with
+      | Names.GlobRef.ConstRef const -> const
+      | _ -> assert false
+    ]
 
   let update_graph () =
     let err_msg c = Pp.(str "Unexpected definition" ++ ws 1 ++ c ++ ws 1 ++ str "encountered. " ++
                         str "Did you forget to inject Tactician while installing a dependency?") in
     let globrefs = Environ.Globals.view (Global.env ()).env_globals in
     let constants = Cmap_env.filter
-        (fun c _ -> not @@ Cmap.mem c !global_nodes.constants) globrefs.constants in
+        (fun c _ ->
+           (not @@ List.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
+           (not @@ Cmap.mem c !global_nodes.constants)) globrefs.constants in
     (* We are only interested in canonical constants *)
     let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
         let c = Constant.make1 @@ Constant.canonical c in
@@ -184,7 +191,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
     Cmap.iter
       (fun c n -> if not @@ Cmap.mem c !global_nodes.constants then begin
-          if not @@ CList.exists (Constant.CanOrd.equal c) constants then
+           if (not @@ CList.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
+              (not @@ CList.exists (Constant.CanOrd.equal c) constants) then
             CErrors.user_err (err_msg @@ Constant.print c);
           Lib.add_anonymous_leaf @@ in_global_nodes (n, GConstant c)
         end) known_definitions.constants;
