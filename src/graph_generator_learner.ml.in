@@ -5,6 +5,8 @@ open Graph_extractor
 open Graph_capnp_generator
 open Graph_def
 
+module OList = CList
+
 let dirpath = Global.current_dirpath ()
 let data_file () = match Tactician_util.base_filename with
   | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
@@ -149,7 +151,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                                  prlist_with_sep (fun () -> str "\n") Libnames.pr_path candidates)) lemmas;
     (* End correctness check *)
 
-    let proofs_map = OList.fold_left (fun m c ->
+    let env = Global.env () in
+    let env_extra = OList.fold_left (fun m c ->
         let path = Nametab.path_of_global (Names.GlobRef.ConstRef c) in
         let proof = OList.find_opt (fun (p, path2) -> Libnames.eq_full_path path path2) proof_states in
         let proof = Option.map fst proof in
@@ -160,9 +163,9 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
     let updater =
       let+ cnodes = List.map (fun c ->
-          let+ n = gen_const c in
+          let+ n = gen_const env env_extra c in
         c, n) constants
-      and+ () = List.iter gen_mutinductive_helper minductives in
+      and+ () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       cnodes in
     let known_definitions =
         { constants = !global_nodes.constants
@@ -170,9 +173,9 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         ; constructors = !global_nodes.constructors
         ; projections = !global_nodes.projections } in
     let (known_definitions, constant_nodes), builder =
-      CICGraph.run ~known_definitions proofs_map updater (Global.current_dirpath ()) in
+      CICGraph.run ~known_definitions updater (Global.current_dirpath ()) in
     let tactical_constants = OList.filter_map (fun (c, n) ->
-        match Cmap.mem c proofs_map with
+        match Cmap.mem c env_extra with
         | true -> Some n
         | false -> None) constant_nodes in
     let global_node =

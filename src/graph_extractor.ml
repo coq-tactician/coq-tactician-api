@@ -8,6 +8,16 @@ open Tacexpr
 
 module ProjMap = CMap.Make(Projection.Repr)
 
+let map_named f = function
+  | Named.Declaration.LocalAssum (id, ty) ->
+    let ty' = f ty in Named.Declaration.LocalAssum (id, ty')
+  | Named.Declaration.LocalDef (id, v, ty) ->
+    let v' = f v in
+    let ty' = f ty in Named.Declaration.LocalDef (id, v', ty')
+
+
+type env_extra = (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t
+
 module type CICGraphMonadType = sig
 
   include Monad.Def
@@ -41,15 +51,18 @@ module type CICGraphMonadType = sig
   val lookup_named_map    : node Id.Map.t t
   val lookup_def_depth    : int option t
   val lookup_def_truncate : bool t
-  val lookup_proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t t
+  val lookup_env          : Environ.env t
+  val lookup_env_extra    : env_extra t
 
-  val get_named_context : node Id.Map.t t
+  val get_named_context   : node Id.Map.t t
 
   val with_relative       : node -> 'a t -> 'a t
   val with_relatives      : node list -> 'a t -> 'a t
   val with_named          : Id.t -> node -> 'a t -> 'a t
   val with_empty_contexts : 'a t -> 'a t
   val with_decremented_def_depth : 'a t -> 'a t
+  val with_env            : Environ.env -> 'a t -> 'a t
+  val with_env_extra      : env_extra -> 'a t -> 'a t
 
   type definitions =
     { constants            : node Cmap.t
@@ -60,11 +73,9 @@ module type CICGraphMonadType = sig
   val run :
     ?def_truncate:bool -> ?def_depth:int ->
     known_definitions:definitions ->
-    (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
     'a t -> (definitions * 'a) repr_t
   val run_empty :
     ?def_truncate:bool -> ?def_depth:int ->
-    (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t ->
     'a t -> (definitions * 'a) repr_t
 end
 module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
@@ -85,7 +96,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     ; named        : node Id.Map.t
     ; def_depth    : int option
     ; def_truncate : bool
-    ; proofs_map : (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t }
+    ; env          : Environ.env option
+    ; env_extra    : env_extra option }
 
   module M = Monad_util.ReaderStateMonadT
       (G)
@@ -184,9 +196,16 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let lookup_def_truncate =
     let+ { def_truncate; _ } = ask in
     def_truncate
-  let lookup_proofs_map =
-    let+ { proofs_map; _ } = ask in
-    proofs_map
+  let lookup_env =
+    let+ { env; _ } = ask in
+    match env with
+    | None -> CErrors.anomaly Pp.(str "No env was present in the graph extractor")
+    | Some env -> env
+  let lookup_env_extra =
+    let+ { env_extra; _ } = ask in
+    match env_extra with
+    | None -> CErrors.anomaly Pp.(str "No extra env was present in the graph extractor")
+    | Some env_extra -> env_extra
 
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
@@ -201,21 +220,23 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let with_decremented_def_depth m =
     local (fun ({ def_depth; _ } as c) ->
         { c with def_depth = Option.map (fun def_depth -> assert (def_depth > 0); def_depth - 1) def_depth }) m
+  let with_env env =
+    local (fun c -> { c with env = Some env })
+  let with_env_extra env_extra =
+    local (fun c -> { c with env_extra = Some env_extra })
 
-  (** High level drawing commands that draw from a given focus *)
-
-  let run ?(def_truncate=false) ?def_depth ~known_definitions proofs_map m =
+  let run ?(def_truncate=false) ?def_depth ~known_definitions m =
     G.run @@
     let context =
-      { relative = []; named = Id.Map.empty; def_depth; def_truncate; proofs_map } in
+      { relative = []; named = Id.Map.empty; def_depth; def_truncate; env = None; env_extra = None } in
     run m context known_definitions
-  let run_empty ?(def_truncate=false) ?def_depth proofs_map m =
+  let run_empty ?(def_truncate=false) ?def_depth m =
     let known_definitions =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
       ; constructors = Constrmap.empty
       ; projections = ProjMap.empty} in
-    run ~def_truncate ?def_depth ~known_definitions proofs_map m
+    run ~def_truncate ?def_depth ~known_definitions m
 end
 
 module GraphBuilder
@@ -225,19 +246,25 @@ module GraphBuilder
          with type node = node'
           and type edge_label = edge_type
           and type node_label = node' node_type
-    end) = struct
+     end) : sig
+  open G
+  type 'a with_envs = Environ.env -> env_extra -> 'a
+  val gen_const               : (constant -> node t) with_envs
+  val gen_mutinductive_helper : (mutind -> unit t) with_envs
+  val gen_inductive           : (inductive -> node' t) with_envs
+  val gen_constructor         : (constructor -> node t) with_envs
+  val gen_projection          : (Projection.t -> node t) with_envs
+  val gen_constr              : (Constr.t -> node t) with_envs
+  val with_named_context      : ((Constr.t, Constr.t) Named.pt -> 'a t -> ((edge_type * node) list * 'a) t) with_envs
+  val gen_proof_state         : env_extra -> node t Proofview.tactic
+  val gen_globref             : (GlobRef.t -> node t) with_envs
+end = struct
 
+  type 'a with_envs = Environ.env -> env_extra -> 'a
   module OList = List
   open G
   open Monad.Make(G)
   open Monad_util.WithMonadNotations(G)
-
-  let update_error x = function
-    | None -> Some x
-    | Some _ -> CErrors.anomaly (Pp.str "Map update attempt while key already existed")
-
-  let const x _ = x
-  let ignore' m = map ignore m
 
   let cached_gen_const c gen =
     let* n = find_constant c in
@@ -298,10 +325,11 @@ module GraphBuilder
     let c = Constant.make1 (Constant.canonical c) in
     follow_def (mk_definition @@ ManualConst c) @@
     cached_gen_const c @@
-    let* proofs = lookup_proofs_map in
+    let* proofs = lookup_env_extra in
     let proof = Cmap.find_opt c proofs in
     let gen_const_aux d =
-      let { const_hyps; const_body; const_type; _ } = Global.lookup_constant c in
+      let* env = lookup_env in
+      let { const_hyps; const_body; const_type; _ } = Environ.lookup_constant c env in
       let* children = if_not_truncate (return []) @@
         let+ ctx, b = with_named_context gen_constr const_hyps @@
           let* typ = gen_constr const_type in
@@ -309,7 +337,7 @@ module GraphBuilder
             | Undef _ -> ConstUndef, mk_node ConstEmpty []
             | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
             | OpaqueDef c ->
-              let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Global.opaque_tables ()) c in
+              let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
               ConstOpaqueDef, gen_constr c
             | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
           let+ b = b in
@@ -331,9 +359,10 @@ module GraphBuilder
       let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
       let base_tactic = Tactic_one_variable.tactic_strip tac in
       let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings context_map in
+      let* env = lookup_env in
       let warn_arg id =
         Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
-                                 Pptactic.pr_glob_tactic (Global.env ()) tac_orig (* ++ str " in context\n" ++ *)
+                                 Pptactic.pr_glob_tactic env tac_orig (* ++ str " in context\n" ++ *)
                                  (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
       let check_default id = function
         | None -> warn_arg id; None
@@ -364,7 +393,8 @@ module GraphBuilder
               )
             | TOther -> return None
           ) args in
-      let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
+      (* TODO: Look into what we should give as the evd here *)
+      let ps_string = proof_state_to_string_safe ps env Evd.empty in
       { tactic = tac_orig; base_tactic; interm_tactic
       ; tactic_hash = Hashtbl.hash_param 255 255 base_tactic
       ; arguments; tactic_exact
@@ -406,8 +436,9 @@ module GraphBuilder
     | Some mn -> return ()
     | None ->
       with_empty_contexts @@
+      let* env = lookup_env in
       let ({ mind_hyps; mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
-        Global.lookup_mind m in
+        Environ.lookup_mind m env in
       (* TODO: The elements of this named context were connected to the global root node before. This is not correct.
          Now it is not connected to anything (children are ignored), which is probably also suboptimal. This will hopefully be solved by
          converting this named context to be part of the global context. *)
@@ -432,7 +463,7 @@ module GraphBuilder
                 IndConstruct, n) constructs in
             let univs = Declareops.inductive_polymorphic_context mb in
             let inst = Univ.make_abstract_instance univs in
-            let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) (Global.env ()) in
+            let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) env in
             let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
             let+ n = gen_constr typ in
             (IndType, n)::cstrs in
@@ -565,25 +596,33 @@ module GraphBuilder
 
   let with_named_context ctx m = with_named_context gen_constr ctx m
 
-  let map_named f = function
-    | Named.Declaration.LocalAssum (id, ty) ->
-      let ty' = f ty in Named.Declaration.LocalAssum (id, ty')
-    | Named.Declaration.LocalDef (id, v, ty) ->
-      let v' = f v in
-      let ty' = f ty in Named.Declaration.LocalDef (id, v', ty')
-  let gen_proof_state =
-    Proofview.Goal.enter_one (fun g ->
-        let concl = Proofview.Goal.concl g in
-        let hyps = Proofview.Goal.hyps g in
-        let sigma = Proofview.Goal.sigma g in
-        let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
-        Proofview.tclUNIT @@
-        let* hyps, concl = with_named_context hyps @@ gen_constr (* ContextSubject *) (EConstr.to_constr sigma concl) in
-        mk_node Root ((ContextSubject, concl)::hyps))
-
   let gen_globref = function
     | GlobRef.VarRef _ -> CErrors.anomaly (Pp.str "not handled yet")
     | GlobRef.ConstRef c -> gen_const c
     | GlobRef.IndRef i -> gen_inductive i
     | GlobRef.ConstructRef c -> gen_constructor c
+
+  let with_envs f env env_extra x = with_env env (with_env_extra env_extra (f x))
+
+  let gen_proof_state env_extra =
+    Proofview.Goal.enter_one (fun g ->
+        let concl = Proofview.Goal.concl g in
+        let hyps = Proofview.Goal.hyps g in
+        let sigma = Proofview.Goal.sigma g in
+        let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
+        let env = Proofview.Goal.env g in
+        Proofview.tclUNIT @@
+        with_env env @@ with_env_extra env_extra @@
+        let* hyps, concl = with_named_context hyps @@ gen_constr (EConstr.to_constr sigma concl) in
+        mk_node Root ((ContextSubject, concl)::hyps))
+
+  let gen_const = with_envs gen_const
+  let gen_mutinductive_helper = with_envs gen_mutinductive_helper
+  let gen_inductive = with_envs gen_inductive
+  let gen_constructor = with_envs gen_constructor
+  let gen_projection = with_envs gen_projection
+  let gen_constr = with_envs gen_constr
+  let with_named_context env env_extra ps = with_envs (with_named_context ps) env env_extra
+  let gen_globref = with_envs gen_globref
+
 end

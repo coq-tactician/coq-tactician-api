@@ -28,7 +28,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 
-  let gen_proof_state ps =
+  let gen_proof_state env ps =
     let open GB in
     let hyps = proof_state_hypotheses ps in
     let concl = proof_state_goal ps in
@@ -36,9 +36,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let concl = term_repr concl in
     let open CICGraph in
     let open Monad_util.WithMonadNotations(CICGraph) in
-    let* hyps, (concl, map) = with_named_context hyps @@
+    let* hyps, (concl, map) = with_named_context env Cmap.empty hyps @@
       let* map = lookup_named_map in
-      let+ concl = gen_constr concl in
+      let+ concl = gen_constr env Cmap.empty concl in
       concl, map in
     let+ root = mk_node Root ((ContextSubject, concl)::hyps) in
     root, map
@@ -99,10 +99,10 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open GB in
       let updater =
         let* () = List.iter (fun c ->
-            let+ _ = gen_const c in ()) constants in
-        List.iter gen_mutinductive_helper minductives in
+            let+ _ = gen_const env Cmap.empty c in ()) constants in
+        List.iter (gen_mutinductive_helper env Cmap.empty) minductives in
       let (known_definitions, ()), builder =
-        CICGraph.run_empty ~def_truncate:true Cmap.empty updater Global in
+        CICGraph.run_empty ~def_truncate:true updater Global in
       builder, known_definitions in
 
     let module Request = Api.Builder.PredictionProtocol.Request in
@@ -143,7 +143,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       | Response.Initialized -> tacs, known_definitions
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-  let predict rc wc find_global_argument known_definitions tacs ps =
+  let predict rc wc find_global_argument known_definitions tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module ProofState = Api.Builder.ProofState in
     let module Request = Api.Builder.PredictionProtocol.Request in
@@ -153,10 +153,10 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let predict = Request.predict_init request in
     let updater =
       let open Monad_util.WithMonadNotations(CICGraph) in
-      let+ root, context_map = gen_proof_state ps in
+      let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
     let (definitions, (root, context_map)), builder =
-      CICGraph.run ~known_definitions Names.Cmap.empty updater Local in
+      CICGraph.run ~known_definitions updater Local in
     let context_range = List.map (fun (_, (_, n)) -> n) @@ Id.Map.bindings context_map in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
@@ -240,11 +240,12 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     { db with tactics }
   let predict { tactics; write_context; read_context } =
     drain read_context write_context;
-    let tacs, known_definitions = init_predict read_context write_context tactics (Global.env ()) in
+    let env = Global.env () in
+    let tacs, known_definitions = init_predict read_context write_context tactics env in
     let find_global_argument = find_global_argument known_definitions in
     fun f ->
       if f = [] then IStream.empty else
-        let preds = predict read_context write_context find_global_argument known_definitions tacs
+        let preds = predict read_context write_context find_global_argument known_definitions tacs env
             (List.hd f).state in
         let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
         IStream.of_list preds

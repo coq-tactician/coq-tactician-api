@@ -2,6 +2,8 @@ open Tactician_ltac1_record_plugin
 open Names
 open Ltac_plugin
 
+module OList = CList
+
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 open Capnp_rpc_lwt
 
@@ -16,17 +18,17 @@ exception MismatchedArguments
 exception IllegalArgument
 exception ParseError
 
-let gen_proof_state (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
+let gen_proof_state env (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
   let open CICGraph in
   let open Monad_util.WithMonadNotations(CICGraph) in
-  let* hyps, (concl, map) = with_named_context hyps @@
+  let* hyps, (concl, map) = with_named_context env Cmap.empty hyps @@
     let* map = lookup_named_map in
-    let+ concl = gen_constr concl in
+    let+ concl = gen_constr env Cmap.empty concl in
     concl, map in
   let+ root = mk_node Root ((ContextSubject, concl)::hyps) in
   root, map
 
-let write_execution_result res hyps concl obj =
+let write_execution_result env res hyps concl obj =
   let module ExecutionResult = Api.Builder.ExecutionResult in
   let module Graph = Api.Builder.Graph in
   let module ProofState = Api.Builder.ProofState in
@@ -35,10 +37,10 @@ let write_execution_result res hyps concl obj =
   let updater =
     let open Monad_util.WithMonadNotations(CICGraph) in
     let open Monad.Make(CICGraph) in
-    let+ root, context_map = gen_proof_state hyps concl in
+    let+ root, context_map = gen_proof_state env hyps concl in
     snd root, context_map in
   let (definitions, (root, context_map)), builder =
-    CICGraph.run_empty ~def_truncate:true Names.Cmap.empty updater Local in
+    CICGraph.run_empty ~def_truncate:true updater Local in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
@@ -54,7 +56,7 @@ let write_execution_result res hyps concl obj =
   ExecutionResult.NewState.obj_set new_state (Some capability);
   Capability.dec_ref capability
 
-let write_execution_result res obj =
+let write_execution_result env res obj =
   let open Proofview in
   let open Notations in
   let complete =
@@ -67,12 +69,12 @@ let write_execution_result res obj =
        let hyps = Goal.hyps gl in
        let concl = Goal.concl gl in
        let sigma = Proofview.Goal.sigma gl in
-       let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
+       let hyps = OList.map (Graph_extractor.map_named (EConstr.to_constr sigma)) hyps in
        let concl = EConstr.to_constr sigma concl in
-       write_execution_result res hyps concl obj; tclUNIT ()))
+       write_execution_result env res hyps concl obj; tclUNIT ()))
 
-let write_execution_result state res obj =
-  ignore (Pfedit.solve Goal_select.SelectAll None (write_execution_result res obj) state)
+let write_execution_result env state res obj =
+  ignore (Pfedit.solve Goal_select.SelectAll None (write_execution_result env res obj) state)
 
 let find_tactic tacs id =
   match TacticMap.find_opt id tacs with
@@ -86,7 +88,7 @@ let find_argument context id =
 
 let pp_tac tac = Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) tac)
 
-let rec proof_object state tacs context_map =
+let rec proof_object env state tacs context_map =
   let module ProofObject = Api.Service.ProofObject in
   let module ExecutionResult = Api.Builder.ExecutionResult in
   let module Exception = Api.Builder.Exception in
@@ -124,7 +126,7 @@ let rec proof_object state tacs context_map =
           let tac = Proofview.tclFOCUS ~nosuchgoal 1 1 tac in
           try
             let state', _safe = Pfedit.solve Goal_select.SelectAll None tac state in
-            write_execution_result state' res (proof_object state' tacs)
+            write_execution_result env state' res (proof_object env state' tacs)
           with Logic_monad.TacticFailure e ->
             ExecutionResult.failure_set res
         with
@@ -208,8 +210,9 @@ let pull_reinforce =
             with e when CErrors.noncritical e ->
               raise ParseError in
 
-          let start = Proof.start ~name:(Names.Id.of_string "dummy") ~poly:false evd [Global.env (), c] in
-          write_execution_result start res (proof_object start map)
+          let env = Global.env () in
+          let start = Proof.start ~name:(Names.Id.of_string "dummy") ~poly:false evd [env, c] in
+          write_execution_result env start res (proof_object env start map)
         with ParseError ->
           let exc = Api.Builder.ExecutionResult.protocol_error_init res in
           Api.Builder.Exception.parse_error_set exc
