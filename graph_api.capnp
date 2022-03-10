@@ -35,31 +35,30 @@ struct Graph {
 
       # Constr nodes
       rel @9 :Void;
-      var @10 :Void;
-      evar @11 :IntP; #TODO: Resolve
-      evarSubst @12 :Void;
-      cast @13 :Void;
-      prod @14 :Void;
-      lambda @15 :Void;
-      letIn @16 :Void;
-      app @17 :Void;
-      appFun @18 :Void;
-      appArg @19 :Void;
-      case @20 :Void;
-      caseBranch @21 :Void;
-      fix @22 :Void;
-      fixFun @23 :Void;
-      coFix @24 :Void;
-      coFixFun @25 :Void;
+      evar @10 :IntP; #TODO: Resolve
+      evarSubst @11 :Void;
+      cast @12 :Void;
+      prod @13 :Void;
+      lambda @14 :Void;
+      letIn @15 :Void;
+      app @16 :Void;
+      appFun @17 :Void;
+      appArg @18 :Void;
+      case @19 :Void;
+      caseBranch @20 :Void;
+      fix @21 :Void;
+      fixFun @22 :Void;
+      coFix @23 :Void;
+      coFixFun @24 :Void;
 
       # Primitives
-      int @26 :IntP;
-      float @27 :FloatP;
-      primitive @28 :Text;
+      int @25 :IntP;
+      float @26 :FloatP;
+      primitive @27 :Text;
     }
 
-    childrenIndex @29 :UInt32;
-    childrenCount @30 :UInt16;
+    childrenIndex @28 :UInt32;
+    childrenCount @29 :UInt16;
   }
   # The main memory store of the graph. It acts as a heap similar to the main memory of a C/C++ program.
   # The heap is accessed by indexing the `nodes` list using a `NodeIndex` which returns a `Node`.
@@ -305,10 +304,9 @@ enum EdgeClassification {
 
   # Constr edges
   relPointer @41;
-  varPointer @42;
-  evarSubstPointer @43;
-  evarSubstOrder @44;
-  evarSubstValue @45;
+  evarSubstPointer @42;
+  evarSubstOrder @43;
+  evarSubstValue @44;
 }
 
 # Struct is needed to work around
@@ -320,12 +318,11 @@ const conflatableEdges :List(ConflatableEdges) =
 [ ( conflatable = [contextDefType, constType, indType, castType, prodType, lambdaType, letInType, fixFunType, coFixFunType] )
 , ( conflatable = [contextDefTerm, castTerm, prodTerm, lambdaTerm, letInTerm, fixFunTerm, coFixFunTerm] )
 # Not conflatable: projTerm, constructTerm, caseTerm, cBTerm
-, ( conflatable = [varPointer, relPointer] )
 , ( conflatable = [appArgOrder, evarSubstOrder] )
 ];
 const importantEdges :List(EdgeClassification) =
 [ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
-, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFunPointer, appArgPointer, appArgOrder, relPointer, varPointer ];
+, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFunPointer, appArgPointer, appArgOrder, relPointer ];
 const lessImportantEdges :List(EdgeClassification) =
 [ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
 const leastImportantEdges :List(EdgeClassification) =
@@ -355,7 +352,6 @@ const groupedEdges :List(ConflatableEdges) =
 , ( conflatable = [coFixMutual, coFixReturn] )
 , ( conflatable = [coFixFunType, coFixFunTerm] )
 , ( conflatable = [relPointer] )
-, ( conflatable = [varPointer] )
 , ( conflatable = [evarSubstPointer] )
 , ( conflatable = [evarSubstOrder, evarSubstValue] )
 ];

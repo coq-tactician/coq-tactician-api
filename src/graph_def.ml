@@ -97,7 +97,6 @@ type 'node node_type =
 
   (* Constr nodes *)
   | Rel
-  | Var
   | Evar of int (* TODO: This could be resolved *)
   | EvarSubst
   | Cast (* TODO: Do we want cast kind? *)
@@ -192,7 +191,6 @@ type edge_type =
 
   (* Constr edges *)
   | RelPointer
-  | VarPointer
   | EvarSubstPointer
   | EvarSubstOrder
   | EvarSubstValue
@@ -241,7 +239,6 @@ let edge_type_int_mod = function
   | CoFixFunType -> 0
   | CoFixFunTerm -> 1
   | RelPointer -> 0
-  | VarPointer -> 0
   | EvarSubstPointer -> 0
   | EvarSubstOrder -> 0
   | EvarSubstValue -> 1

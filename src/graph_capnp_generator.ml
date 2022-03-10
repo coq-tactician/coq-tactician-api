@@ -82,7 +82,6 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | SortSet -> sort_set_set cnt
     | SortType -> sort_type_set cnt
     | Rel -> rel_set cnt
-    | Var -> var_set cnt
     | Evar i ->
       let p = evar_init cnt in
       K.Builder.IntP.value_set p @@ Stdint.Uint64.of_int i
@@ -152,7 +151,6 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | CoFixFunType -> CoFixFunType
     | CoFixFunTerm -> CoFixFunTerm
     | RelPointer -> RelPointer
-    | VarPointer -> VarPointer
     | EvarSubstPointer -> EvarSubstPointer
     | EvarSubstOrder -> EvarSubstOrder
     | EvarSubstValue -> EvarSubstValue

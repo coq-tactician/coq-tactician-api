@@ -106,9 +106,9 @@ async def main():
     state = await runTactic(state.newState.obj, 126567959, [])
     state = await runTactic(state.newState.obj, 126567959, [])
     state = await runTactic(state.newState.obj, 126567959, [])
-    state = await runTactic(state.newState.obj, 165468576, [localNode(11)])
-    state = await runTactic(state.newState.obj, 165468576, [localNode(13)])
-    state = await runTactic(state.newState.obj, 165468576, [localNode(15)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(8)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(9)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(10)])
 
     if args.interactive:
         from ptpython.repl import embed

@@ -527,8 +527,7 @@ end = struct
          let def = Environ.lookup_named id env in
          gen_section_var id def
        with Not_found ->
-         let* ino = lookup_named id in
-         mk_node Var [VarPointer, ino])
+         lookup_named id)
     | Meta i ->
       CErrors.anomaly (Pp.str "Unexpected meta")
     | Evar (ev, substs) -> (* TODO: Add type and proper substitution list *)

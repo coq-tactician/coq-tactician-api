@@ -11,7 +11,19 @@ Changes to the graph:
   section variables are encoded internally in Coq (and even how they are presented to users).
   A positive consequence of this is that definitions now no longer have a local context associated to them, which
   was a bit weird.
-
+- The node-label `var` and the edge-label `varPointer` have been removed. They created a structure that was analogous
+  to what `rel` and `relPointer` did for bound variables, but instead pointing to local context variables.
+  
+  For bound variables, such the indirection  through `rel` is needed because otherwise the graph is not isomorphic
+  to its CIC-term anymore. In particular, the removal of the `rel` node will cause the graph to become bisimilar to
+  potentially infinite unfoldings of itself, which is quite clearly wrong.
+  
+  For free variables bound to the local context no such isomorphism issues exist, however.
+  Hence, the `var` node was removed. With this change, local context elements have become extremely similar to
+  global definitions in behavior. The only difference is that the root of the proof state contains a pointer to
+  all of its local variables. As such, in the future, it might be considered to merge the nodes for local contexts
+  into the nodes for definitions.
+  
 # stdlib-lgraph-intermediate-v8-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v8-global.tar.xz
 
