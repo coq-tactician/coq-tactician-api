@@ -1,3 +1,17 @@
+# Unreleased
+
+Changes to the graph:
+- We now deal in a more principle way with section variables. Previously, a definition or proof state that referred
+  to a section variable had a local context associated to it that included that variable. This way, different
+  definitions/proof states that referred to the same section variable had instead a local copy of that variable,
+  which is arguably incorrect because a model will not know that such copies are actually the same object.
+
+  The new situation is that section variables are treated as axioms and local section declarations are treated as
+  normal definitions. This seems to be the best encoding. Note, however, that this very much goes against how
+  section variables are encoded internally in Coq (and even how they are presented to users).
+  A positive consequence of this is that definitions now no longer have a local context associated to them, which
+  was a bit weird.
+
 # stdlib-lgraph-intermediate-v8-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v8-global.tar.xz
 

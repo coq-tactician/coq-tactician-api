@@ -39,7 +39,7 @@ let write_execution_result env res hyps concl obj =
     let open Monad.Make(CICGraph) in
     let+ root, context_map = gen_proof_state env hyps concl in
     snd root, context_map in
-  let (definitions, (root, context_map)), builder =
+  let (_, _, (root, context_map)), builder =
     CICGraph.run_empty ~def_truncate:true updater G.builder_nil Local in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in

@@ -15,7 +15,6 @@ let map_named f = function
     let v' = f v in
     let ty' = f ty in Named.Declaration.LocalDef (id, v', ty')
 
-
 type env_extra = (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list Cmap.t
 
 module type CICGraphMonadType = sig
@@ -45,6 +44,9 @@ module type CICGraphMonadType = sig
   val register_projection : Projection.Repr.t -> node -> unit t
   val find_projection : Projection.Repr.t -> node option t
 
+  val register_section_variable : Id.t -> node -> unit t
+  val find_section_variable : Id.t -> node option t
+
   (** Managing the local context *)
   val lookup_relative     : int -> node t
   val lookup_named        : Id.t -> node t
@@ -53,8 +55,6 @@ module type CICGraphMonadType = sig
   val lookup_def_truncate : bool t
   val lookup_env          : Environ.env t
   val lookup_env_extra    : env_extra t
-
-  val get_named_context   : node Id.Map.t t
 
   val with_relative       : node -> 'a t -> 'a t
   val with_relatives      : node list -> 'a t -> 'a t
@@ -72,11 +72,11 @@ module type CICGraphMonadType = sig
 
   val run :
     ?def_truncate:bool -> ?def_depth:int ->
-    known_definitions:definitions ->
-    'a t -> (definitions * 'a) repr_t
+    section_definitions:node Id.Map.t -> known_definitions:definitions ->
+    'a t -> (node Id.Map.t * definitions * 'a) repr_t
   val run_empty :
     ?def_truncate:bool -> ?def_depth:int ->
-    'a t -> (definitions * 'a) repr_t
+    'a t -> (node Id.Map.t * definitions * 'a) repr_t
 end
 module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   with type node = G.node
@@ -102,7 +102,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   module M = Monad_util.ReaderStateMonadT
       (G)
       (struct type r = context end)
-      (struct type s = definitions end)
+      (struct type s = node Id.Map.t * definitions end)
   module OList = List
   open M
   include Monad_util.WithMonadNotations(M)
@@ -130,10 +130,6 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     | [] -> a
     | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
 
-  let get_named_context =
-    let+ context = ask in
-    context.named
-
   (** Registering and lookup of definitions *)
 
   let update_error x = function
@@ -149,32 +145,39 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     n
 
   let register_constant c n =
-    let* ({ constants; _ } as s) = get in
-    put { s with constants = Cmap.update c (update_error n) constants }
+    let* sec, ({ constants; _ } as s) = get in
+    put (sec, { s with constants = Cmap.update c (update_error n) constants })
   let find_constant c =
-    let* { constants; _ } = get in
+    let* _, { constants; _ } = get in
     option_map with_register_external @@ Cmap.find_opt c constants
 
   let register_inductive i n =
-    let* ({ inductives; _ } as s) = get in
-    put { s with inductives = Indmap.update i (update_error n) inductives }
+    let* sec, ({ inductives; _ } as s) = get in
+    put (sec, { s with inductives = Indmap.update i (update_error n) inductives })
   let find_inductive i =
-    let* { inductives; _ } = get in
+    let* _, { inductives; _ } = get in
     option_map with_register_external @@ Indmap.find_opt i inductives
 
   let register_constructor c n =
-    let* ({ constructors; _ } as s) = get in
-    put { s with constructors = Constrmap.update c (update_error n) constructors }
+    let* sec, ({ constructors; _ } as s) = get in
+    put (sec, { s with constructors = Constrmap.update c (update_error n) constructors })
   let find_constructor c =
-    let* { constructors; _ } = get in
+    let* _, { constructors; _ } = get in
     option_map with_register_external @@ Constrmap.find_opt c constructors
 
   let register_projection p n =
-    let* ({ projections; _ } as s) = get in
-    put { s with projections = ProjMap.update p (update_error n) projections }
+    let* sec, ({ projections; _ } as s) = get in
+    put (sec, { s with projections = ProjMap.update p (update_error n) projections })
   let find_projection p =
-    let* { projections; _ } = get in
+    let* _, { projections; _ } = get in
     option_map with_register_external @@ ProjMap.find_opt p projections
+
+  let register_section_variable id n =
+    let* sec, s = get in
+    put (Id.Map.update id (update_error n) sec, s)
+  let find_section_variable id =
+    let+ sec, _ = get in
+    Id.Map.find_opt id sec
 
   (** Managing the local context *)
   let lookup_relative i =
@@ -225,18 +228,19 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let with_env_extra env_extra =
     local (fun c -> { c with env_extra = Some env_extra })
 
-  let run ?(def_truncate=false) ?def_depth ~known_definitions m =
+  let run ?(def_truncate=false) ?def_depth ~section_definitions ~known_definitions m =
     G.run @@
+    G.map (fun ((a, b), c) -> a, b, c) @@
     let context =
       { relative = []; named = Id.Map.empty; def_depth; def_truncate; env = None; env_extra = None } in
-    run m context known_definitions
+    run m context (section_definitions, known_definitions)
   let run_empty ?(def_truncate=false) ?def_depth m =
     let known_definitions =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
       ; constructors = Constrmap.empty
       ; projections = ProjMap.empty} in
-    run ~def_truncate ?def_depth ~known_definitions m
+    run ~def_truncate ?def_depth ~section_definitions:Id.Map.empty ~known_definitions m
 end
 
 module GraphBuilder
@@ -276,19 +280,26 @@ end = struct
       n
 
   let with_named_context gen_constr c (m : 'a t) =
+    let* env = lookup_env in
     Named.fold_inside (fun m d ->
         match d with
         | Named.Declaration.LocalAssum (id, typ) ->
-          let* typ = gen_constr typ in
-          let* var = mk_node (ContextAssum id.binder_name) [ContextDefType, typ] in
-          let+ (ctx, v) = with_named id.binder_name var m in
-          ((ContextElem, var)::ctx), v
+          (try
+             ignore (Environ.lookup_named id.binder_name env); m
+           with Not_found ->
+             let* typ = gen_constr typ in
+             let* var = mk_node (ContextAssum id.binder_name) [ContextDefType, typ] in
+             let+ (ctx, v) = with_named id.binder_name var m in
+             ((ContextElem, var)::ctx), v)
         | Named.Declaration.LocalDef (id, term, typ) ->
-          let* typ = gen_constr typ in
-          let* term = gen_constr term in
-          let* var = mk_node (ContextDef id.binder_name) [ContextDefType, typ; ContextDefTerm, term] in
-          let+ (ctx, v) = with_named id.binder_name var m in
-          ((ContextElem, var)::ctx), v)
+          (try
+             ignore (Environ.lookup_named id.binder_name env); m
+           with Not_found ->
+             let* typ = gen_constr typ in
+             let* term = gen_constr term in
+             let* var = mk_node (ContextDef id.binder_name) [ContextDefType, typ; ContextDefTerm, term] in
+             let+ (ctx, v) = with_named id.binder_name var m in
+             ((ContextElem, var)::ctx), v))
       c ~init:(let+ m = m in [], m)
 
   let mk_definition def_type = Definition { previous = []; def_type }
@@ -329,20 +340,18 @@ end = struct
     let proof = Cmap.find_opt c proofs in
     let gen_const_aux d =
       let* env = lookup_env in
-      let { const_hyps; const_body; const_type; _ } = Environ.lookup_constant c env in
+      let { const_body; const_type; _ } = Environ.lookup_constant c env in
       let* children = if_not_truncate (return []) @@
-        let+ ctx, b = with_named_context gen_constr const_hyps @@
-          let* typ = gen_constr const_type in
-          let bt, b = match const_body with
-            | Undef _ -> ConstUndef, mk_node ConstEmpty []
-            | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
-            | OpaqueDef c ->
-              let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
-              ConstOpaqueDef, gen_constr c
-            | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
-          let+ b = b in
-          [ ConstType, typ; bt, b ] in
-        b@ctx in
+        let* typ = gen_constr const_type in
+        let bt, b = match const_body with
+          | Undef _ -> ConstUndef, mk_node ConstEmpty []
+          | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
+          | OpaqueDef c ->
+            let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
+            ConstOpaqueDef, gen_constr c
+          | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
+        let+ b = b in
+        [ ConstType, typ; bt, b ] in
       mk_node (mk_definition d) children
     in
     let gen_tactical_proof (ps, tac) =
@@ -376,11 +385,9 @@ end = struct
             | TRef c ->
               (match c with
                | GlobRef.VarRef id ->
-                 (* TODO: Currently this is not reversible, because we cannot detect the difference between
-                    TVar _ and TRef (VarRef _). This should be fixable by making section variables not part
-                    of the local context. *)
-                 return @@ check_default id @@
-                 Id.Map.find_opt id context_map
+                 let def = Environ.lookup_named id env in
+                 let+ c = gen_section_var id def in
+                 Some c
                | GlobRef.ConstRef c ->
                  let+ c = gen_const c in
                  Some c
@@ -437,12 +444,8 @@ end = struct
     | None ->
       with_empty_contexts @@
       let* env = lookup_env in
-      let ({ mind_hyps; mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
+      let ({ mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
         Environ.lookup_mind m env in
-      (* TODO: The elements of this named context were connected to the global root node before. This is not correct.
-         Now it is not connected to anything (children are ignored), which is probably also suboptimal. This will hopefully be solved by
-         converting this named context to be part of the global context. *)
-      map snd @@ with_named_context gen_constr mind_hyps @@
       let inds = OList.mapi (fun i ind -> i, ind) (Array.to_list mind_packets) in
       with_delayed_nodes (OList.length inds) @@ fun indsn ->
       let inds = OList.combine inds indsn in
@@ -491,14 +494,41 @@ end = struct
        match n with
        | Some cn -> cn
        | None -> CErrors.anomaly (Pp.str "Inductive generation problem"))
+  and gen_section_var id def =
+    let* sv = find_section_variable id in
+    match sv with
+    | None ->
+      (* TODO: This constant is a temporary hack *)
+      follow_def (mk_definition @@ ManualConst (Constant.make2 ModPath.initial (Label.of_id id))) @@
+      let* children = if_not_truncate (return []) @@
+        match def with
+        | Named.Declaration.LocalAssum (_, typ) ->
+          let+ typ = gen_constr typ
+          and+ term = mk_node ConstEmpty [] in
+          [ ConstType, typ; ConstUndef, term]
+        | Named.Declaration.LocalDef (_, term, typ) ->
+          let+ typ = gen_constr typ
+          and+ term = gen_constr term in
+          [ ConstType, typ; ConstDef, term ]
+      in
+      (* TODO: This constant is a temporary hack *)
+      let* n = mk_node (mk_definition (ManualConst (Constant.make2 ModPath.initial (Label.of_id id)))) children in
+      let+ () = register_section_variable id n in
+      n
+    | Some sv -> return sv
   and gen_constr c = gen_kind_of_term @@ Constr.kind c
   and gen_kind_of_term = function
     | Rel i ->
       let* ino = lookup_relative i in
       mk_node Rel [RelPointer, ino]
     | Var id ->
-      let* ino = lookup_named id in
-      mk_node Var [VarPointer, ino]
+      let* env = lookup_env in
+      (try
+         let def = Environ.lookup_named id env in
+         gen_section_var id def
+       with Not_found ->
+         let* ino = lookup_named id in
+         mk_node Var [VarPointer, ino])
     | Meta i ->
       CErrors.anomaly (Pp.str "Unexpected meta")
     | Evar (ev, substs) -> (* TODO: Add type and proper substitution list *)
@@ -506,7 +536,7 @@ end = struct
        | [] -> return []
        | head::substs ->
          let* head = gen_constr head in
-         let* head = mk_node (* EvarSubstPointer *) EvarSubst [EvarSubstValue, head] in
+         let* head = mk_node EvarSubst [EvarSubstValue, head] in
          let+ _, substs = List.fold_left (fun (prev, acc) subst ->
              let* subst = gen_constr subst in
              let+ subst = mk_node EvarSubst [EvarSubstValue, subst; EvarSubstOrder, prev] in
@@ -605,12 +635,15 @@ end = struct
   let with_envs f env env_extra x = with_env env (with_env_extra env_extra (f x))
 
   let gen_proof_state env_extra =
+    (* NOTE: We intentionally get retrieve then environment here, because we don't want any of the
+       local context elements of the proof state to be in the environment. If they are, they will be
+       extracted as definitions instead of local variables. *)
+    Proofview.tclBIND Proofview.tclENV @@ fun env ->
     Proofview.Goal.enter_one (fun g ->
         let concl = Proofview.Goal.concl g in
         let hyps = Proofview.Goal.hyps g in
         let sigma = Proofview.Goal.sigma g in
         let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
-        let env = Proofview.Goal.env g in
         Proofview.tclUNIT @@
         with_env env @@ with_env_extra env_extra @@
         let* hyps, concl = with_named_context hyps @@ gen_constr (EConstr.to_constr sigma concl) in

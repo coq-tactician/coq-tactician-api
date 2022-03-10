@@ -28,6 +28,27 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
   let last_model = Summary.ref ~name:"dataset-generator-learner-lastmodel" []
 
+  let cache_type name =
+    let dirp = Global.current_dirpath () in
+    if Libnames.is_dirpath_prefix_of dirp (Libnames.dirpath name) then `File else `Dependency
+
+  let empty () = []
+  let learn db (path, status) outcomes tac =
+    match cache_type path with
+    | `File ->
+      let proof_states = List.map (fun x -> x.before) outcomes in
+      let db = match db with
+        | (ls, ppath)::data when Libnames.eq_full_path path ppath ->
+          ((proof_states, tac)::ls, ppath)::data
+        | _ -> ([proof_states, tac], path)::db in
+      (match status with
+       | QedTime -> last_model := db
+       | _ -> ());
+      db
+    | `Dependency -> db
+  let predict db situations = IStream.empty
+  let evaluate db _ _ = 0., db
+
   type glob_ref2 =
     | GConstant of constant
     | GInductive of inductive
@@ -35,6 +56,12 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     | GProjection of Projection.Repr.t
 
   open CICGraph
+
+  (* Global state of the graph generator *)
+  let graph_builder = ref G.builder_nil
+  let tactical_constants = ref []
+  let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
+  let section_nodes = Summary.ref ~name:"TacticianGraphSectionNodes" Id.Map.empty
   let global_nodes = Summary.ref ~name:"TacticianGraphGlobalNodes"
       { constants = Cmap.empty
       ; inductives = Indmap.empty
@@ -57,61 +84,11 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                    )
                  ~subst:None
                  ~discharge:(fun x -> Some (snd x)))
-
-  let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
   let in_dependencies : (DirPath.t * string) -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object "LTACRECORDGRAPHDEPS"
         ~cache:(fun (_, (path, bin)) -> dependencies := DPmap.add path bin !dependencies)
         ~subst:None
         ~discharge:(fun x -> Some (snd x)))
-
-  let cache_type name =
-    let dirp = Global.current_dirpath () in
-    if Libnames.is_dirpath_prefix_of dirp (Libnames.dirpath name) then `File else `Dependency
-
-  let empty () = []
-  let learn db (path, status) outcomes tac =
-    match cache_type path with
-    | `File ->
-      let proof_states = List.map (fun x -> x.before) outcomes in
-      let db = match db with
-        | (ls, ppath)::data when Libnames.eq_full_path path ppath ->
-          ((proof_states, tac)::ls, ppath)::data
-        | _ -> ([proof_states, tac], path)::db in
-      (match status with
-       | QedTime -> last_model := db
-       | _ -> ());
-      db
-    | `Dependency -> db
-  let predict db situations = IStream.empty
-  let evaluate db _ _ = 0., db
-
-  let resolve_dependencies deps =
-    let absolute_deps = List.map (fun p ->
-        match DPmap.find_opt p !dependencies with
-        | None -> CErrors.anomaly (Pp.str ("Dependency was not resolvable: " ^ DirPath.to_string p))
-        | Some f -> f
-      ) deps in
-    let pwd = Sys.getcwd () in
-    (match Sys.getenv_opt "OPAM_PACKAGE_NAME" with
-     | None -> ()
-     | Some _ ->
-       let (/) = Filename.concat in
-       let prefix = "%{prefix}%" in
-       let build_dir = prefix/".opam-switch"/"build" in
-       match CString.is_sub build_dir pwd 0 with
-       | false -> ()
-       | true -> Sys.chdir build_dir);
-    let relative_deps = List.map (fun f ->
-        let f = CUnix.strip_path f in
-        if not @@ Filename.is_relative f then
-          Feedback.msg_warning
-            Pp.(str "Dependency could not be relativized w.r.t. a common root. " ++
-                str "An absolute path was inserted into the dataset: " ++ str f);
-        f
-      ) absolute_deps in
-    Sys.chdir pwd;
-    relative_deps
 
   open GB
 
@@ -120,8 +97,6 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let hyps = proof_state_hypotheses ps in
     (List.map (map_named term_repr) hyps, term_repr concl)
 
-  let graph_builder = ref G.builder_nil
-  let tactical_constants = ref []
   let grandfathered_constants =
     [ match Coqlib.lib_ref "tactician.private_constant_placeholder" with
       | Names.GlobRef.ConstRef const -> const
@@ -187,8 +162,9 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         c, n) constants
       and+ () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       cnodes in
-    let (known_definitions, constant_nodes), builder =
-      CICGraph.run ~known_definitions:!global_nodes updater !graph_builder (Global.current_dirpath ()) in
+    let (section_definitions, known_definitions, constant_nodes), builder =
+      CICGraph.run ~section_definitions:!section_nodes ~known_definitions:!global_nodes
+        updater !graph_builder (Global.current_dirpath ()) in
     graph_builder := builder;
     let tactical_constants' = OList.filter_map (fun (c, n) ->
         match Cmap.mem c env_extra with
@@ -196,6 +172,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         | false -> None) constant_nodes in
     tactical_constants := tactical_constants' @ !tactical_constants;
 
+    section_nodes := section_definitions;
     Cmap.iter
       (fun c n -> if not @@ Cmap.mem c !global_nodes.constants then begin
            if (not @@ CList.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
@@ -221,6 +198,33 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
              CErrors.user_err (err_msg @@  MutInd.print (Projection.Repr.mind p));
            Lib.add_anonymous_leaf @@ in_global_nodes (n, GProjection p)
          end) known_definitions.projections
+
+  let resolve_dependencies deps =
+    let absolute_deps = List.map (fun p ->
+        match DPmap.find_opt p !dependencies with
+        | None -> CErrors.anomaly (Pp.str ("Dependency was not resolvable: " ^ DirPath.to_string p))
+        | Some f -> f
+      ) deps in
+    let pwd = Sys.getcwd () in
+    (match Sys.getenv_opt "OPAM_PACKAGE_NAME" with
+     | None -> ()
+     | Some _ ->
+       let (/) = Filename.concat in
+       let prefix = "%{prefix}%" in
+       let build_dir = prefix/".opam-switch"/"build" in
+       match CString.is_sub build_dir pwd 0 with
+       | false -> ()
+       | true -> Sys.chdir build_dir);
+    let relative_deps = List.map (fun f ->
+        let f = CUnix.strip_path f in
+        if not @@ Filename.is_relative f then
+          Feedback.msg_warning
+            Pp.(str "Dependency could not be relativized w.r.t. a common root. " ++
+                str "An absolute path was inserted into the dataset: " ++ str f);
+        f
+      ) absolute_deps in
+    Sys.chdir pwd;
+    relative_deps
 
   module K = Graph_api.Make(Capnp.BytesMessage)
   let write_graph G.{ paths; node_count; edge_count; builder } tactical_constants =
