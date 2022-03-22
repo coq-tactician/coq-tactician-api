@@ -274,10 +274,6 @@ end = struct
   let to_list ls = ls []
 end
 
-type ('s, 't, 'edge_label) directed_edge =
-  { source : 's
-  ; target : 't
-  ; label  : 'edge_label }
 module SimpleGraph
     (D : sig
        type node_label
