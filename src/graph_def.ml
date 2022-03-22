@@ -65,9 +65,10 @@ type 'node definition_type =
 
 type 'node definition' =
   { previous : 'node list
+  ; path : Libnames.full_path
   ; def_type : 'node definition_type }
 
-let print_definition { previous ; def_type } =
+let print_definition { previous ; def_type; _ } =
   match def_type with
   | Ind c -> "Ind " ^ inductive_to_string c
   | Construct c -> "Construct " ^ constructor_to_string c

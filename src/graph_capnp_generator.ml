@@ -15,14 +15,15 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | Root -> root_set cnt
     | ContextDef id -> context_def_set cnt (Id.to_string id)
     | ContextAssum id -> context_assum_set cnt (Id.to_string id)
-    | Definition { previous; def_type } ->
+    | Definition { previous; def_type; path } ->
       let cdef = definition_init cnt in
       let open K.Builder.Definition in
+      (* TODO: We should probably derive the hash of a constant form its path (until we obtain actual hashes) *)
+      name_set cdef (Libnames.string_of_path path);
       (match def_type with
        | TacticalConstant (c, proof) ->
          let hash = Constant.UserOrd.hash c in
          hash_set cdef (Stdint.Uint64.of_int hash);
-         name_set cdef (Constant.to_string c);
          let tconst = tactical_constant_init cdef in
          let arr = TacticalConstant.tactical_proof_init tconst (List.length proof) in
          List.iteri (fun i ({ tactic; base_tactic; interm_tactic; tactic_hash; arguments; tactic_exact
@@ -58,22 +59,18 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
        | ManualConst c ->
          let hash = Constant.UserOrd.hash c in
          hash_set cdef (Stdint.Uint64.of_int hash);
-         name_set cdef (Constant.to_string c);
          manual_constant_set cdef
        | Ind (m, i) ->
          let hash = Hashtbl.hash (i, MutInd.UserOrd.hash m) in
          hash_set cdef (Stdint.Uint64.of_int hash);
-         name_set cdef (Libnames.string_of_path @@ Nametab.path_of_global (GlobRef.IndRef (m, i)));
          inductive_set cdef
        | Construct ((m, i), j) ->
          let hash = Hashtbl.hash (i, j, MutInd.UserOrd.hash m) in
          hash_set cdef (Stdint.Uint64.of_int @@ hash);
-         name_set cdef (Libnames.string_of_path @@ Nametab.path_of_global (GlobRef.ConstructRef ((m, i), j)));
          constructor_set cdef
        | Proj p ->
          let hash = Projection.Repr.UserOrd.hash p in
          hash_set cdef @@ Stdint.Uint64.of_int hash; (* TODO: This is probably not a good hash *)
-         name_set cdef (projection_to_string p); (* TODO: Better name *)
          projection_set cdef
       )
     | ConstEmpty -> const_empty_set cnt

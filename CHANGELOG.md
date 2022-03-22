@@ -23,6 +23,9 @@ Changes to the graph:
   global definitions in behavior. The only difference is that the root of the proof state contains a pointer to
   all of its local variables. As such, in the future, it might be considered to merge the nodes for local contexts
   into the nodes for definitions.
+- Names of definitions are now their full path (including sections and modules). This will help with aligning the dataset
+  with the 'live' graph during benchmarking. Alignment is still not perfect though. Currently, this means that the name of
+  a definition is a better representative than the hash of that definition.
   
 # stdlib-lgraph-intermediate-v8-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v8-global.tar.xz

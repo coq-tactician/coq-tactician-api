@@ -302,7 +302,10 @@ end = struct
              ((ContextElem, var)::ctx), v))
       c ~init:(let+ m = m in [], m)
 
-  let mk_definition def_type = Definition { previous = []; def_type }
+  let mk_definition def_type gref =
+    (* TODO: Looking this up in the nametab is extremely risky because the nametab is mutable. *)
+    let path = Nametab.path_of_global gref in
+    Definition { previous = []; def_type; path }
 
   (* Safe version of Learner_helper.proof_state_to_string *)
   let proof_state_to_string_safe (hyps, concl) env evar_map =
@@ -334,11 +337,11 @@ end = struct
   let rec gen_const c : G.node t =
     (* Only process canonical constants *)
     let c = Constant.make1 (Constant.canonical c) in
-    follow_def (mk_definition @@ ManualConst c) @@
+    follow_def (mk_definition (ManualConst c) (GlobRef.ConstRef c)) @@
     cached_gen_const c @@
     let* proofs = lookup_env_extra in
     let proof = Cmap.find_opt c proofs in
-    let gen_const_aux d =
+    let gen_const_aux d p =
       let* env = lookup_env in
       let { const_body; const_type; _ } = Environ.lookup_constant c env in
       let* children = if_not_truncate (return []) @@
@@ -352,7 +355,7 @@ end = struct
           | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
         let+ b = b in
         [ ConstType, typ; bt, b ] in
-      mk_node (mk_definition d) children
+      mk_node (mk_definition d p) children
     in
     let gen_tactical_proof (ps, tac) =
       let gen_proof_state (hyps, concl) =
@@ -407,11 +410,11 @@ end = struct
       ; arguments; tactic_exact
       ; root; context = context_range; ps_string } in
     match proof with
-    | None -> gen_const_aux (ManualConst c)
+    | None -> gen_const_aux (ManualConst c) (GlobRef.ConstRef c)
     | Some proof ->
       let proof = OList.concat @@ OList.map (fun (pss, tac) -> OList.map (fun ps -> ps, tac) pss) proof in
       let* proof = List.map gen_tactical_proof proof in
-      gen_const_aux (TacticalConstant (c, proof))
+      gen_const_aux (TacticalConstant (c, proof)) (GlobRef.ConstRef c)
   and gen_primitive_constructor ind proj_npars typ =
     let relctx, sort = Term.decompose_prod_assum typ in
     let real_arity = Rel.nhyps @@ CList.skipn proj_npars @@ OList.rev relctx in
@@ -422,7 +425,10 @@ end = struct
            | Name id when reli >= 0 ->
              let proj = Projection.Repr.make
                  ind ~proj_npars ~proj_arg:reli @@ Label.of_id id in
-             let* nproj = mk_node (mk_definition (Proj proj)) [ProjTerm, prod] in
+             (* TODO: This is clearly incorrect; something needs to be done about this.
+                Note that newer versions of Coq already thread projections differently *)
+             let const = GlobRef.ConstRef (Projection.Repr.constant proj) in
+             let* nproj = mk_node (mk_definition (Proj proj) const) [ProjTerm, prod] in
              register_projection proj nproj
            | _ -> return ()) >>
           let* typ = gen_constr typ in
@@ -460,8 +466,8 @@ end = struct
           let+ children =
             let* cstrs = List.map (fun (j, (typ, id)) ->
                 with_relatives indsn @@
-                let* typ = gen_constr_typ typ in
-                let* n = mk_node (mk_definition (Construct ((m, i), j + 1))) [ConstructTerm, typ] in
+                let* typ = gen_constr_typ typ in 
+                let* n = mk_node (mk_definition (Construct ((m, i), j + 1)) (GlobRef.ConstructRef ((m, i), j + 1))) [ConstructTerm, typ] in
                 let+ () = register_constructor ((m, i), j + 1) n in
                 IndConstruct, n) constructs in
             let univs = Declareops.inductive_polymorphic_context mb in
@@ -470,25 +476,28 @@ end = struct
             let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
             let+ n = gen_constr typ in
             (IndType, n)::cstrs in
-          mk_definition (Ind (m, i)), children
+          mk_definition (Ind (m, i)) (GlobRef.IndRef (m, i)), children
         ) inds in
       (), inds
   and gen_inductive ((m, _) as i) : G.node t =
-    follow_def (mk_definition @@ Ind i)
+    follow_def (mk_definition (Ind i) (GlobRef.IndRef i))
       (gen_mutinductive_helper m >>
        let+ n = find_inductive i in
        match n with
        | Some inn -> inn
        | None -> CErrors.anomaly (Pp.str "Inductive generation problem"))
   and gen_constructor (((m, _), _) as c) : G.node t =
-    follow_def (mk_definition @@ Construct c)
+    follow_def (mk_definition (Construct c) (GlobRef.ConstructRef c))
       (gen_mutinductive_helper m >>
        let+ n = find_constructor c in
        match n with
        | Some cn -> cn
        | None -> CErrors.anomaly (Pp.str "Inductive generation problem"))
   and gen_projection p =
-    follow_def (mk_definition @@ Proj (Projection.repr p))
+    (* TODO: This is clearly incorrect; something needs to be done about this.
+       Note that newer versions of Coq already thread projections differently *)
+    let const = GlobRef.ConstRef (Projection.Repr.constant @@ Projection.repr p) in
+    follow_def (mk_definition (Proj (Projection.repr p)) const)
       (gen_mutinductive_helper (Projection.mind p) >>
        let+ n = find_projection (Projection.repr p) in
        match n with
@@ -499,7 +508,7 @@ end = struct
     match sv with
     | None ->
       (* TODO: This constant is a temporary hack *)
-      follow_def (mk_definition @@ ManualConst (Constant.make2 ModPath.initial (Label.of_id id))) @@
+      follow_def (mk_definition (ManualConst (Constant.make2 ModPath.initial (Label.of_id id))) (GlobRef.VarRef id)) @@
       let* children = if_not_truncate (return []) @@
         match def with
         | Named.Declaration.LocalAssum (_, typ) ->
@@ -512,7 +521,7 @@ end = struct
           [ ConstType, typ; ConstDef, term ]
       in
       (* TODO: This constant is a temporary hack *)
-      let* n = mk_node (mk_definition (ManualConst (Constant.make2 ModPath.initial (Label.of_id id)))) children in
+      let* n = mk_node (mk_definition (ManualConst (Constant.make2 ModPath.initial (Label.of_id id))) (GlobRef.VarRef id)) children in
       let+ () = register_section_variable id n in
       n
     | Some sv -> return sv
