@@ -29,7 +29,7 @@ for group in graph_api_capnp.groupedEdges:
         edge_arrow_map[sort] = arrow_heads[cnt]
         cnt += 1
 
-def visualize(graph, state, showLabel = False, filename='python_graph', cleanup=True):
+def visualize(graph, state, showLabel = False, graph1 = None,  filename='python_graph', cleanup=True):
     nodes = graph.nodes
     edges = graph.edges
     root = state.root
@@ -46,6 +46,12 @@ def visualize(graph, state, showLabel = False, filename='python_graph', cleanup=
         dot.node(str(node), label)
     for node, value in enumerate(nodes):
         for edge in list(graph.edges)[value.childrenIndex:value.childrenIndex+value.childrenCount]:
+            if graph1 != None and edge.target.depIndex == 1:
+                target = '1#'+str(edge.target.nodeIndex)
+                dot.node(target, "Global:" + str(graph1.nodes[edge.target.nodeIndex].label.definition.hash)
+                         + str(graph1.nodes[edge.target.nodeIndex].label.definition.name))
+            else:
+                target = str(edge.target.nodeIndex)
             if showLabel:
                 label = str(edge.label)
             else:
@@ -54,7 +60,7 @@ def visualize(graph, state, showLabel = False, filename='python_graph', cleanup=
                 constraint = "false"
             else:
                 constraint = "true"
-            dot.edge(str(node), str(edge.target.nodeIndex), label=label,
+            dot.edge(str(node), target, label=label,
                      arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
 
     dot.render('python_graph', view=False)
@@ -111,4 +117,3 @@ class Visualizer:
             self.cnt += 1
 
         self._visualize(filename, result)
-

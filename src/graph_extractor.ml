@@ -328,10 +328,9 @@ module GraphBuilder
       let* root = mk_node Root children in
       let tac_orig = Tactic_name_remove.tactic_name_remove tac in
       let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
-      let args, interm_tactic = Tactic_one_variable.tactic_one_variable tac in
-      let tac = Extreme_tactic_normalize.tactic_normalize tac in
-      let context = Id.Map.bindings context_map in
-      let context_range = OList.map (fun (_, n) -> n) context in
+      let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
+      let base_tactic = Tactic_one_variable.tactic_strip tac in
+      let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings context_map in
       let warn_arg id =
         Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
                                  Pptactic.pr_glob_tactic (Global.env ()) tac_orig (* ++ str " in context\n" ++ *)
@@ -344,10 +343,15 @@ module GraphBuilder
         List.map (function
             | TVar id ->
               return @@ check_default id @@
-              Option.map snd @@ OList.find_opt (fun (id2, n) -> Id.equal id id2) context
+              Id.Map.find_opt id context_map
             | TRef c ->
               (match c with
-               | GlobRef.VarRef _ -> assert false
+               | GlobRef.VarRef id ->
+                 (* TODO: Currently this is not reversible, because we cannot detect the difference between
+                    TVar _ and TRef (VarRef _). This should be fixable by making section variables not part
+                    of the local context. *)
+                 return @@ check_default id @@
+                 Id.Map.find_opt id context_map
                | GlobRef.ConstRef c ->
                  let+ c = gen_const c in
                  Some c
@@ -361,9 +365,9 @@ module GraphBuilder
             | TOther -> return None
           ) args in
       let ps_string = proof_state_to_string_safe ps (Global.env ()) Evd.empty in
-      { tactic = tac_orig; base_tactic = tac; interm_tactic
-      ; tactic_hash = Hashtbl.hash_param 255 255 tac
-      ; arguments
+      { tactic = tac_orig; base_tactic; interm_tactic
+      ; tactic_hash = Hashtbl.hash_param 255 255 base_tactic
+      ; arguments; tactic_exact
       ; root; context = context_range; ps_string } in
     match proof with
     | None -> gen_const_aux (ManualConst c)

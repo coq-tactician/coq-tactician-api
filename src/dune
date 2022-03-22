@@ -13,7 +13,6 @@
     graph_generator_learner
     graph_capnp_generator
     graph_api
-    tactic_one_variable
     ))
   (libraries
     ;please enter one library name per one line in between watermark lines

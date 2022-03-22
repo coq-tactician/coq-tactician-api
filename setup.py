@@ -38,7 +38,7 @@ setuptools.setup(
     install_requires=['pycapnp', 'graphviz', 'ptpython'],
     entry_points={'console_scripts':
                   ['pytact-test=pytact.fake_reinforcement_client:run_main',
-                   'pytact-server=pytact.fake_python_server:run_main',
+                   'pytact-server=pytact.fake_python_server:main',
                    'pytact-check=pytact.graph_sanity_check:main',
                    'pytact-prover=pytact.prover:main']},
     project_urls={
