@@ -29,7 +29,7 @@ for group in graph_api_capnp.groupedEdges:
         edge_arrow_map[sort] = arrow_heads[cnt]
         cnt += 1
 
-def visualize(graph, state, showLabel = False, graph1 = None,  filename='python_graph', cleanup=True):
+def visualize(graph, state, showLabel=False, graph1=None,  filename='python_graph', cleanup=True):
     nodes = graph.nodes
     edges = graph.edges
     root = state.root
@@ -63,9 +63,9 @@ def visualize(graph, state, showLabel = False, graph1 = None,  filename='python_
             dot.edge(str(node), target, label=label,
                      arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
 
-    dot.render('python_graph', view=False)
+    dot.render(filename=filename, view=False, cleanup=cleanup)
 
-def visualize_defs(graph, defs, showLabel = False):
+def visualize_defs(graph, defs, showLabel=False, filename='python_grapn', cleanup=True):
     nodes = graph.nodes
     assert all(n < len(nodes) for n in defs)
     dot = graphviz.Digraph()
@@ -87,7 +87,7 @@ def visualize_defs(graph, defs, showLabel = False):
             dot.edge(str(node), str(edge.target.nodeIndex), label=label,
                      arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
 
-    dot.render(filename='python_graph', view=False)
+    dot.render(filename=filename, view=False, cleanup=True)
 
 def visualize_exception(reason, filename='python_graph', cleanup=True):
     dot = graphviz.Digraph()
