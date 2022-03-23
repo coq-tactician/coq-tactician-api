@@ -9,7 +9,6 @@ import argparse
 import functools
 import logging
 import itertools
-import time
 
 from typing import List, Optional, Iterable
 
@@ -46,7 +45,7 @@ async def open_proof(pull, theorem: str, vis: Visualizer):
 
 class ProtocolError(Exception):
     """
-    need more work on handling the errors 
+    need more work on handling the errors
     """
 
 async def search_dfs(result, tactics, limit) -> Optional[List[capnpLocalTactic]]:
@@ -58,7 +57,7 @@ async def search_dfs(result, tactics, limit) -> Optional[List[capnpLocalTactic]]
 
     TODO: currently is is simplistic dfs that assumes that the proof search graph is a Tree
     (i.e. that actions do not bring back the visited states)
-    
+
     but as the proof search graph is not a tree, at the minimum we
     need to maintain the hashmap of the visited proof states and
     don't return and expand the visited proof states
@@ -264,14 +263,14 @@ def my_parse_args():
 
 
 # this is a helper class to support finite number of
-# evaluated connections in case of running 
+# evaluated connections in case of running
 # tcp server on python side
 # to signal finishing serving event
 # normally serving will be finished
 # with events like reaching the certain
-# number of epochs, etc 
+# number of epochs, etc
 
-class Counter:  
+class Counter:
     def __init__(self, n: int):
         self.cnt = n
         self.event = asyncio.Event()
@@ -335,25 +334,7 @@ async def a_main(args):
 
         reader, writer = await asyncio.open_connection(sock=py_sock)
         await call_back(reader, writer)
-        print(f"Python: call_back is returned!")
-        #await proc.wait()
-
-
-        # print(f"Python: proc finished")
-        
-        #coqout, coqerr = await proc.communicate()
-        #try: 
-        #    coqout, coqerr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
-        #except:
-        #    print('TIMEOUT')
-        #print(f"Python: proc.communicate returned")
-        # debug_text = await proc.stdout.readline()
-        # print(f"Python: debug_text", debug_text, flush=True)
-        
-        # with open('coq_out.txt','wb') as f:
-        #     f.write(await proc.stdout.read(1000))
-        # with open('coq_err.txt','wb') as f:
-        #     f.write(await proc.stderr.read(1000))
+        print("Python: call_back is returned!")
 
 
 

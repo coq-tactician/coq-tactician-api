@@ -10,6 +10,8 @@ import socket
 import capnp
 import pytact.common
 import pytact.graph_visualize as gv
+import argparse
+
 capnp.remove_import_hook()
 
 Tactic = typing.NewType('Tactic', object)
@@ -89,9 +91,38 @@ def initialize_loop(reader, sock):
 
 
 def main():
-    sock = socket.socket(fileno=sys.stdin.fileno())
+    parser = argparse.ArgumentParser(
+        description='dummy tactic prediction python server')
+
+    parser.add_argument('--tcp', action='store_true',
+                        help='start python server on tcp/ip socket')
+
+    parser.add_argument('--port', type=int,
+                        default=33333,
+                        help='run python server on this port')
+    parser.add_argument('--host', type=str,
+                        default='127.0.0.1',
+                        help='run python server on this local ip')
+
+    args = parser.parse_args()
+    if not args.tcp:
+        debug("starting stdin server")
+        sock = socket.socket(fileno=sys.stdin.fileno())
+    else:
+        debug("starting tcp/ip server on port", args.port)
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.bind((args.host, args.port))
+        server_sock.listen(1)
+        debug("tcp/ip server is listening on", args.port)
+        sock, remote_addr = server_sock.accept()
+        debug("coq client connected ", remote_addr)
+
     reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
     initialize_loop(reader, sock)
+
+
+
+
 
 if __name__ == '__main__':
     main()
