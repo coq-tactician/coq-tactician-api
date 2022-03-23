@@ -7,6 +7,23 @@ open Graph_extractor
 open Graph_def
 open Tacexpr
 
+let reporter ppf =
+  let report src level ~over k msgf =
+    let k _ = over (); k () in
+    let with_stamp h tags k ppf fmt =
+      Format.kfprintf k ppf ("%s: %a @[" ^^ fmt ^^ "@]@.")
+        (Logs.Src.name src)
+        Logs.pp_header (level, h)
+    in
+    msgf @@ fun ?header ?tags fmt -> with_stamp header tags k ppf fmt
+  in
+  { Logs.report = report }
+
+
+let src = Logs.Src.create "neural_learner" ~doc:"coq-tactician-reinforce neural_learner events"
+module ThisLogs = (val Logs.src_log src : Logs.LOG)
+
+
 let service_name = Capnp_rpc_net.Restorer.Id.public ""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
@@ -221,17 +238,45 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     ; write_context : Unix.file_descr Capnp_unix.IO.WriteContext.t
     ; read_context : Unix.file_descr Capnp_unix.IO.ReadContext.t }
 
-  let empty () =
-    let ours, theirs = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let connect_socket my_socket =
+    { tactics = []
+    ; write_context = Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
+    ; read_context = Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing my_socket }
+
+  let connect_stdin () =
+    ThisLogs.info (fun m -> m "%s" "starting proving server on stdin");
+    let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
     let pid = Unix.create_process
-        "pytact-server" [| "pytact-server" |] theirs Unix.stdout Unix.stderr in
+        "pytact-server" [| "pytact-server" |] other_socket Unix.stdout Unix.stderr in
     Declaremods.append_end_library_hook (fun () ->
         Unix.kill pid Sys.sigkill;
         ignore (Unix.waitpid [] pid));
-    Unix.close theirs;
-    { tactics = []
-    ; write_context = Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing ours
-    ; read_context = Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing ours }
+    Unix.close other_socket;
+    connect_socket my_socket
+
+  let connect_tcpip ip_addr port =
+    ThisLogs.info (fun m -> m "%s %s %d" "connecting to proving server on" ip_addr port);
+    let my_socket =  Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
+    (try
+       Unix.connect my_socket server_addr;
+       ThisLogs.info (fun m -> m "%s" "connected to python server");
+    with
+     | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> ThisLogs.err (fun m -> m "%s" "connection to proving server refused")
+     | ex ->
+         (ThisLogs.err (fun m -> m "%s" "exception caught, closing connection to prover");
+          Unix.close my_socket;
+          raise ex));
+
+    Declaremods.append_end_library_hook (fun () ->
+        Unix.close my_socket;
+      );
+    connect_socket my_socket
+
+
+
+  let empty () = connect_stdin ()
+  (*  let empty () = connect_tcpip "127.0.0.1" 33333*)
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     let tac = tactic_repr tac in
