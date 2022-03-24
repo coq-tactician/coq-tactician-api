@@ -27,67 +27,66 @@ def debug(*args):
     print("PYTHON: ", *args)
 
 
-def prediction_loop(reader, sock, tacs: list[Tactic], graph1, definitions):
-    debug("entering prediction loop")
-    cnt = 0
+def process_synchronize(sock, msg):
+    debug(msg)
+    response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+    debug("sending synchronize response in the initialize loop", response)
+    response.write_packed(sock)
+
+def process_initialize(sock, msg, pred_context_cnt):
+    debug(f'---------------- Prediction CONTEXT {pred_context_cnt} -----------------')
+    graph1 = msg.initialize.graph
+    definitions = msg.initialize.definitions
+    # gv.visualize_defs(graph1, definitions, filename='initialize')
+    debug("initialize tactics", list(msg.initialize.tactics)[:10])
+    debug("initialize definitions", list(msg.initialize.definitions)[:10])
+    tacs = list(msg.initialize.tactics)
+    response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+    debug("sending initialize response", response)
+    response.write_packed(sock)
+    time.sleep(DELAY)
 
     selected_graph1_nodes = [node_idx for node_idx in definitions if graph1.nodes[node_idx].label.definition.hash in SELECTED_HASHES]
-    print(selected_graph1_nodes)
-    while True:
-        msg = next(reader)
+    debug(selected_graph1_nodes)
+
+    return tacs, selected_graph1_nodes
+
+def process_predict(sock, msg,  selected_graph1_nodes, tacs, theorem_step_cnt):
+     # gv.visualize(msg.predict.graph, msg.predict.state, graph1=graph1, filename=f'predict{theorem_step_cnt}')
+    preds = []
+    for tac in tacs:
+        if tac.parameters == 0:
+            preds.append({'tactic': {'ident': tac.ident, 'arguments': []}, 'confidence': 0.5})
+        elif tac.parameters == 1:
+            for hyp_node in msg.predict.state.context:
+                preds.append({'tactic': {'ident': tac.ident, 'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node}}]}, 'confidence': 0.5})
+            for hyp_node in selected_graph1_nodes:
+                preds.append({'tactic': {'ident': tac.ident, 'arguments': [{'term' : {'depIndex': 1, 'nodeIndex': hyp_node}}]}, 'confidence': 0.5})
+    debug("predictions", preds)
+    response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
+    debug(response)
+    response.write_packed(sock)
+    time.sleep(DELAY)
+
+
+def main_loop(reader, sock):
+    pred_context_cnt = 0
+    for msg in reader:
         msg_type = msg.which()
-        if msg_type == "predict":
-            gv.visualize(msg.predict.graph, msg.predict.state, graph1=graph1, filename=f'predict{cnt}')
-            cnt+=1
-            preds = []
-            for tac in tacs:
-                if tac.parameters == 0:
-                    preds.append({'tactic': {'ident': tac.ident, 'arguments': []}, 'confidence': 0.5})
-                elif tac.parameters == 1:
-                    for hyp_node in msg.predict.state.context:
-                        preds.append({'tactic': {'ident': tac.ident, 'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node}}]}, 'confidence': 0.5})
-                    for hyp_node in selected_graph1_nodes:
-                        preds.append({'tactic': {'ident': tac.ident, 'arguments': [{'term' : {'depIndex': 1, 'nodeIndex': hyp_node}}]}, 'confidence': 0.5})
-            debug("predictions", preds)
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
-            debug(response)
-            response.write_packed(sock)
-            time.sleep(DELAY)
-        elif msg_type == "synchronize":
-            debug(msg)
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-            debug(response)
-            response.write_packed(sock)
+        debug("message: ", msg.which())
+        if msg_type == "synchronize":
+            process_synchronize(sock, msg)
         elif msg_type == "initialize":
-            return msg
+            pred_context_cnt += 1
+            tacs, selected_graph1_nodes = process_initialize(sock, msg, pred_context_cnt)
+            theorem_step_cnt = 0
+        elif msg_type == "predict":
+            process_predict(sock, msg,  selected_graph1_nodes, tacs, theorem_step_cnt)
+            theorem_step_cnt += 1
+
         else:
             raise Exception("Capnp protocol error in prediction_loop: "
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
-
-
-def initialize_loop(reader, sock):
-    msg = next(reader)
-    msg_type = msg.which()
-    if msg_type == "initialize":
-        while True:
-            debug('---------------- New prediction context -----------------')
-            gv.visualize_defs(msg.initialize.graph, msg.initialize.definitions, filename='initialize')
-            debug("initialize tactics", msg.initialize.tactics)
-            debug("initialize definitions", msg.initialize.definitions)
-            tacs = list(msg.initialize.tactics)
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-            debug("sending initialize response", response)
-            response.write_packed(sock)
-            time.sleep(DELAY)
-            msg = prediction_loop(reader, sock, tacs, msg.initialize.graph, msg.initialize.definitions)
-    elif msg_type == "synchronize":
-        debug(msg)
-        response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-        debug("sending synchronize response", response)
-        response.write_packed(sock)
-        initialize_loop(reader, sock)
-    else:
-        raise Exception("Capnp protocol error in initialize_loop: initial msg is not 'initialize' or 'synchronize'")
 
 
 def main():
@@ -118,7 +117,7 @@ def main():
         debug("coq client connected ", remote_addr)
 
     reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
-    initialize_loop(reader, sock)
+    main_loop(reader, sock)
 
 
 
