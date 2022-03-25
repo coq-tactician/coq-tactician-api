@@ -202,9 +202,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let module Request = Api.Builder.PredictionProtocol.Request in
       let module Response = Api.Reader.PredictionProtocol.Response in
       let request = Request.init_root () in
-      let id = !drainid in
-      Request.synchronize_set_int_exn request id;
-      drainid := id + 1;
+      let hash = Hashtbl.hash_param 255 255 (!drainid, Unix.gettimeofday (), Unix.getpid ()) in
+      Request.synchronize_set_int_exn request hash;
+      drainid := !drainid + 1;
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
       let rec loop () =
         match Capnp_unix.IO.ReadContext.read_message rc with
@@ -212,7 +212,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         | Some response ->
           let response = Response.of_message response in
           match Response.get response with
-          | Response.Synchronized id' when Stdint.Uint64.to_int id' = id -> ()
+          | Response.Synchronized id when Stdint.Uint64.to_int id = hash -> ()
           | _ -> loop () in
       loop ()
 
