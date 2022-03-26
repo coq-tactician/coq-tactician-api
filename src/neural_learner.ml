@@ -7,6 +7,44 @@ open Graph_extractor
 open Graph_def
 open Tacexpr
 
+let declare_bool_option ~name ~default =
+  let key = ["Tactician"; "Neural"; name] in
+  Goptions.declare_bool_option_and_ref
+    ~depr:false ~name:(String.concat " " key)
+    ~key ~value:default
+
+let declare_int_option ~name ~default =
+  let open Goptions in
+  let key = ["Tactician"; "Neural"; name] in
+  let r_opt = ref default in
+  let optwrite v = r_opt := match v with | None -> default | Some v -> v in
+  let optread () = Some !r_opt in
+  let _ = declare_int_option {
+      optdepr = false;
+      optname = String.concat " " key;
+      optkey = key;
+      optread; optwrite
+    } in
+  fun () -> !r_opt
+
+let declare_string_option ~name ~default =
+  let open Goptions in
+  let key = ["Tactician"; "Neural"; name] in
+  let r_opt = ref default in
+  let optwrite v = r_opt := v in
+  let optread () = !r_opt in
+  let _ = declare_string_option {
+      optdepr = false;
+      optname = String.concat " " key;
+      optkey = key;
+      optread; optwrite
+    } in
+  optread
+
+let option_mybool = declare_bool_option ~name:"MyBool" ~default:false
+let option_myint = declare_int_option ~name:"MyInt" ~default:0
+let option_password = declare_string_option ~name:"MyPassword" ~default:""
+
 let service_name = Capnp_rpc_net.Restorer.Id.public ""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
@@ -222,6 +260,10 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     ; read_context : Unix.file_descr Capnp_unix.IO.ReadContext.t }
 
   let empty () =
+    if not (option_mybool ()) then CErrors.anomaly (Pp.str "Option MyBool should have been set.");
+    if not (option_myint () = 42) then CErrors.anomaly (Pp.str "Option MyInt should have been 42");
+    if not (String.equal (option_password ()) "correct horse battery staple") then
+      CErrors.anomaly (Pp.str "Option MyPassword should have been 'correct horse battery staple'");
     let ours, theirs = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
     let pid = Unix.create_process
         "pytact-server" [| "pytact-server" |] theirs Unix.stdout Unix.stderr in
