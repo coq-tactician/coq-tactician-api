@@ -45,7 +45,7 @@ let option_mybool = declare_bool_option ~name:"MyBool" ~default:false
 let option_myint = declare_int_option ~name:"MyInt" ~default:0
 let option_password = declare_string_option ~name:"MyPassword" ~default:""
 
-let service_name = Capnp_rpc_net.Restorer.Id.public ""
+let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -140,7 +140,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
             let+ _ = gen_const c in ()) constants in
         List.iter gen_mutinductive_helper minductives in
       let (known_definitions, ()), builder =
-        CICGraph.run_empty ~def_truncate:true Cmap.empty updater Global in
+        CICGraph.run_empty ~def_truncate:(truncate_option ()) Cmap.empty updater Global in
       builder, known_definitions in
 
     let module Request = Api.Builder.PredictionProtocol.Request in
