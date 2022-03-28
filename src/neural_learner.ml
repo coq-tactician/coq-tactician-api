@@ -7,7 +7,41 @@ open Graph_extractor
 open Graph_def
 open Tacexpr
 
-let service_name = Capnp_rpc_net.Restorer.Id.public ""
+let declare_bool_option ~name ~default =
+  let key = ["Tactician"; "Neural"; name] in
+  Goptions.declare_bool_option_and_ref
+    ~depr:false ~name:(String.concat " " key)
+    ~key ~value:default
+
+let declare_int_option ~name ~default =
+  let open Goptions in
+  let key = ["Tactician"; "Neural"; name] in
+  let r_opt = ref default in
+  let optwrite v = r_opt := match v with | None -> default | Some v -> v in
+  let optread () = Some !r_opt in
+  let _ = declare_int_option {
+      optdepr = false;
+      optname = String.concat " " key;
+      optkey = key;
+      optread; optwrite
+    } in
+  fun () -> !r_opt
+
+let declare_string_option ~name ~default =
+  let open Goptions in
+  let key = ["Tactician"; "Neural"; name] in
+  let r_opt = ref default in
+  let optwrite v = r_opt := v in
+  let optread () = !r_opt in
+  let _ = declare_string_option {
+      optdepr = false;
+      optname = String.concat " " key;
+      optkey = key;
+      optread; optwrite
+    } in
+  optread
+
+let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -104,7 +138,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
             let+ _ = gen_const env Cmap.empty c in ()) constants in
         List.iter (gen_mutinductive_helper env Cmap.empty) minductives in
       let (section_definitions, known_definitions, ()), builder =
-        CICGraph.run_empty ~def_truncate:true updater G.builder_nil Global in
+        CICGraph.run_empty ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
       builder, section_definitions, known_definitions in
 
     let module Request = Api.Builder.PredictionProtocol.Request in
@@ -205,9 +239,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let module Request = Api.Builder.PredictionProtocol.Request in
       let module Response = Api.Reader.PredictionProtocol.Response in
       let request = Request.init_root () in
-      let id = !drainid in
-      Request.synchronize_set_int_exn request id;
-      drainid := id + 1;
+      let hash = Hashtbl.hash_param 255 255 (!drainid, Unix.gettimeofday (), Unix.getpid ()) in
+      Request.synchronize_set_int_exn request hash;
+      drainid := !drainid + 1;
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
       let rec loop () =
         match Capnp_unix.IO.ReadContext.read_message rc with
@@ -215,7 +249,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         | Some response ->
           let response = Response.of_message response in
           match Response.get response with
-          | Response.Synchronized id' when Stdint.Uint64.to_int id' = id -> ()
+          | Response.Synchronized id when Stdint.Uint64.to_int id = hash -> ()
           | _ -> loop () in
       loop ()
 

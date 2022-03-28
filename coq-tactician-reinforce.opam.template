@@ -1,7 +1,7 @@
 pin-depends: [
   [
     "coq-tactician.8.11.dev"
-    "./coq-tactician"
+    "git+https://github.com/coq-tactician/coq-tactician.git#81cca3e2b51bc30a53e30bc2333d571f848c5052"
   ]
 ]
 
