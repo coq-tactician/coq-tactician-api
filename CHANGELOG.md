@@ -1,5 +1,21 @@
 # Unreleased
 
+Introduction of the global context:
+- Every definition now has a `previous` field that indicates which definition comes before it in the global context.
+- We now include every definition that has ever existed at any time-point during the compilation of a file.
+  Definitions now have a `status` field that indicates they are either (1) an `original` definition as inputted
+  by the user, (2) a `discharged` definition which is the result of a section being closed or (3) a substituted
+  definition which is the result of a module being instantiated. In the last two cases, we cross-reference to
+  the original definition.
+- Every file in the dataset has a `representative` field, which points to the definition that is the end of the
+  'super-global' context. The super-global context is the collection of all definitions that become available when
+  a file is `Require`d into another file.
+- Every definition has a field `externalPrevious`, which contains a list of files that have been `Require`d right
+  before the definition was inputted by the user.
+- A python utility `pytact-visualize` has been created to visualize the global context of a file.
+- The main entry points of a file have been changed. Entry points now consists of `definitions`, a list of all
+  definitions in the file, and `representative`, the definition that represents the super-global context of a file.
+
 Changes to the graph:
 - We now deal in a more principle way with section variables. Previously, a definition or proof state that referred
   to a section variable had a local context associated to it that included that variable. This way, different

@@ -80,6 +80,39 @@ def visualize_defs(graph, defs, showLabel = False):
 
     dot.render('python_graph', view=False)
 
+def visualize_global_context(graph, definitions, representative, dependencies, showLabel = False):
+    nodes = graph.nodes
+
+    dot = graphviz.Digraph()
+    dot.attr('graph', ordering="out")
+    for node in definitions:
+        value = nodes[node]
+        if node == representative:
+            label = 'Representative: ' + value.label.definition.name
+        else:
+            label = value.label.definition.name
+        dot.node(str(node), label)
+        dot.edge(str(node), str(value.label.definition.previous),
+                 arrowtail="dot", dir="both", constraint="true")
+        for fi in value.label.definition.externalPrevious:
+            file_label = 'File:' + dependencies[fi]
+            fn = 'file-'+str(fi)
+            dot.node(fn, file_label)
+            dot.edge(str(node), fn,
+                     arrowtail="dot", dir="both", constraint="true")
+        if value.label.definition.status.which () == 'discharged':
+            dot.edge(str(node), str(value.label.definition.status.discharged),
+                     arrowtail="inv", dir="both", constraint="false", style="dashed")
+        if value.label.definition.status.which () == 'substituted':
+            if value.label.definition.status.substituted.depIndex == 0:
+                dot.edge(str(node), str(value.label.definition.status.substituted.nodeIndex),
+                         arrowtail="odot", dir="both", constraint="false", style="dashed")
+            else:
+                dot.edge(str(node), 'External',
+                         arrowtail="odot", dir="both", constraint="false", style="dashed")
+
+    dot.render('python_graph', view=False)
+
 def visualize_exception(reason):
     dot = graphviz.Digraph()
     dot.node(str(reason), str(reason))

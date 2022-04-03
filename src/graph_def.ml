@@ -47,9 +47,9 @@ type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@de
 
 type 'node tactical_step =
   { ps_string: string
-  ; tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
-  ; base_tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
-  ; interm_tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
+  ; tactic : string
+  ; base_tactic : string
+  ; interm_tactic : string
   ; tactic_hash : int
   ; arguments : 'node option list
   ; tactic_exact : bool
@@ -62,9 +62,18 @@ type 'node definition_type =
   | Proj of projection (* TODO: Resolve *)
   | ManualConst of constant (* TODO: Universes? *)
   | TacticalConstant of constant * 'node tactical_step list (* TODO: Universes? *)
+  | ManualSectionConst of Id.t (* TODO: Universes? *)
+  | TacticalSectionConstant of Id.t * 'node tactical_step list (* TODO: Universes? *)
+
+type 'node def_status =
+  | DOriginal
+  | DDischarged of 'node
+  | DSubstituted of 'node
 
 type 'node definition' =
-  { previous : 'node list
+  { previous : 'node option
+  ; external_previous : 'node list
+  ; status : 'node def_status
   ; path : Libnames.full_path
   ; def_type : 'node definition_type }
 
@@ -75,6 +84,8 @@ let print_definition { previous ; def_type; _ } =
   | Proj p -> "Proj " ^ projection_to_string p
   | ManualConst c -> "Const " ^ Label.to_string @@ Constant.label c
   | TacticalConstant (c, _) -> "Const " ^ Label.to_string @@ Constant.label c
+  | ManualSectionConst id -> "SecConst " ^ Id.to_string id
+  | TacticalSectionConstant (id, _) -> "SecConst " ^ Id.to_string id
 
 type 'node definition = 'node definition'
                         [@printer fun fmt c -> fprintf fmt "%s" (print_definition c)][@@deriving show]

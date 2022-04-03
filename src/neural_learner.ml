@@ -70,9 +70,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let concl = term_repr concl in
     let open CICGraph in
     let open Monad_util.WithMonadNotations(CICGraph) in
-    let* hyps, (concl, map) = with_named_context env Cmap.empty hyps @@
+    let* hyps, (concl, map) = with_named_context env (Id.Map.empty, Cmap.empty) hyps @@
       let* map = lookup_named_map in
-      let+ concl = gen_constr env Cmap.empty concl in
+      let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
       concl, map in
     let+ root = mk_node Root ((ContextSubject, concl)::hyps) in
     root, map
@@ -97,13 +97,14 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     | None -> raise MismatchedArguments
     | Some x -> x
 
-  let find_global_argument section_definitions CICGraph.{ constants; inductives; constructors; projections } =
+  let find_global_argument
+      CICGraph.{ section_nodes; definition_nodes = { constants; inductives; constructors; projections }; _ } =
     let open Tactic_one_variable in
-    let map = Cmap.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
+    let map = Cmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
         constants Int.Map.empty in
-    let map = Indmap.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.IndRef c)) m)
+    let map = Indmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.IndRef c)) m)
         inductives map in
-    let map = Constrmap.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
+    let map = Constrmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
         constructors map in
     let map = ProjMap.fold (fun c (_, node) m ->
         Feedback.msg_notice Pp.(str (Graph_def.projection_to_string c));
@@ -111,14 +112,14 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         assert false)
         projections map in
     let map = Id.Map.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
-        section_definitions map in
+        section_nodes map in
     fun id ->
       match Int.Map.find_opt id map with
       | None -> raise MismatchedArguments
       | Some x -> x
 
   let init_predict rc wc tacs env =
-    let builder, section_definitions, known_definitions =
+    let builder, state =
       let globrefs = Environ.Globals.view Environ.(env.env_globals) in
       (* We are only interested in canonical constants *)
       let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
@@ -135,11 +136,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open GB in
       let updater =
         let* () = List.iter (fun c ->
-            let+ _ = gen_const env Cmap.empty c in ()) constants in
-        List.iter (gen_mutinductive_helper env Cmap.empty) minductives in
-      let (section_definitions, known_definitions, ()), builder =
+            let+ _ = gen_const env (Id.Map.empty, Cmap.empty) c in ()) constants in
+        List.iter (gen_mutinductive_helper env (Id.Map.empty, Cmap.empty)) minductives in
+      let ( state, ()), builder =
         CICGraph.run_empty ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
-      builder, section_definitions, known_definitions in
+      builder, state in
 
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Response = Api.Reader.PredictionProtocol.Response in
@@ -163,12 +164,12 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     CapnpGraphWriter.write_graph graph (fun _ -> 0) builder.node_count builder.edge_count builder.builder;
 
     let definitions =
-      let f (_, (_, n)) = Stdint.Uint32.of_int n in
-      (List.map f @@ Cmap.bindings known_definitions.constants) @
-      (List.map f @@ Indmap.bindings known_definitions.inductives) @
-      (List.map f @@ Constrmap.bindings known_definitions.constructors) @
-      (List.map f @@ ProjMap.bindings known_definitions.projections) @
-      (List.map f @@ Id.Map.bindings section_definitions)
+      let f (_, (_, (_, n))) = Stdint.Uint32.of_int n in
+      (List.map f @@ Cmap.bindings state.definition_nodes.constants) @
+      (List.map f @@ Indmap.bindings state.definition_nodes.inductives) @
+      (List.map f @@ Constrmap.bindings state.definition_nodes.constructors) @
+      (List.map f @@ ProjMap.bindings state.definition_nodes.projections) @
+      (List.map (fun (_, (_, n)) -> Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
     in
     ignore (Request.Initialize.definitions_set_list init definitions);
     Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
@@ -177,10 +178,10 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     | Some response ->
       let response = Response.of_message response in
       match Response.get response with
-      | Response.Initialized -> tacs, section_definitions, known_definitions
+      | Response.Initialized -> tacs, state
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-  let predict rc wc find_global_argument section_definitions known_definitions tacs env ps =
+  let predict rc wc find_global_argument state tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module ProofState = Api.Builder.ProofState in
     let module Request = Api.Builder.PredictionProtocol.Request in
@@ -192,8 +193,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open Monad_util.WithMonadNotations(CICGraph) in
       let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
-    let (_, _, (root, context_map)), G.{ paths=_; node_count; edge_count; builder } =
-      CICGraph.run ~section_definitions ~known_definitions updater G.builder_nil Local in
+    let (_, (root, context_map)), G.{ paths=_; node_count; edge_count; builder } =
+      CICGraph.run ~state updater G.builder_nil Local in
     let context_range = List.map (fun (_, (_, n)) -> n) @@ Id.Map.bindings context_map in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
@@ -278,11 +279,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   let predict { tactics; write_context; read_context } =
     drain read_context write_context;
     let env = Global.env () in
-    let tacs, section_definitions, known_definitions = init_predict read_context write_context tactics env in
-    let find_global_argument = find_global_argument section_definitions known_definitions in
+    let tacs, state = init_predict read_context write_context tactics env in
+    let find_global_argument = find_global_argument state in
     fun f ->
       if f = [] then IStream.empty else
-        let preds = predict read_context write_context find_global_argument section_definitions known_definitions tacs env
+        let preds = predict read_context write_context find_global_argument state tacs env
             (List.hd f).state in
         let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
         IStream.of_list preds
