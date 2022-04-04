@@ -19,6 +19,7 @@ struct Graph {
   struct Node { # Fits exactly in 128 bits.
     label :union { # Inlined for efficiency purposes
       proofState @0 :Void;
+      undefProofState @28 :Void;
 
       # Context
       contextDef @1 :Text;
@@ -36,7 +37,7 @@ struct Graph {
 
       # Constr nodes
       rel @9 :Void;
-      evar @10 :IntP; #TODO: Resolve
+      evar @10 :Void;
       evarSubst @11 :Void;
       cast @12 :Void;
       prod @13 :Void;
@@ -58,8 +59,8 @@ struct Graph {
       primitive @27 :Text;
     }
 
-    childrenIndex @28 :UInt32;
-    childrenCount @29 :UInt16;
+    childrenIndex @29 :UInt32;
+    childrenCount @30 :UInt16;
   }
   # The main memory store of the graph. It acts as a heap similar to the main memory of a C/C++ program.
   # The heap is accessed by indexing the `nodes` list using a `NodeIndex` which returns a `Node`.
@@ -354,11 +355,14 @@ enum EdgeClassification {
   coFixFunType @39;
   coFixFunTerm @40;
 
-  # Constr edges
+  # Back pointers
   relPointer @41;
+
+  # Evars
   evarSubstPointer @42;
   evarSubstOrder @43;
   evarSubstValue @44;
+  evarSubject @45;
 }
 
 # Struct is needed to work around
@@ -405,5 +409,5 @@ const groupedEdges :List(ConflatableEdges) =
 , ( conflatable = [coFixFunType, coFixFunTerm] )
 , ( conflatable = [relPointer] )
 , ( conflatable = [evarSubstPointer] )
-, ( conflatable = [evarSubstOrder, evarSubstValue] )
+, ( conflatable = [evarSubject, evarSubstOrder, evarSubstValue] )
 ];

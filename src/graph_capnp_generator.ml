@@ -11,6 +11,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     let open K.Builder.Graph.Node.Label in
     match nt with
     | ProofState -> proof_state_set cnt
+    | UndefProofState -> undef_proof_state_set cnt
     | ContextDef id -> context_def_set cnt (Id.to_string id)
     | ContextAssum id -> context_assum_set cnt (Id.to_string id)
     | Definition { previous; external_previous; def_type; path; status } ->
@@ -115,9 +116,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | SortSet -> sort_set_set cnt
     | SortType -> sort_type_set cnt
     | Rel -> rel_set cnt
-    | Evar i ->
-      let p = evar_init cnt in
-      K.Builder.IntP.value_set p @@ Stdint.Uint64.of_int i
+    | Evar -> evar_set cnt
     | EvarSubst -> evar_subst_set cnt
     | Cast -> cast_set cnt
     | Prod _ -> prod_set cnt
@@ -187,6 +186,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | EvarSubstPointer -> EvarSubstPointer
     | EvarSubstOrder -> EvarSubstOrder
     | EvarSubstValue -> EvarSubstValue
+    | EvarSubject -> EvarSubject
 
   let write_graph capnp_graph transformer
       node_count edge_count builder =

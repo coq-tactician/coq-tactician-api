@@ -102,6 +102,7 @@ type 'node definition = 'node definition'
 
 type 'node node_type =
   | ProofState
+  | UndefProofState
 
   (* Context *)
   | ContextDef of id
@@ -119,7 +120,7 @@ type 'node node_type =
 
   (* Constr nodes *)
   | Rel
-  | Evar of int (* TODO: This could be resolved *)
+  | Evar
   | EvarSubst
   | Cast (* TODO: Do we want cast kind? *)
   | Prod of name
@@ -211,11 +212,14 @@ type edge_type =
   | CoFixFunType
   | CoFixFunTerm
 
-  (* Constr edges *)
+  (* Backpointers *)
   | RelPointer
+
+  (* Evars *)
   | EvarSubstPointer
   | EvarSubstOrder
   | EvarSubstValue
+  | EvarSubject
 [@@deriving show { with_path = false }]
 
 let edge_type_int_mod = function
@@ -264,6 +268,7 @@ let edge_type_int_mod = function
   | EvarSubstPointer -> 0
   | EvarSubstOrder -> 0
   | EvarSubstValue -> 1
+  | EvarSubject -> 1
 
 module type GraphMonadType = sig
   include Monad.Def
