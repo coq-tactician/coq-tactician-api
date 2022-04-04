@@ -183,6 +183,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   let predict rc wc find_global_argument state tacs env ps =
     let module Tactic = Api.Reader.Tactic in
+    let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Prediction = Api.Reader.PredictionProtocol.Prediction in
@@ -211,11 +212,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       | Response.Prediction preds ->
         let convert_args args =
           List.map (fun arg ->
-              let term = match Tactic.Argument.get arg with
-                | Tactic.Argument.Undefined _ | Tactic.Argument.Unresolvable -> raise IllegalArgument
-                | Tactic.Argument.Term t -> t in
-              let dep_index = Tactic.Argument.Term.dep_index_get term in
-              let node_index = Stdint.Uint32.to_int @@ Tactic.Argument.Term.node_index_get term in
+              let term = match Argument.get arg with
+                | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
+                | Argument.Term t -> t in
+              let dep_index = Argument.Term.dep_index_get term in
+              let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
               match dep_index with
               | 0 -> find_local_argument node_index
               | 1 -> find_global_argument node_index
@@ -225,7 +226,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         let preds = List.filter_map (fun p ->
             let tac = Prediction.tactic_get p in
             let tid = Tactic.ident_get_int_exn tac in
-            let args = convert_args @@ Tactic.arguments_get_list tac in
+            let args = convert_args @@ Prediction.arguments_get_list p in
             let tac, params = find_tactic tacs tid in
             if params <> List.length args then raise MismatchedArguments;
             let conf = Prediction.confidence_get p in

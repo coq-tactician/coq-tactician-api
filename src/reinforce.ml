@@ -94,6 +94,7 @@ let rec proof_object env state tacs context_map =
   let module ExecutionResult = Api.Builder.ExecutionResult in
   let module Exception = Api.Builder.Exception in
   let module Tactic = Api.Reader.Tactic in
+  let module Argument = Api.Reader.Argument in
   ProofObject.local @@ object
     inherit ProofObject.service
 
@@ -104,15 +105,15 @@ let rec proof_object env state tacs context_map =
       let res = Results.result_init results in
       let tac = Params.tactic_get params in
       let tac_id = Tactic.ident_get_int_exn tac in
-      let tac_args = Tactic.arguments_get_list tac in
+      let tac_args = Params.arguments_get_list params in
       begin
         try
           let tac_args = List.map (fun arg ->
-              match Tactic.Argument.get arg with
-              | Tactic.Argument.Undefined _ | Tactic.Argument.Unresolvable -> raise IllegalArgument
-              | Tactic.Argument.Term t -> t
+              match Argument.get arg with
+              | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
+              | Argument.Term t -> t
             ) tac_args in
-          let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Tactic.Argument.Term.node_index_get a)) tac_args in
+          let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Argument.Term.node_index_get a)) tac_args in
           let tac, params = find_tactic tacs tac_id in
           if List.length params <> List.length tac_args then raise MismatchedArguments;
           let tac_args = List.map (find_argument context_map) tac_args in

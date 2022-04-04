@@ -37,6 +37,8 @@ def process1(rootdir, args, fname):
         proof_steps = 0
         original_proof_steps = 0
         original_proof_steps_faithful = 0
+        outcomes = 0
+        original_outcomes = 0
         proofs = 0
         original_proofs = 0
         original_proofs_faithful = 0
@@ -77,15 +79,19 @@ def process1(rootdir, args, fname):
                         file_tactics[p.tactic.ident] += 1
                         if n.definition.status.which() == 'original':
                             file_original_tactics[p.tactic.ident] += 1
-                        file_tactic_arguments.setdefault(p.tactic.ident, len(p.tactic.arguments))
-                        if file_tactic_arguments[p.tactic.ident] != len(p.tactic.arguments):
-                            print(f'{fname}: Tactic with two different argument lengths detected')
-                            raise Exception
+                        for outcome in p.outcomes:
+                            file_tactic_arguments.setdefault(p.tactic.ident, len(outcome.tacticArguments))
+                            if file_tactic_arguments[p.tactic.ident] != len(outcome.tacticArguments):
+                                print(f'{fname}: Tactic with two different argument lengths detected')
+                                raise Exception
+                            outcomes += 1
+                            if n.definition.status.which() == 'original':
+                                original_outcomes += 1
+                            for a in outcome.tacticArguments:
+                                if a.which() == 'unresolvable':
+                                    unresolvable += 1
                         file_base_tactics_text.add(p.tactic.baseText)
                         file_base_tactics_intermtext.add(p.tactic.intermText)
-                        for a in p.tactic.arguments:
-                            if a.which() == 'unresolvable':
-                                unresolvable += 1
                     proofs += 1
                     if n.definition.status.which() == 'original':
                         original_proofs += 1
@@ -100,11 +106,12 @@ def process1(rootdir, args, fname):
     return (fname, dep0, nodes_count, edges_count,
             file_definitions, file_original_definitions, file_base_tactics_text,
             file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
-            proof_steps, original_proof_steps, original_proof_steps_faithful, proofs, original_proofs,
+            proof_steps, original_proof_steps, original_proof_steps_faithful,
+            outcomes, original_outcomes, proofs, original_proofs,
             original_proofs_faithful, unresolvable)
 
 def process2(rootdir, args, res):
-    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _, _, _, _, _  = res
+    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _, _, _, _, _, _, _  = res
     with open(fname) as f:
         print(fname)
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
@@ -143,30 +150,31 @@ def process2(rootdir, args, res):
             else:
                 proof_steps = []
             for x in proof_steps:
-                if not (x.state.root < local_count):
-                    print(f"{fname}: root {x.state.root} of a state {x.state} is "
-                          f"outside local node count {local_count}")
-                    raise Exception
-                for c in x.state.context:
-                    if not (c < local_count):
-                        print(f"{fname}: ctx {x} of a state {x.state} is "
+                for outcome in x.outcomes:
+                    if not (outcome.before.root < local_count):
+                        print(f"{fname}: root {outcome.before.root} of a state {outcome.before} is "
                               f"outside local node count {local_count}")
                         raise Exception
-                    cl = g.graph.nodes[c].label.which()
-                    if not (cl == 'contextDef' or cl == 'contextAssum'):
-                        print(f"{fname}: ctx {x} of a state {x.state} "
-                              f"has the wrong node classification {cn.label}")
-                        raise Exception
-                for a in x.tactic.arguments:
-                    if a.which () == 'unresolvable':
-                        pass
-                    elif a.which() == 'term':
-                        if not (a.term.nodeIndex < len_nodes[g.dependencies[a.term.depIndex]]):
-                            print(f"{fname} argument {a} of proof step {x} is not resolvable")
+                    for c in outcome.before.context:
+                        if not (c < local_count):
+                            print(f"{fname}: ctx {outcome.before.context} of a state {outcome.before} is "
+                                  f"outside local node count {local_count}")
                             raise Exception
-                        # TODO: We should check that this node is actually a definition
-                    else:
-                        print(f"{fname}: unknown tactical argument {a}")
+                        cl = g.graph.nodes[c].label.which()
+                        if not (cl == 'contextDef' or cl == 'contextAssum'):
+                            print(f"{fname}: ctx {outcome.before.context} of a state {outcme.before} "
+                                  f"has the wrong node classification {cn.label}")
+                            raise Exception
+                    for a in outcome.tacticArguments:
+                        if a.which () == 'unresolvable':
+                            pass
+                        elif a.which() == 'term':
+                            if not (a.term.nodeIndex < len_nodes[g.dependencies[a.term.depIndex]]):
+                                print(f"{fname} argument {a} of proof step {x} is not resolvable")
+                                raise Exception
+                            # TODO: We should check that this node is actually a definition
+                        else:
+                            print(f"{fname}: unknown tactical argument {a}")
         # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
         g.total_size
 
@@ -206,6 +214,8 @@ def main():
     proof_steps_total = 0
     original_proof_steps_total = 0
     original_proof_steps_faithful_total = 0
+    outcomes_total = 0
+    original_outcomes_total = 0
     proofs_total = 0
     original_proofs_total = 0
     original_proofs_faithful_total = 0
@@ -221,7 +231,8 @@ def main():
         (fname, dep0, nodes_count, edges_count,
          file_definitions, file_original_definitions, file_base_tactics_text,
          file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
-         proof_steps, original_proof_steps, original_proof_steps_faithful, proofs, original_proofs,
+         proof_steps, original_proof_steps, original_proof_steps_faithful,
+         outcomes, original_outcomes, proofs, original_proofs,
          original_proofs_faithful, unresolvable) = res
         len_nodes[dep0] = nodes_count
         nodes_total += nodes_count
@@ -229,6 +240,8 @@ def main():
         proof_steps_total += proof_steps
         original_proof_steps_total += original_proof_steps
         original_proof_steps_faithful_total += original_proof_steps_faithful
+        outcomes_total += outcomes
+        original_outcomes_total += original_outcomes
         proofs_total += proofs
         original_proofs_total += original_proofs
         original_proofs_faithful_total += original_proofs_faithful
@@ -259,6 +272,8 @@ def main():
     print(f"Proof steps total {proof_steps_total}")
     print(f"Original proof steps total {original_proof_steps_total}")
     print(f"Faithfully represented original proof steps total {original_proof_steps_faithful_total}")
+    print(f"Outcomes total {outcomes_total}")
+    print(f"Original outcomes total {original_outcomes_total}")
     print(f"Proofs total {proofs_total}")
     print(f"Original proofs total {original_proofs_total}")
     print(f"Faithful original proofs total {original_proofs_faithful_total}")

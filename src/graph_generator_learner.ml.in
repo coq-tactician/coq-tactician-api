@@ -24,7 +24,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   module LH = Learner_helper.L(TS)
   open TS
 
-  type model = ((proof_state list * tactic) list * data_status * KerName.t) list
+  type model = (((proof_state * term * proof_state list) list * tactic) list * data_status * KerName.t) list
 
   let last_model = Summary.ref ~name:"dataset-generator-learner-lastmodel" []
 
@@ -44,7 +44,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   let learn db (kn, path, status) outcomes tac =
     match cache_type kn, status with
     | `File, (QedTime | Discharged _ | Substituted _)  ->
-      let proof_states = List.map (fun x -> x.before) outcomes in
+      let proof_states = List.map (fun x -> x.before, x.term, List.rev x.after) outcomes in
       let db = match db with
         | (ls, pstatus, pkn)::data when KerName.equal kn pkn ->
           ((proof_states, tac)::ls, pstatus, pkn)::data
@@ -138,7 +138,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   let proof_state_to_pair ps =
     let concl = proof_state_goal ps in
     let hyps = proof_state_hypotheses ps in
-    (List.map (map_named term_repr) hyps, term_repr concl)
+    List.map (map_named term_repr) hyps, term_repr concl, proof_state_evar ps
 
   let grandfathered_constants =
     [ match Coqlib.lib_ref "tactician.private_constant_placeholder" with
@@ -203,14 +203,18 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         let proof = OList.find_opt (fun (p, _, path2) -> KerName.equal path path2) proof_states in
         let proof = Option.map (fun (p, _, _) -> p) proof in
         let proof = Option.map (OList.map (fun (pss, tac) ->
-            OList.map proof_state_to_pair pss, tactic_repr tac)) proof in
+            OList.map (fun (b, term, ass) ->
+                proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
+            tactic_repr tac)) proof in
         Option.fold_left (fun m proof -> Cmap.add c proof m) m proof
       ) Cmap.empty constants in
     let env_extra_var = OList.fold_left (fun m id ->
         let proof = OList.find_opt (fun (_, _, path) -> Id.equal id @@ Label.to_id @@ KerName.label path) proof_states in
         let proof = Option.map (fun (p, _, _) -> p) proof in
         let proof = Option.map (OList.map (fun (pss, tac) ->
-            OList.map proof_state_to_pair pss, tactic_repr tac)) proof in
+            OList.map (fun (b, term, ass) ->
+                proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
+            tactic_repr tac)) proof in
         Option.fold_left (fun m proof -> Id.Map.add id proof m) m proof
       ) Id.Map.empty section_vars in
     let env_extra = env_extra_var, env_extra_const in

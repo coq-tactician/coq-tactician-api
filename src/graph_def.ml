@@ -45,16 +45,26 @@ type constant = Constant.t
                 [@printer fun fmt c -> fprintf fmt "%s" (Label.to_string @@ Constant.label c)][@@deriving show]
 type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@deriving show]
 
+type 'node proof_state =
+  { ps_string : string
+  ; root      : 'node
+  ; context   : 'node list
+  ; evar      : Evar.t }
+
+type 'node outcome =
+  { term               : 'node
+  ; term_text          : string
+  ; arguments          : 'node option list
+  ; proof_state_before : 'node proof_state
+  ; proof_states_after : 'node proof_state list }
+
 type 'node tactical_step =
-  { ps_string: string
-  ; tactic : string
-  ; base_tactic : string
+  { tactic        : string
+  ; base_tactic   : string
   ; interm_tactic : string
-  ; tactic_hash : int
-  ; arguments : 'node option list
-  ; tactic_exact : bool
-  ; root : 'node
-  ; context : 'node list }
+  ; tactic_hash   : int
+  ; tactic_exact  : bool
+  ; outcomes      : 'node outcome list }
 
 type 'node definition_type =
   | Ind of inductive (* TODO: Universes? *)

@@ -15,7 +15,9 @@ let map_named f = function
     let v' = f v in
     let ty' = f ty in Named.Declaration.LocalDef (id, v', ty')
 
-type tactical_proof = (((Constr.t, Constr.t) Named.Declaration.pt list * Constr.t) list * glob_tactic_expr) list
+type proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
+type outcome = proof_state * Constr.t * proof_state list
+type tactical_proof = (outcome list * glob_tactic_expr) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
 
 module type CICGraphMonadType = sig
@@ -416,64 +418,94 @@ end = struct
     let* truncate = lookup_def_truncate in
     if truncate then alt else m
 
-  let rec gen_tactical_proof (ps, tac) =
-    let gen_proof_state (hyps, concl) =
-      let+ ctx, (subject, map) = with_named_context gen_constr hyps @@
-        let* subject = gen_constr concl in
-        let+ map = lookup_named_map in
-        subject, map in
-      ((ContextSubject, subject)::ctx), map in
-    let* children, context_map = gen_proof_state ps in
-    let* root = mk_node Root children in
+  let rec gen_proof_step (outcomes, tac) =
+    let* env = lookup_env in
     let tac_orig = Tactic_name_remove.tactic_name_remove tac in
     let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
     let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
     let base_tactic = Tactic_one_variable.tactic_strip tac in
-    let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings context_map in
-    let* env = lookup_env in
-    let warn_arg id =
-      Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
-                               Pptactic.pr_glob_tactic env tac_orig (* ++ str " in context\n" ++ *)
-                               (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
-    let check_default id = function
-      | None -> warn_arg id; None
-      | x -> x in
-    let+ arguments =
-      let open Tactic_one_variable in
-      List.map (function
-          | TVar id ->
-            return @@ check_default id @@
-            Id.Map.find_opt id context_map
-          | TRef c ->
-            (match c with
-             | GlobRef.VarRef id ->
-               (try
-                  let def = Environ.lookup_named id env in
-                  let+ c = gen_section_var id def in
-                  Some c
-                with Not_found ->
+    let gen_outcome (before, term, after) =
+      let term_text =
+        (* TODO: Some evil hacks to work around the fact that we don't have a sigma here *)
+        let beauti_evar c =
+          let rec aux c =
+            match Constr.kind c with
+            | Constr.Evar (x, _) -> Constr.mkEvar (x, [||])
+            | _ -> Constr.map aux c in
+          aux c in
+        let with_depth f =
+          let old = Topfmt.get_depth_boxes () in
+          Fun.protect ~finally:(fun () -> Topfmt.set_depth_boxes old)
+            (fun () -> Topfmt.set_depth_boxes (Some 32); f ()) in
+        Pp.string_of_ppcmds @@ Sexpr.format_oneline @@ Constrextern.with_meta_as_hole (fun () ->
+            Flags.with_option Flags.in_toplevel (fun () ->
+                with_depth (fun () ->
+                    Printer.safe_pr_constr_env (Global.env()) Evd.empty (beauti_evar term))) ()) () in
+      let gen_before_proof_state (hyps, concl, evar) term =
+        let* ctx, (subject, arguments, context_range, term) = with_named_context gen_constr hyps @@
+          let* subject = gen_constr concl
+          and+ term = gen_constr term
+          and+ map = lookup_named_map in
+          let warn_arg id =
+            Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
+                                     Pptactic.pr_glob_tactic env tac_orig (* ++ str " in context\n" ++ *)
+                                     (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
+          let check_default id = function
+            | None -> warn_arg id; None
+            | x -> x in
+          let+ arguments =
+            let open Tactic_one_variable in
+            List.map (function
+                | TVar id ->
                   return @@ check_default id @@
-                  Id.Map.find_opt id context_map)
-             | GlobRef.ConstRef c ->
-               let+ c = gen_const c in
-               Some c
-             | GlobRef.IndRef i ->
-               let+ c = gen_inductive i in
-               Some c
-             | GlobRef.ConstructRef c ->
-               let+ c = gen_constructor c in
-               Some c
-            )
-          | TOther -> return None
-        ) args in
-    (* TODO: Look into what we should give as the evd here *)
-    let ps_string = proof_state_to_string_safe ps env Evd.empty in
+                  Id.Map.find_opt id map
+                | TRef c ->
+                  (match c with
+                   | GlobRef.VarRef id ->
+                     (try
+                        let def = Environ.lookup_named id env in
+                        let+ c = gen_section_var id def in
+                        Some c
+                      with Not_found ->
+                        return @@ check_default id @@
+                        Id.Map.find_opt id map)
+                   | GlobRef.ConstRef c ->
+                     let+ c = gen_const c in
+                     Some c
+                   | GlobRef.IndRef i ->
+                     let+ c = gen_inductive i in
+                     Some c
+                   | GlobRef.ConstructRef c ->
+                     let+ c = gen_constructor c in
+                     Some c
+                  )
+                | TOther -> return None
+              ) args in
+          let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
+          subject, arguments, context_range, term in
+        let+ root = mk_node Root ((ContextSubject, subject)::ctx) in
+        (* TODO: Look into what we should give as the evd here *)
+        let ps_string = proof_state_to_string_safe (hyps, concl) env Evd.empty in
+        { ps_string; root; context = context_range; evar }, arguments, term in
+      let gen_proof_state (hyps, concl, evar) =
+        let* ctx, (subject, map) = with_named_context gen_constr hyps @@
+          let* subject = gen_constr concl in
+          let+ map = lookup_named_map in
+          subject, map in
+        let+ root = mk_node Root ((ContextSubject, subject)::ctx) in
+        (* TODO: Look into what we should give as the evd here *)
+        let ps_string = proof_state_to_string_safe (hyps, concl) env Evd.empty in
+        let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
+        { ps_string; root; context = context_range; evar } in
+      let+ proof_state_before, arguments, term = gen_before_proof_state before term
+      and+ proof_states_after = List.map gen_proof_state after in
+      { term; term_text; arguments; proof_state_before; proof_states_after } in
+    let+ outcomes = List.map gen_outcome outcomes in
     { tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env tac_orig)
     ; base_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env base_tactic)
     ; interm_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env interm_tactic)
     ; tactic_hash = Hashtbl.hash_param 255 255 base_tactic
-    ; arguments; tactic_exact
-    ; root; context = context_range; ps_string }
+    ; tactic_exact; outcomes }
   and gen_const c : G.node t =
     (* Only process canonical constants *)
     let c = Constant.make1 (Constant.canonical c) in
@@ -501,8 +533,7 @@ end = struct
     match proof with
     | None -> gen_const_aux (ManualConst c) (GlobRef.ConstRef c)
     | Some proof ->
-      let proof = OList.concat @@ OList.map (fun (pss, tac) -> OList.map (fun ps -> ps, tac) pss) proof in
-      let* proof = List.map gen_tactical_proof proof in
+      let* proof = List.map gen_proof_step proof in
       gen_const_aux (TacticalConstant (c, proof)) (GlobRef.ConstRef c)
   and gen_primitive_constructor ind proj_npars typ =
     let relctx, sort = Term.decompose_prod_assum typ in
@@ -617,8 +648,7 @@ end = struct
       (match proof with
        | None -> gen_aux (ManualSectionConst id)
        | Some proof ->
-         let proof = OList.concat @@ OList.map (fun (pss, tac) -> OList.map (fun ps -> ps, tac) pss) proof in
-         let* proof = List.map gen_tactical_proof proof in
+         let* proof = List.map gen_proof_step proof in
          gen_aux (TacticalSectionConstant (id, proof)))
     | Some sv -> return sv
   and gen_constr c = gen_kind_of_term @@ Constr.kind c

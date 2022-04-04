@@ -5,6 +5,7 @@ using DepIndex = UInt16;
 using NodeIndex = UInt32;
 using TacticId = UInt64;
 using DefinitionId = UInt64;
+using ProofStateId = UInt32;
 
 struct Graph {
   # Note: This struct fits exactly in 64 bits. Let's keep it that way.
@@ -76,6 +77,7 @@ struct ProofState {
   root @0 :NodeIndex;
   context @1 :List(NodeIndex);
   text @2 :Text;
+  id @3 :ProofStateId;
 }
 
 struct AbstractTactic {
@@ -84,33 +86,22 @@ struct AbstractTactic {
 }
 
 struct Tactic {
-  # Together with the tag, this fits exactly in 64 bits. Lets keep it that way.
-  struct Argument {
-    union {
-      unresolvable @0 :Void;
-      term :group {
-        depIndex @1 :DepIndex;
-        nodeIndex @2 :NodeIndex;
-      }
-    }
-  }
 
   ident @0 :TacticId;
-  arguments @1 :List(Argument);
 
-  text @2 :Text; # WARNING: This is currently not 1-to-1 isomorphic to (ident, arguments)!
+  text @1 :Text; # WARNING: This is currently not 1-to-1 isomorphic to (ident, arguments)!
   # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
   # Note, however, that this is a slight under-approximation, because tactic printing is not 100% isomorphic to
   # Coq's internal AST of tactics. As such, there are slightly more unique `ident`'s than `bareText`'s in the dataset.
-  baseText @3 :Text;
-  intermText @4 :Text;
+  baseText @2 :Text;
+  intermText @3 :Text;
 
   # Indicates whether or not `ident` + `arguments` is faithfully reversible into the original "strictified" tactic.
   # Note that this does not necessarily mean that it represents exactly the tactic that was inputted by the user.
   # All tactics are modified to be 'strict' (meaning that tactics that have delayed variables in them break).
   # This flag measures the faithfulness of the representation w.r.t. the strict version of the tactic, not the
   # original tactic inputted by the user.
-  exact @5 :Bool;
+  exact @4 :Bool;
 }
 
 struct Dataset {
@@ -153,7 +144,7 @@ struct ExecutionResult {
 }
 
 interface ProofObject {
-  runTactic @0 (tactic: Tactic) -> (result: ExecutionResult);
+  runTactic @0 (tactic: Tactic, arguments: List(Argument)) -> (result: ExecutionResult);
 }
 
 interface AvailableTactics {
@@ -191,7 +182,8 @@ struct PredictionProtocol {
   }
   struct Prediction {
     tactic @0 :Tactic;
-    confidence @1 :Float64;
+    arguments @1 :List(Argument);
+    confidence @2 :Float64;
   }
   struct Response {
     union {
@@ -202,12 +194,28 @@ struct PredictionProtocol {
   }
 }
 
+struct Argument {
+  union {
+    unresolvable @0 :Void;
+    term :group {
+      depIndex @1 :DepIndex;
+      nodeIndex @2 :NodeIndex;
+    }
+  }
+}
+
+struct Outcome {
+  before @0 :ProofState;
+  after @1 :List(ProofState);
+  term @2 :NodeIndex;
+  termText @3 :Text;
+
+  tacticArguments @4 :List(Argument);
+}
 
 struct ProofStep {
-  state @0 :ProofState;
-  tactic @1 :Tactic;
-  afterStates @2 :List(ProofState);
-  term @3 :NodeIndex;
+  tactic @0 :Tactic;
+  outcomes @1 :List(Outcome);
 }
 
 struct Definition {

@@ -30,33 +30,46 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
          Status.Substituted.dep_index_set_exn capnp_node @@ transformer dep;
          Status.Substituted.node_index_set_int_exn capnp_node index);
       let write_proof arr proof =
-        List.iteri (fun i ({ tactic; base_tactic; interm_tactic; tactic_hash; arguments; tactic_exact
-                           ; root; context; ps_string }
-                           : G.node tactical_step) ->
-                     let arri = Capnp.Array.get arr i in
-                     let state = K.Builder.ProofStep.state_init arri in
-                     let capnp_tactic = K.Builder.ProofStep.tactic_init arri in
-                     K.Builder.ProofState.root_set_int_exn state @@ snd root;
-                     let _ = K.Builder.ProofState.context_set_list state
-                         (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
-                     K.Builder.ProofState.text_set state ps_string;
-                     K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
-                     K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
-                     K.Builder.Tactic.text_set capnp_tactic tactic;
-                     K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
-                     K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic;
-                     let arg_arr = K.Builder.Tactic.arguments_init capnp_tactic (List.length arguments) in
-                     List.iteri (fun i arg ->
-                         let arri = Capnp.Array.get arg_arr i in
-                         match arg with
-                         | None -> K.Builder.Tactic.Argument.unresolvable_set arri
-                         | Some (dep, index) ->
-                           let node = K.Builder.Tactic.Argument.term_init arri in
-                           K.Builder.Tactic.Argument.Term.dep_index_set_exn node @@ transformer dep;
-                           K.Builder.Tactic.Argument.Term.node_index_set_int_exn node index
-                       ) arguments;
-                     ()
-                   ) proof in
+        let write_proof_state capnp_state { root; context; ps_string; evar } =
+          K.Builder.ProofState.root_set_int_exn capnp_state @@ snd root;
+          let _ = K.Builder.ProofState.context_set_list capnp_state
+              (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
+          K.Builder.ProofState.text_set capnp_state ps_string;
+          K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in
+        let write_outcome capnp { term; term_text; arguments; proof_state_before; proof_states_after } =
+          let capnp_state_before = K.Builder.Outcome.before_init capnp in
+          write_proof_state capnp_state_before proof_state_before;
+          let after_arr = K.Builder.Outcome.after_init capnp (List.length proof_states_after) in
+          List.iteri (fun i ps ->
+              let capnp_state = Capnp.Array.get after_arr i in
+              write_proof_state capnp_state ps;
+            ) proof_states_after;
+          K.Builder.Outcome.term_set_int_exn capnp @@ snd term;
+          K.Builder.Outcome.term_text_set capnp @@ term_text;
+          let arg_arr = K.Builder.Outcome.tactic_arguments_init capnp (List.length arguments) in
+          List.iteri (fun i arg ->
+              let arri = Capnp.Array.get arg_arr i in
+              match arg with
+              | None -> K.Builder.Argument.unresolvable_set arri
+              | Some (dep, index) ->
+                let node = K.Builder.Argument.term_init arri in
+                K.Builder.Argument.Term.dep_index_set_exn node @@ transformer dep;
+                K.Builder.Argument.Term.node_index_set_int_exn node index
+            ) arguments in
+        List.iteri (fun i { tactic; base_tactic; interm_tactic; tactic_hash; tactic_exact; outcomes } ->
+            let arri = Capnp.Array.get arr i in
+            let capnp_tactic = K.Builder.ProofStep.tactic_init arri in
+            K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
+            K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
+            K.Builder.Tactic.text_set capnp_tactic tactic;
+            K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
+            K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic;
+            let outcome_arr = K.Builder.ProofStep.outcomes_init arri (List.length outcomes) in
+            List.iteri (fun i outcome ->
+                let outcome_arri = Capnp.Array.get outcome_arr i in
+                write_outcome outcome_arri outcome
+              ) outcomes
+          ) proof in
       (match previous with
        | None -> previous_set_int_exn cdef self_index;
        | Some previous ->
