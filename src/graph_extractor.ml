@@ -483,7 +483,7 @@ end = struct
               ) args in
           let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
           subject, arguments, context_range, term in
-        let+ root = mk_node Root ((ContextSubject, subject)::ctx) in
+        let+ root = mk_node ProofState ((ContextSubject, subject)::ctx) in
         (* TODO: Look into what we should give as the evd here *)
         let ps_string = proof_state_to_string_safe (hyps, concl) env Evd.empty in
         { ps_string; root; context = context_range; evar }, arguments, term in
@@ -492,7 +492,7 @@ end = struct
           let* subject = gen_constr concl in
           let+ map = lookup_named_map in
           subject, map in
-        let+ root = mk_node Root ((ContextSubject, subject)::ctx) in
+        let+ root = mk_node ProofState ((ContextSubject, subject)::ctx) in
         (* TODO: Look into what we should give as the evd here *)
         let ps_string = proof_state_to_string_safe (hyps, concl) env Evd.empty in
         let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
@@ -784,7 +784,7 @@ end = struct
         Proofview.tclUNIT @@
         with_env env @@ with_env_extra env_extra @@
         let* hyps, concl = with_named_context hyps @@ gen_constr (EConstr.to_constr sigma concl) in
-        mk_node Root ((ContextSubject, concl)::hyps))
+        mk_node ProofState ((ContextSubject, concl)::hyps))
 
   let gen_section_var =
     with_envs @@ fun id ->

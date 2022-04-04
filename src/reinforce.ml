@@ -25,7 +25,7 @@ let gen_proof_state env (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : 
     let* map = lookup_named_map in
     let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
     concl, map in
-  let+ root = mk_node Root ((ContextSubject, concl)::hyps) in
+  let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
   root, map
 
 let write_execution_result env res hyps concl obj =

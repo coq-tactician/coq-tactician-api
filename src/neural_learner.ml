@@ -74,7 +74,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let* map = lookup_named_map in
       let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
       concl, map in
-    let+ root = mk_node Root ((ContextSubject, concl)::hyps) in
+    let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
     root, map
 
   exception NoSuchTactic

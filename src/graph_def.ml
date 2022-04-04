@@ -101,7 +101,7 @@ type 'node definition = 'node definition'
                         [@printer fun fmt c -> fprintf fmt "%s" (print_definition c)][@@deriving show]
 
 type 'node node_type =
-  | Root
+  | ProofState
 
   (* Context *)
   | ContextDef of id

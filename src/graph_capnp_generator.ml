@@ -10,7 +10,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
   let nt2nt self_index transformer (nt : G.node node_type) cnt =
     let open K.Builder.Graph.Node.Label in
     match nt with
-    | Root -> root_set cnt
+    | ProofState -> proof_state_set cnt
     | ContextDef id -> context_def_set cnt (Id.to_string id)
     | ContextAssum id -> context_assum_set cnt (Id.to_string id)
     | Definition { previous; external_previous; def_type; path; status } ->

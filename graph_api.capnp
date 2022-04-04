@@ -18,7 +18,7 @@ struct Graph {
   }
   struct Node { # Fits exactly in 128 bits.
     label :union { # Inlined for efficiency purposes
-      root @0 :Void;
+      proofState @0 :Void;
 
       # Context
       contextDef @1 :Text;
