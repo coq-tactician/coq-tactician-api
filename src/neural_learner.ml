@@ -273,10 +273,13 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     ; read_context = Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing ours }
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
-    let tac = tactic_repr tac in
-    let tactics = tac::tactics in
-    last_model := tactics;
-    { db with tactics }
+    match tac with
+    | None -> db
+    | Some tac ->
+      let tac = tactic_repr tac in
+      let tactics = tac::tactics in
+      last_model := tactics;
+      { db with tactics }
   let predict { tactics; write_context; read_context } =
     drain read_context write_context;
     let env = Global.env () in

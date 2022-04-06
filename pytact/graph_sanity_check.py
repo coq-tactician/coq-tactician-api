@@ -68,20 +68,36 @@ def process1(rootdir, args, fname):
                     else:
                         ps = n.definition.tacticalSectionConstant
                     faithful = True
+                    before_states = set()
+                    for p in ps:
+                        for outcome in p.outcomes:
+                            before_states.add(outcome.before.id)
+                    for p in ps:
+                        for outcome in p.outcomes:
+                            for after in outcome.after:
+                                if after.id not in before_states:
+                                    print(f'{fname}: After state {after} with tactic {p.tactic.text} of definition {n.definition.name} does not have a correspoinding before state')
+                                    raise Exception
                     for p in ps:
                         proof_steps += 1
                         if n.definition.status.which() == 'original':
                             original_proof_steps += 1
-                        if n.definition.status.which() == 'original' and p.tactic.text == p.tactic.intermText:
+                        if (n.definition.status.which() == 'original'
+                            and p.tactic.which() == 'known'
+                            and p.tactic.known.text == p.tactic.known.intermText):
                             original_proof_steps_faithful += 1
                         else:
                             faithful = False
-                        file_tactics[p.tactic.ident] += 1
+                        if p.tactic.which() == 'known':
+                            ident = p.tactic.known.ident
+                        else:
+                            ident = 0
+                        file_tactics[ident] += 1
                         if n.definition.status.which() == 'original':
-                            file_original_tactics[p.tactic.ident] += 1
+                            file_original_tactics[ident] += 1
                         for outcome in p.outcomes:
-                            file_tactic_arguments.setdefault(p.tactic.ident, len(outcome.tacticArguments))
-                            if file_tactic_arguments[p.tactic.ident] != len(outcome.tacticArguments):
+                            file_tactic_arguments.setdefault(ident, len(outcome.tacticArguments))
+                            if file_tactic_arguments[ident] != len(outcome.tacticArguments):
                                 print(f'{fname}: Tactic with two different argument lengths detected')
                                 raise Exception
                             outcomes += 1
@@ -90,8 +106,9 @@ def process1(rootdir, args, fname):
                             for a in outcome.tacticArguments:
                                 if a.which() == 'unresolvable':
                                     unresolvable += 1
-                        file_base_tactics_text.add(p.tactic.baseText)
-                        file_base_tactics_intermtext.add(p.tactic.intermText)
+                        if p.tactic.which() == 'known':
+                            file_base_tactics_text.add(p.tactic.known.baseText)
+                            file_base_tactics_intermtext.add(p.tactic.known.intermText)
                     proofs += 1
                     if n.definition.status.which() == 'original':
                         original_proofs += 1

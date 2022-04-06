@@ -17,7 +17,7 @@ let map_named f = function
 
 type proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
 type outcome = proof_state * Constr.t * proof_state list
-type tactical_proof = (outcome list * glob_tactic_expr) list
+type tactical_proof = (outcome list * glob_tactic_expr option) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
 
 module type CICGraphMonadType = sig
@@ -427,12 +427,21 @@ end = struct
     let* truncate = lookup_def_truncate in
     if truncate then alt else m
 
-  let rec gen_proof_step (outcomes, tac) =
+  let rec gen_proof_step (outcomes, tactic) =
     let* env = lookup_env in
-    let tac_orig = Tactic_name_remove.tactic_name_remove tac in
-    let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
-    let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
-    let base_tactic = Tactic_one_variable.tactic_strip tac in
+    let tactic, args = match tactic with
+      | None -> None, []
+      | Some tac ->
+        let tac_orig = Tactic_name_remove.tactic_name_remove tac in
+        let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
+        let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
+        let base_tactic = Tactic_one_variable.tactic_strip tac in
+        Some { tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env tac_orig)
+             ; base_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env base_tactic)
+             ; interm_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env interm_tactic)
+             ; tactic_hash = Hashtbl.hash_param 255 255 base_tactic
+             ; tactic_exact },
+        args in
     let gen_outcome ((before_hyps, before_concl, before_evar), term, after) =
       let term_text =
         (* TODO: Some evil hacks to work around the fact that we don't have a sigma here *)
@@ -473,8 +482,11 @@ end = struct
           and+ term = gen_constr term
           and+ map = lookup_named_map in
           let warn_arg id =
+            let tac = match tactic with
+              | None -> "Unknown-tac"
+              | Some tactic -> tactic.tactic in
             Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
-                                     Pptactic.pr_glob_tactic env tac_orig (* ++ str " in context\n" ++ *)
+                                     str tac (* ++ str " in context\n" ++ *)
                                      (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
           let check_default id = function
             | None -> warn_arg id; None
@@ -515,11 +527,7 @@ end = struct
         { ps_string; root; context = context_range; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
     let+ outcomes = List.map gen_outcome outcomes in
-    { tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env tac_orig)
-    ; base_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env base_tactic)
-    ; interm_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env interm_tactic)
-    ; tactic_hash = Hashtbl.hash_param 255 255 base_tactic
-    ; tactic_exact; outcomes }
+    { tactic; outcomes }
   and gen_const c : G.node t =
     (* Only process canonical constants *)
     let c = Constant.make1 (Constant.canonical c) in

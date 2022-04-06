@@ -215,8 +215,11 @@ struct Outcome {
 }
 
 struct ProofStep {
-  tactic @0 :Tactic;
-  outcomes @1 :List(Outcome);
+  tactic :union {
+    unknown @0 :Void;
+    known @1 :Tactic;
+  }
+  outcomes @2 :List(Outcome);
 }
 
 struct Definition {

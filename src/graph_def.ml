@@ -58,13 +58,16 @@ type 'node outcome =
   ; proof_state_before : 'node proof_state
   ; proof_states_after : 'node proof_state list }
 
-type 'node tactical_step =
+type tactic =
   { tactic        : string
   ; base_tactic   : string
   ; interm_tactic : string
   ; tactic_hash   : int
-  ; tactic_exact  : bool
-  ; outcomes      : 'node outcome list }
+  ; tactic_exact  : bool }
+
+type 'node tactical_step =
+  { tactic   : tactic option
+  ; outcomes : 'node outcome list }
 
 type 'node definition_type =
   | Ind of inductive (* TODO: Universes? *)

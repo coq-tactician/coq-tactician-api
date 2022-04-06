@@ -57,14 +57,18 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
                 K.Builder.Argument.Term.dep_index_set_exn node @@ transformer dep;
                 K.Builder.Argument.Term.node_index_set_int_exn node index
             ) arguments in
-        List.iteri (fun i { tactic; base_tactic; interm_tactic; tactic_hash; tactic_exact; outcomes } ->
+        List.iteri (fun i { tactic; outcomes } ->
             let arri = Capnp.Array.get arr i in
             let capnp_tactic = K.Builder.ProofStep.tactic_init arri in
-            K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
-            K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
-            K.Builder.Tactic.text_set capnp_tactic tactic;
-            K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
-            K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic;
+            (match tactic with
+             | None -> K.Builder.ProofStep.Tactic.unknown_set capnp_tactic
+             | Some { tactic; base_tactic; interm_tactic; tactic_hash; tactic_exact } ->
+               let capnp_tactic = K.Builder.ProofStep.Tactic.known_init capnp_tactic in
+               K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
+               K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
+               K.Builder.Tactic.text_set capnp_tactic tactic;
+               K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
+               K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic);
             let outcome_arr = K.Builder.ProofStep.outcomes_init arri (List.length outcomes) in
             List.iteri (fun i outcome ->
                 let outcome_arri = Capnp.Array.get outcome_arr i in
