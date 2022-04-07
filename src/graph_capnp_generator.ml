@@ -188,8 +188,8 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | CoFixFunTerm -> CoFixFunTerm
     | RelPointer -> RelPointer
     | EvarSubstPointer -> EvarSubstPointer
-    | EvarSubstOrder -> EvarSubstOrder
-    | EvarSubstValue -> EvarSubstValue
+    | EvarSubstTerm -> EvarSubstTerm
+    | EvarSubstTarget -> EvarSubstTarget
     | EvarSubject -> EvarSubject
 
   let write_graph capnp_graph transformer

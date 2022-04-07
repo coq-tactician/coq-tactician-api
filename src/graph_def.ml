@@ -220,8 +220,8 @@ type edge_type =
 
   (* Evars *)
   | EvarSubstPointer
-  | EvarSubstOrder
-  | EvarSubstValue
+  | EvarSubstTerm
+  | EvarSubstTarget
   | EvarSubject
 [@@deriving show { with_path = false }]
 
@@ -269,8 +269,8 @@ let edge_type_int_mod = function
   | CoFixFunTerm -> 1
   | RelPointer -> 0
   | EvarSubstPointer -> 0
-  | EvarSubstOrder -> 0
-  | EvarSubstValue -> 1
+  | EvarSubstTerm -> 0
+  | EvarSubstTarget -> 1
   | EvarSubject -> 1
 
 module type GraphMonadType = sig

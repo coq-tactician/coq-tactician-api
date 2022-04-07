@@ -37,7 +37,7 @@ module GraphvizGraph = struct
     [ `Dir `Both
     ; `Arrowtail (List.nth arrow_heads @@ edge_type_int_mod @@ E.label e)] @
     (match E.label e with
-    | AppArgOrder | EvarSubstOrder -> [`Constraint false]
+    | AppArgOrder -> [`Constraint false]
     | _ -> [`Constraint true])
   let get_subgraph _ = None
 

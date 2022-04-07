@@ -62,7 +62,9 @@ module type CICGraphMonadType = sig
   (** Managing the local context *)
   val lookup_relative     : int -> node t
   val lookup_named        : Id.t -> node t
-  val lookup_evar         : Evar.t -> node option t
+      (* The array is the local context associated with the section, in the same ordering as would be given
+        by an Evar node. If an element in the node is None, it is a section variable. *)
+  val lookup_evar         : Evar.t -> (node * node option array) option t
   val lookup_named_map    : node Id.Map.t t
   val lookup_def_depth    : int option t
   val lookup_def_truncate : bool t
@@ -72,7 +74,7 @@ module type CICGraphMonadType = sig
   val with_relative       : node -> 'a t -> 'a t
   val with_relatives      : node list -> 'a t -> 'a t
   val with_named          : Id.t -> node -> 'a t -> 'a t
-  val with_evar           : Evar.t -> node -> 'a t -> 'a t
+  val with_evar           : Evar.t -> node -> node option array -> 'a t -> 'a t
   val with_empty_contexts : 'a t -> 'a t
   val with_decremented_def_depth : 'a t -> 'a t
   val with_env            : Environ.env -> 'a t -> 'a t
@@ -117,7 +119,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   type context =
     { relative     : node list
     ; named        : node Id.Map.t
-    ; sigma        : node Evar.Map.t
+    ; sigma        : (node * node option array) Evar.Map.t
     ; def_depth    : int option
     ; def_truncate : bool
     ; env          : Environ.env option
@@ -278,8 +280,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
         { c with relative })
   let with_named id n =
     local (fun ({ named; _ } as c) -> { c with named = Id.Map.update id (update_error n) named })
-  let with_evar e n =
-    local (fun ({ sigma; _ } as c) -> { c with sigma = Evar.Map.update e (update_error n) sigma })
+  let with_evar e n ns =
+    local (fun ({ sigma; _ } as c) -> { c with sigma = Evar.Map.update e (update_error (n, ns)) sigma })
   let with_empty_contexts m =
     local (fun c -> { c with named = Id.Map.empty; sigma = Evar.Map.empty; relative = [] }) m
   let with_decremented_def_depth m =
@@ -465,7 +467,9 @@ end = struct
           let+ map = lookup_named_map in
           subject, map in
         let* root = mk_node ProofState ((ContextSubject, subject)::ctx) in
-        let+ cont = with_evar evar root m in
+        let arr = Array.of_list @@ OList.map (fun id -> Id.Map.find_opt id map) @@
+          OList.map Named.Declaration.get_id hyps in
+        let+ cont = with_evar evar root arr m in
         (* TODO: Look into what we should give as the evd here *)
         let ps_string = proof_state_to_string_safe (hyps, concl) env Evd.empty in
         let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
@@ -687,23 +691,23 @@ end = struct
          lookup_named id)
     | Meta i ->
       CErrors.anomaly (Pp.str "Unexpected meta")
-    | Evar (ev, substs) -> (* TODO: Add type and proper substitution list *)
-      let* substs = match Array.to_list substs with
-       | [] -> return []
-       | head::substs ->
-         let* head = gen_constr head in
-         let* head = mk_node EvarSubst [EvarSubstValue, head] in
-         let+ _, substs = List.fold_left (fun (prev, acc) subst ->
-             let* subst = gen_constr subst in
-             let+ subst = mk_node EvarSubst [EvarSubstValue, subst; EvarSubstOrder, prev] in
-             subst, (EvarSubstPointer, prev)::acc)
-           (head, [EvarSubstPointer, head]) substs in
-         OList.rev substs
-      and+ subject = lookup_evar ev in
-      let* subject = match subject with
-      | None -> mk_node UndefProofState []
-      | Some n -> return n in
-      mk_node Evar ((EvarSubject, subject)::substs)
+    | Evar (ev, substs) ->
+      let* subject = lookup_evar ev in
+      (match subject with
+       | None -> (* TODO: This should be properly resolved at some point *)
+         let* undef = mk_node UndefProofState [] in
+         mk_node Evar [ EvarSubject, undef ]
+       | Some (n, ctx) ->
+         if not (Array.length ctx = Array.length substs) then
+           CErrors.anomaly Pp.(str "Array length difference " ++
+                               int (Array.length ctx) ++ str " " ++ int (Array.length substs));
+         let substs = OList.filter_map (fun (x, y) -> Option.map (fun y -> x, y) y) @@
+           OList.combine (Array.to_list substs) (Array.to_list ctx) in
+         let* substs = List.map (fun (c, t) ->
+             let* c = gen_constr c in
+             map (fun n -> EvarSubstPointer, n) @@
+             mk_node EvarSubst [EvarSubstTerm, c; EvarSubstTarget, t]) substs in
+         mk_node Evar ((EvarSubject, n)::substs))
     | Sort s ->
       mk_node (match s with
           | Sorts.SProp -> SortSProp

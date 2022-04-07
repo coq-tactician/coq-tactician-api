@@ -363,8 +363,8 @@ enum EdgeClassification {
 
   # Evars
   evarSubstPointer @42;
-  evarSubstOrder @43;
-  evarSubstValue @44;
+  evarSubstTerm @43;
+  evarSubstTarget @44;
   evarSubject @45;
 }
 
@@ -377,7 +377,6 @@ const conflatableEdges :List(ConflatableEdges) =
 [ ( conflatable = [contextDefType, constType, indType, castType, prodType, lambdaType, letInType, fixFunType, coFixFunType] )
 , ( conflatable = [contextDefTerm, castTerm, prodTerm, lambdaTerm, letInTerm, fixFunTerm, coFixFunTerm] )
 # Not conflatable: projTerm, constructTerm, caseTerm, cBTerm
-, ( conflatable = [appArgOrder, evarSubstOrder] )
 ];
 const importantEdges :List(EdgeClassification) =
 [ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
@@ -386,7 +385,7 @@ const lessImportantEdges :List(EdgeClassification) =
 [ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
 const leastImportantEdges :List(EdgeClassification) =
 [ constUndef, constPrimitive, projTerm, castTerm, castType, appFunValue, appArgValue, coFixReturn, coFixFunType, coFixFunTerm
-, coFixMutual, evarSubstPointer, evarSubstOrder, evarSubstValue ];
+, coFixMutual, evarSubstPointer, evarSubstTerm, evarSubstTarget ];
 
 # WARNING: DO NOT USE
 # This is just for visualization purposes in order to drastically reduce the number of edges. You should not use it in networks
@@ -411,6 +410,6 @@ const groupedEdges :List(ConflatableEdges) =
 , ( conflatable = [coFixMutual, coFixReturn] )
 , ( conflatable = [coFixFunType, coFixFunTerm] )
 , ( conflatable = [relPointer] )
-, ( conflatable = [evarSubstPointer] )
-, ( conflatable = [evarSubject, evarSubstOrder, evarSubstValue] )
+, ( conflatable = [evarSubject, evarSubstPointer] )
+, ( conflatable = [evarSubstTerm, evarSubstTarget] )
 ];
