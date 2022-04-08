@@ -407,8 +407,14 @@ end = struct
       let+ type_text, term_text =
         let+ b = lookup_include_metadata in
         if not b then "", None else
-          let print c = with_depth @@ fun () -> Pp.string_of_ppcmds @@ Sexpr.format_oneline @@
-            Printer.pr_constr_env env Evd.empty c in
+          let print c =
+            (* This try is specifically aimed at catching errors coming from Coqlib.lib_ref, which is at least
+               Known to happen in theories/Float/PrimFloat.v on line 92 *)
+            try
+              with_depth @@ fun () -> Pp.string_of_ppcmds @@ Sexpr.format_oneline @@
+              Printer.pr_constr_env env Evd.empty c
+            with CErrors.UserError _ -> ""
+          in
           match def_type with
           | Ind (m, i) ->
             let ({ mind_packets; _ } as mb) =
