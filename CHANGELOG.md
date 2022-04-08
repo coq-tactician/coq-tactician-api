@@ -1,5 +1,9 @@
 # Unreleased
 
+Textual representations:
+- Definitions now feature a textual representation of their type and term.
+- Proof terms that witness outcomes have are textually represented.
+
 Proofs, proof states and proof terms:
 - We now encode the tactic script itself as a (hyper-)graph. Every proof step (the execution of a tactic)
   has a list of outcomes. An outcome is the transition of one proof state into zero or mere other proof states.
@@ -27,7 +31,7 @@ Introduction of the global context:
 - The main entry points of a file have been changed. Entry points now consists of `definitions`, a list of all
   definitions in the file, and `representative`, the definition that represents the super-global context of a file.
 
-Misc to the graph:
+Misc changes to the graph:
 - We now deal in a more principle way with section variables. Previously, a definition or proof state that referred
   to a section variable had a local context associated to it that included that variable. This way, different
   definitions/proof states that referred to the same section variable had instead a local copy of that variable,
@@ -50,9 +54,7 @@ Misc to the graph:
   global definitions in behavior. The only difference is that the root of the proof state contains a pointer to
   all of its local variables. As such, in the future, it might be considered to merge the nodes for local contexts
   into the nodes for definitions.
-- Names of definitions are now their full path (including sections and modules). This will help with aligning the dataset
-  with the 'live' graph during benchmarking. Alignment is still not perfect though. Currently, this means that the name of
-  a definition is a better representative than the hash of that definition.
+- Names of definitions are now their full path (including sections and modules).
   
 # stdlib-lgraph-intermediate-v8-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v8-global.tar.xz
