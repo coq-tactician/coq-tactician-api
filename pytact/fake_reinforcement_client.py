@@ -42,7 +42,7 @@ def localNode(id):
 
 # Helper function that runs a given tactic on a given proof state
 async def runTactic(obj, ident, args):
-    resp = await obj.runTactic({ 'ident': ident, 'arguments': args}).a_wait()
+    resp = await obj.runTactic( { 'ident': ident }, args).a_wait()
     state = resp.result
     visualize(state)
     return state
