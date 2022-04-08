@@ -274,6 +274,9 @@ struct Definition {
     manualSectionConstant @13 :Void;
     tacticalSectionConstant @14 :List(ProofStep);
   }
+
+  typeText @15 :Text;
+  termText @16 :Text;
 }
 
 # Used for in-mermory space optimization. This allows us to make structs smaller by reusing space in

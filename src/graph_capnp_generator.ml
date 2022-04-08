@@ -7,18 +7,22 @@ type graph_state = { node_index : int; edge_index : int }
 
 module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node = P.path * int) = struct
 
-  let nt2nt self_index transformer (nt : G.node node_type) cnt =
+  let nt2nt ~include_metadata self_index transformer (nt : G.node node_type) cnt =
     let open K.Builder.Graph.Node.Label in
     match nt with
     | ProofState -> proof_state_set cnt
     | UndefProofState -> undef_proof_state_set cnt
-    | ContextDef id -> context_def_set cnt (Id.to_string id)
-    | ContextAssum id -> context_assum_set cnt (Id.to_string id)
-    | Definition { previous; external_previous; def_type; path; status } ->
+    | ContextDef id -> context_def_set cnt (if include_metadata then Id.to_string id else "")
+    | ContextAssum id -> context_assum_set cnt (if include_metadata then Id.to_string id else "")
+    | Definition { previous; external_previous; def_type; path; status; type_text; term_text } ->
       let cdef = definition_init cnt in
       let open K.Builder.Definition in
       (* TODO: We should probably derive the hash of a constant form its path (until we obtain actual hashes) *)
-      name_set cdef (Libnames.string_of_path path);
+      name_set cdef ((match def_type with | Proj _ -> "Projection:" | _ -> "") ^ Libnames.string_of_path path);
+      if include_metadata then begin
+          type_text_set cdef type_text;
+          term_text_set cdef @@ Option.default "" term_text
+        end;
       let capnp_status = status_init cdef in
       (match status with
        | DOriginal -> Status.original_set capnp_status
@@ -35,7 +39,8 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
           K.Builder.ProofState.root_set_int_exn capnp_state @@ snd root;
           let _ = K.Builder.ProofState.context_set_list capnp_state
               (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
-          K.Builder.ProofState.text_set capnp_state ps_string;
+          if include_metadata then
+            K.Builder.ProofState.text_set capnp_state ps_string;
           K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in
         let write_outcome capnp { term; term_text; arguments; proof_state_before; proof_states_after } =
           let capnp_state_before = K.Builder.Outcome.before_init capnp in
@@ -46,7 +51,8 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
               write_proof_state capnp_state ps;
             ) proof_states_after;
           K.Builder.Outcome.term_set_int_exn capnp @@ snd term;
-          K.Builder.Outcome.term_text_set capnp @@ term_text;
+          if include_metadata then
+            K.Builder.Outcome.term_text_set capnp @@ term_text;
           let arg_arr = K.Builder.Outcome.tactic_arguments_init capnp (List.length arguments) in
           List.iteri (fun i arg ->
               let arri = Capnp.Array.get arg_arr i in
@@ -66,9 +72,11 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
                let capnp_tactic = K.Builder.ProofStep.Tactic.known_init capnp_tactic in
                K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
                K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
-               K.Builder.Tactic.text_set capnp_tactic tactic;
-               K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
-               K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic);
+               if include_metadata then begin
+                 K.Builder.Tactic.text_set capnp_tactic tactic;
+                 K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
+                 K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic
+               end);
             let outcome_arr = K.Builder.ProofStep.outcomes_init arri (List.length outcomes) in
             List.iteri (fun i outcome ->
                 let outcome_arri = Capnp.Array.get outcome_arr i in
@@ -192,14 +200,14 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | EvarSubstTarget -> EvarSubstTarget
     | EvarSubject -> EvarSubject
 
-  let write_graph capnp_graph transformer
+  let write_graph ?(include_metadata=false) capnp_graph transformer
       node_count edge_count builder =
     let nodes = K.Builder.Graph.nodes_init capnp_graph node_count in
     let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
     let state = { node_index = node_count - 1; edge_index = 0 } in
     let arrays_add { node_index; edge_index } label children =
       let node = Capnp.Array.get nodes node_index in
-      nt2nt node_index transformer label @@ K.Builder.Graph.Node.label_init node;
+      nt2nt ~include_metadata node_index transformer label @@ K.Builder.Graph.Node.label_init node;
       let cc = List.length children in
       K.Builder.Graph.Node.children_count_set_exn node cc;
       K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);

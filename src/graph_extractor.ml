@@ -15,6 +15,11 @@ let map_named f = function
     let v' = f v in
     let ty' = f ty in Named.Declaration.LocalDef (id, v', ty')
 
+let with_depth f =
+  let old = Topfmt.get_depth_boxes () in
+  Fun.protect ~finally:(fun () -> Topfmt.set_depth_boxes old)
+    (fun () -> Topfmt.set_depth_boxes (Some 32); f ())
+
 type proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
 type outcome = proof_state * Constr.t * proof_state list
 type tactical_proof = (outcome list * glob_tactic_expr option) list
@@ -70,6 +75,7 @@ module type CICGraphMonadType = sig
   val lookup_def_truncate : bool t
   val lookup_env          : Environ.env t
   val lookup_env_extra    : env_extra t
+  val lookup_include_metadata : bool t
 
   val with_relative       : node -> 'a t -> 'a t
   val with_relatives      : node list -> 'a t -> 'a t
@@ -92,10 +98,10 @@ module type CICGraphMonadType = sig
     ; definition_nodes : definitions}
 
   val run :
-    ?def_truncate:bool -> ?def_depth:int -> state:state ->
+    ?include_metadata:bool -> ?def_truncate:bool -> ?def_depth:int -> state:state ->
     'a t -> (state * 'a) repr_t
   val run_empty :
-    ?def_truncate:bool -> ?def_depth:int ->
+    ?include_metadata:bool -> ?def_truncate:bool -> ?def_depth:int ->
     'a t -> (state * 'a) repr_t
 end
 module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
@@ -123,7 +129,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     ; def_depth    : int option
     ; def_truncate : bool
     ; env          : Environ.env option
-    ; env_extra    : env_extra option }
+    ; env_extra    : env_extra option
+    ; metadata     : bool }
   type state =
     { previous : node option
     ; external_previous : node list
@@ -271,6 +278,9 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     match env_extra with
     | None -> CErrors.anomaly Pp.(str "No extra env was present in the graph extractor")
     | Some env_extra -> env_extra
+  let lookup_include_metadata =
+    let+ { metadata; _ } = ask in
+    metadata
 
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
@@ -292,13 +302,13 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let with_env_extra env_extra =
     local (fun c -> { c with env_extra = Some env_extra })
 
-  let run ?(def_truncate=false) ?def_depth ~state m =
+  let run ?(include_metadata=false) ?(def_truncate=false) ?def_depth ~state m =
     G.run @@
     let context =
       { relative = []; named = Id.Map.empty; sigma = Evar.Map.empty
-      ; def_depth; def_truncate; env = None; env_extra = None } in
+      ; def_depth; def_truncate; env = None; env_extra = None; metadata = include_metadata } in
     run m context state
-  let run_empty ?(def_truncate=false) ?def_depth m =
+  let run_empty ?(include_metadata=false) ?(def_truncate=false) ?def_depth m =
     let definition_nodes =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
@@ -309,7 +319,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
       ; external_previous = []
       ; section_nodes = Id.Map.empty
       ; definition_nodes } in
-    run ~def_truncate ?def_depth ~state m
+    run ~include_metadata ~def_truncate ?def_depth ~state m
 end
 
 module GraphBuilder
@@ -373,26 +383,69 @@ end = struct
   let mk_fake_definition def_type gref =
     (* TODO: Using the nametab here is very dangerous because it is mutable *)
     let path = Nametab.path_of_global gref in
-    mk_node (Definition { previous = None; external_previous = []; def_type; path; status = DOriginal }) []
+    mk_node (Definition { previous = None; external_previous = []; def_type; path; status = DOriginal
+                        ; term_text = None; type_text = "" }) []
 
   let mk_definition def_type gref mk_node =
     let* def =
       (* TODO: Using the nametab here is very dangerous because it is mutable *)
       let path = Nametab.path_of_global gref in
-      let+ previous = get_previous_definition
+      let* previous = get_previous_definition
       and+ status = match def_type with
         | Ind i -> find_inductive i
         | Construct c -> find_constructor c
         | Proj p -> find_projection p
         | ManualConst c | TacticalConstant (c, _) -> find_constant c
         | ManualSectionConst c | TacticalSectionConstant (c, _) -> (* Always actual *) return None
-      and+ external_previous = drain_external_previous_definitions in
+      and+ external_previous = drain_external_previous_definitions
+      and+ env = lookup_env in
       let status = match status with
         | None -> DOriginal
         | Some (NActual, _) -> CErrors.anomaly Pp.(str "Definition was already known as an actual while creating it")
         | Some (NDischarged, n) -> DDischarged n
         | Some (NSubstituted, n) -> DSubstituted n in
-      Definition { previous; external_previous; def_type; path; status } in
+      let+ type_text, term_text =
+        let+ b = lookup_include_metadata in
+        if not b then "", None else
+          let print c = with_depth @@ fun () -> Pp.string_of_ppcmds @@ Sexpr.format_oneline @@
+            Printer.pr_constr_env env Evd.empty c in
+          match def_type with
+          | Ind (m, i) ->
+            let ({ mind_packets; _ } as mb) =
+              Environ.lookup_mind m env in
+            let univs = Declareops.inductive_polymorphic_context mb in
+            let inst = Univ.make_abstract_instance univs in
+            let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) env in
+            let typ = Inductive.type_of_inductive env ((mb, Array.get mind_packets i), inst) in
+            print typ, None
+          | Construct ((m, i), c) ->
+            let ({ mind_packets; _ } as mb) =
+              Environ.lookup_mind m env in
+            let univs = Declareops.inductive_polymorphic_context mb in
+            let inst = Univ.make_abstract_instance univs in
+            let typ = Inductive.type_of_constructor (((m, i), c), inst) (mb, Array.get mind_packets i) in
+            print typ, None
+          (* TODO: Unclear what to do here, but this situation has already changed in newer Coq's *)
+          | Proj _ -> "", None
+          | ManualConst c | TacticalConstant (c, _) ->
+            let { const_body; const_type; _ } = Environ.lookup_constant c env in
+            let term_text = match const_body with
+              | Undef _ -> None
+              | Def c -> Some (print @@ Mod_subst.force_constr c)
+              | OpaqueDef c ->
+                let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
+                Some (print c)
+              | Primitive p -> None in
+            print const_type, term_text
+          | ManualSectionConst id | TacticalSectionConstant (id, _) ->
+            let def = Environ.lookup_named id env in
+            match def with
+            | Named.Declaration.LocalAssum (_, typ) ->
+              print typ, None
+            | Named.Declaration.LocalDef (_, term, typ) ->
+              print typ, Some (print term)
+      in
+      Definition { previous; external_previous; def_type; path; status; type_text; term_text } in
     let* n = mk_node def in
     let+ () = match def_type with
       | Ind i -> register_inductive i n
@@ -430,20 +483,31 @@ end = struct
     if truncate then alt else m
 
   let rec gen_proof_step (outcomes, tactic) =
-    let* env = lookup_env in
+    let* env = lookup_env
+    and+ metadata = lookup_include_metadata in
     let tactic, args = match tactic with
       | None -> None, []
       | Some tac ->
+        let pr_tac t = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env t) in
         let tac_orig = Tactic_name_remove.tactic_name_remove tac in
         let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
         let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
         let base_tactic = Tactic_one_variable.tactic_strip tac in
-        Some { tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env tac_orig)
-             ; base_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env base_tactic)
-             ; interm_tactic = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env interm_tactic)
-             ; tactic_hash = Hashtbl.hash_param 255 255 base_tactic
-             ; tactic_exact },
-        args in
+        let tactic_hash = Hashtbl.hash_param 255 255 base_tactic in
+        let tactic =
+          if metadata then
+            Some { tactic = pr_tac tac_orig
+                 ; base_tactic = pr_tac base_tactic
+                 ; interm_tactic = pr_tac interm_tactic
+                 ; tactic_hash
+                 ; tactic_exact }
+          else
+            Some { tactic = ""
+                 ; base_tactic = ""
+                 ; interm_tactic = ""
+                 ; tactic_hash
+                 ; tactic_exact } in
+        tactic, args in
     let gen_outcome ((before_hyps, before_concl, before_evar), term, after) =
       let term_text =
         (* TODO: Some evil hacks to work around the fact that we don't have a sigma here *)
@@ -453,14 +517,12 @@ end = struct
             | Constr.Evar (x, _) -> Constr.mkEvar (x, [||])
             | _ -> Constr.map aux c in
           aux c in
-        let with_depth f =
-          let old = Topfmt.get_depth_boxes () in
-          Fun.protect ~finally:(fun () -> Topfmt.set_depth_boxes old)
-            (fun () -> Topfmt.set_depth_boxes (Some 32); f ()) in
-        Pp.string_of_ppcmds @@ Sexpr.format_oneline @@ Constrextern.with_meta_as_hole (fun () ->
-            Flags.with_option Flags.in_toplevel (fun () ->
-                with_depth (fun () ->
-                    Printer.safe_pr_constr_env (Global.env()) Evd.empty (beauti_evar term))) ()) () in
+        if metadata then
+          Pp.string_of_ppcmds @@ Sexpr.format_oneline @@ Constrextern.with_meta_as_hole (fun () ->
+              Flags.with_option Flags.in_toplevel (fun () ->
+                  with_depth (fun () ->
+                      Printer.safe_pr_constr_env (Global.env()) Evd.empty (beauti_evar term))) ()) ()
+        else "" in
       let with_proof_state (hyps, concl, evar) m =
         let* ctx, (subject, map) = with_named_context gen_constr hyps @@
           let* subject = gen_constr concl in

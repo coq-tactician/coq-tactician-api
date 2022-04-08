@@ -88,6 +88,8 @@ type 'node definition' =
   ; external_previous : 'node list
   ; status : 'node def_status
   ; path : Libnames.full_path
+  ; type_text : string
+  ; term_text : string option
   ; def_type : 'node definition_type }
 
 let print_definition { previous ; def_type; _ } =

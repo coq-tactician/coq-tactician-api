@@ -230,7 +230,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let external_previous = DPmap.bindings @@
       DPmap.filter (fun p _ -> not @@ DPset.mem p known) !external_previous_definitions in
     let (new_state, ()), builder =
-      CICGraph.run ~state:{ previous = !previous_definition
+      CICGraph.run ~include_metadata:true ~state:{ previous = !previous_definition
                           ; external_previous
                           ; section_nodes = !section_nodes
                           ; definition_nodes = !global_nodes }
@@ -346,7 +346,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let transformer tp =
       DPmap.find tp path_index in
     let capnp_graph = K.Builder.Dataset.graph_init g in
-    CapnpGraphWriter.write_graph capnp_graph transformer node_count edge_count builder;
+    CapnpGraphWriter.write_graph ~include_metadata:true capnp_graph transformer node_count edge_count builder;
     Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) (data_file ())
 
   let () = Declaremods.append_end_library_hook @@ fun () ->
