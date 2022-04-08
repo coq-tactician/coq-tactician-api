@@ -18,13 +18,13 @@ def prediction_loop(r, s, tacs, graph1, definitions):
         if msg_type == "predict":
             gv.visualize(g.predict.graph, g.predict.state, graph1=graph1)
             singleArgs = [t.ident for t in tacs if t.parameters == 0]
-            preds = [{'tactic': {'ident': t, 'arguments': []}, 'confidence': 0.5} for t in singleArgs]
+            preds = [{'tactic': {'ident': t}, 'arguments': [], 'confidence': 0.5} for t in singleArgs]
             if len(g.predict.state.context) > 0:
                 oneArg = [t.ident for t in tacs if t.parameters == 1]
                 hyp_node = g.predict.state.context[0]
                 preds2 = [
-                    {'tactic': {'ident': t,
-                                'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node}}]},
+                    {'tactic': {'ident': t},
+                     'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node}}],
                      'confidence': 0.5} for t in oneArg ]
                 preds += preds2
             for ni in definitions:
@@ -32,8 +32,8 @@ def prediction_loop(r, s, tacs, graph1, definitions):
                 if graph1.nodes[ni].label.definition.hash == 504067591:
                     oneArg = [t.ident for t in tacs if t.parameters == 1]
                     preds2 = [
-                        {'tactic': {'ident': t,
-                                    'arguments': [{'term' : {'depIndex': 1, 'nodeIndex': ni}}]},
+                        {'tactic': {'ident': t },
+                         'arguments': [{'term' : {'depIndex': 1, 'nodeIndex': ni}}],
                          'confidence': 0.5} for t in oneArg ]
                     preds += preds2
             response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)

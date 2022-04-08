@@ -45,16 +45,29 @@ type constant = Constant.t
                 [@printer fun fmt c -> fprintf fmt "%s" (Label.to_string @@ Constant.label c)][@@deriving show]
 type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@deriving show]
 
+type 'node proof_state =
+  { ps_string : string
+  ; root      : 'node
+  ; context   : 'node list
+  ; evar      : Evar.t }
+
+type 'node outcome =
+  { term               : 'node
+  ; term_text          : string
+  ; arguments          : 'node option list
+  ; proof_state_before : 'node proof_state
+  ; proof_states_after : 'node proof_state list }
+
+type tactic =
+  { tactic        : string
+  ; base_tactic   : string
+  ; interm_tactic : string
+  ; tactic_hash   : int
+  ; tactic_exact  : bool }
+
 type 'node tactical_step =
-  { ps_string: string
-  ; tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
-  ; base_tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
-  ; interm_tactic : Ltac_plugin.Tacexpr.glob_tactic_expr
-  ; tactic_hash : int
-  ; arguments : 'node option list
-  ; tactic_exact : bool
-  ; root : 'node
-  ; context : 'node list }
+  { tactic   : tactic option
+  ; outcomes : 'node outcome list }
 
 type 'node definition_type =
   | Ind of inductive (* TODO: Universes? *)
@@ -62,24 +75,39 @@ type 'node definition_type =
   | Proj of projection (* TODO: Resolve *)
   | ManualConst of constant (* TODO: Universes? *)
   | TacticalConstant of constant * 'node tactical_step list (* TODO: Universes? *)
+  | ManualSectionConst of Id.t (* TODO: Universes? *)
+  | TacticalSectionConstant of Id.t * 'node tactical_step list (* TODO: Universes? *)
+
+type 'node def_status =
+  | DOriginal
+  | DDischarged of 'node
+  | DSubstituted of 'node
 
 type 'node definition' =
-  { previous : 'node list
+  { previous : 'node option
+  ; external_previous : 'node list
+  ; status : 'node def_status
+  ; path : Libnames.full_path
+  ; type_text : string
+  ; term_text : string option
   ; def_type : 'node definition_type }
 
-let print_definition { previous ; def_type } =
+let print_definition { previous ; def_type; _ } =
   match def_type with
   | Ind c -> "Ind " ^ inductive_to_string c
   | Construct c -> "Construct " ^ constructor_to_string c
   | Proj p -> "Proj " ^ projection_to_string p
   | ManualConst c -> "Const " ^ Label.to_string @@ Constant.label c
   | TacticalConstant (c, _) -> "Const " ^ Label.to_string @@ Constant.label c
+  | ManualSectionConst id -> "SecConst " ^ Id.to_string id
+  | TacticalSectionConstant (id, _) -> "SecConst " ^ Id.to_string id
 
 type 'node definition = 'node definition'
                         [@printer fun fmt c -> fprintf fmt "%s" (print_definition c)][@@deriving show]
 
 type 'node node_type =
-  | Root
+  | ProofState
+  | UndefProofState
 
   (* Context *)
   | ContextDef of id
@@ -97,8 +125,7 @@ type 'node node_type =
 
   (* Constr nodes *)
   | Rel
-  | Var
-  | Evar of int (* TODO: This could be resolved *)
+  | Evar
   | EvarSubst
   | Cast (* TODO: Do we want cast kind? *)
   | Prod of name
@@ -190,12 +217,14 @@ type edge_type =
   | CoFixFunType
   | CoFixFunTerm
 
-  (* Constr edges *)
+  (* Backpointers *)
   | RelPointer
-  | VarPointer
+
+  (* Evars *)
   | EvarSubstPointer
-  | EvarSubstOrder
-  | EvarSubstValue
+  | EvarSubstTerm
+  | EvarSubstTarget
+  | EvarSubject
 [@@deriving show { with_path = false }]
 
 let edge_type_int_mod = function
@@ -241,10 +270,10 @@ let edge_type_int_mod = function
   | CoFixFunType -> 0
   | CoFixFunTerm -> 1
   | RelPointer -> 0
-  | VarPointer -> 0
   | EvarSubstPointer -> 0
-  | EvarSubstOrder -> 0
-  | EvarSubstValue -> 1
+  | EvarSubstTerm -> 0
+  | EvarSubstTarget -> 1
+  | EvarSubject -> 1
 
 module type GraphMonadType = sig
   include Monad.Def
@@ -277,10 +306,6 @@ end = struct
   let to_list ls = ls []
 end
 
-type ('s, 't, 'edge_label) directed_edge =
-  { source : 's
-  ; target : 't
-  ; label  : 'edge_label }
 module SimpleGraph
     (D : sig
        type node_label
@@ -332,37 +357,48 @@ end
 
 (* TODO: See if this can be merged with SimpleGraph *)
 type edge_label = edge_type
-type ('path, 'paths, 'result) builder =
-  { paths : 'paths
-  ; node_count : int
-  ; edge_count : int
-  ; builder : 'result -> ('result -> ('path * int) node_type -> (edge_label * ('path * int)) list -> 'result) -> 'result }
-module GlobalGraph(S : Set.S)(D : sig type result end) : GraphMonadType
+module GlobalGraph(S : Set.S)(D : sig type result end) : sig
+  open D
+  type builder =
+    { paths : S.t
+    ; node_count : int
+    ; edge_count : int
+    ; builder : result ->
+        (result -> (S.elt * int) node_type -> (edge_label * (S.elt * int)) list -> result) -> result }
+  val builder_nil : builder
+  include GraphMonadType
   with type node_label = (S.elt * int) node_type
    and type edge_label = edge_label
    and type node = S.elt * int
-   and type 'a repr_t = S.elt -> 'a * (S.elt, S.t, D.result) builder
-= struct
+   and type 'a repr_t = builder -> S.elt -> 'a * builder
+end = struct
   open D
+  type builder =
+    { paths : S.t
+    ; node_count : int
+    ; edge_count : int
+    ; builder : result ->
+        (result -> (S.elt * int) node_type -> (edge_label * (S.elt * int)) list -> result) -> result }
+  let builder_nil = { paths = S.empty; node_count = 0; edge_count = 0; builder = fun r _ -> r }
   type node = S.elt * int
   type edge_label = edge_type
   type node_label = node node_type
   type children = (edge_label * node) list
   type writer =
-    { nodes : (result -> node_label -> children -> result) -> result -> result
+    { nodes : result -> (result -> node_label -> children -> result) -> result
     ; paths : S.t
     ; edge_count : int }
   module M = Monad_util.ReaderStateWriterMonad
       (struct type r = S.elt end)
       (struct type s = int end)
       (struct type w = writer
-        let id = { nodes = (fun _ r -> r); paths = S.empty; edge_count = 0 }
+        let id = { nodes = (fun r _ -> r); paths = S.empty; edge_count = 0 }
         let comb = fun
           { nodes = f1; paths = p1; edge_count = ec1 }
           { nodes = f2; paths = p2; edge_count = ec2 } ->
-          { nodes = (fun c r -> f1 c (f2 c r)); paths = S.union p1 p2; edge_count = ec1 + ec2 } end)
+          { nodes = (fun r c -> f1 (f2 r c) c); paths = S.union p1 p2; edge_count = ec1 + ec2 } end)
   include M
-  type nonrec 'a repr_t = S.elt -> 'a * (S.elt, S.t, D.result) builder
+  type nonrec 'a repr_t = builder -> S.elt -> 'a * builder
   open Monad_util.WithMonadNotations(M)
   let index_to_node i =
     let+ current = ask in
@@ -372,7 +408,7 @@ module GlobalGraph(S : Set.S)(D : sig type result end) : GraphMonadType
   let mk_node nl ch =
     let* i = get in
     put (i + 1) >>
-    let* () = tell { nodes = (fun c r -> c r nl ch); paths = children_paths ch S.empty
+    let* () = tell { nodes = (fun r c -> c r nl ch); paths = children_paths ch S.empty
                    ; edge_count = List.length ch } in
     index_to_node i
   let with_delayed_node f =
@@ -381,13 +417,15 @@ module GlobalGraph(S : Set.S)(D : sig type result end) : GraphMonadType
     pass @@
     let* n = index_to_node i in
     let+ (v, nl, ch) = f n in
-    v, fun { nodes; paths; edge_count } -> { nodes = (fun c r -> c (nodes c r) nl ch)
+    v, fun { nodes; paths; edge_count } -> { nodes = (fun r c -> c (nodes r c) nl ch)
                                            ; paths = children_paths ch paths
                                            ; edge_count = edge_count + List.length ch }
   let register_external (tp, _) =
-    tell { nodes = (fun _ r -> r); paths = S.singleton tp; edge_count = 0 }
-  let run m current =
-    let node_count, ({ nodes; paths; edge_count }, result) = run m current 0 in
+    tell { nodes = (fun r _ -> r); paths = S.singleton tp; edge_count = 0 }
+  let run m { paths; node_count; edge_count; builder } current =
+    let node_count, ({ nodes; paths; edge_count }, result) =
+      let m = tell { nodes=builder; paths; edge_count } >> m in
+      run m current node_count in
     result, { paths; node_count; edge_count
-            ; builder = (fun r c -> nodes c r) }
+            ; builder = nodes }
 end

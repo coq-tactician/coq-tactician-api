@@ -27,28 +27,30 @@ def check_dep(fname, rootdir, _dep):
 
 def process1(rootdir, args, fname):
     with open(fname) as f:
-        file_tactical_definitions = []
+        file_definitions = 0
+        file_original_definitions = 0
         file_base_tactics_text = set()
         file_base_tactics_intermtext = set()
         file_tactics = Counter()
+        file_original_tactics = Counter()
         file_tactic_arguments = {}
         proof_steps = 0
-        proof_steps_faithful = 0
+        original_proof_steps = 0
+        original_proof_steps_faithful = 0
+        outcomes = 0
+        original_outcomes = 0
         proofs = 0
-        proofs_faithful = 0
+        original_proofs = 0
+        original_proofs_faithful = 0
         unresolvable = 0
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
         dep0 = g.dependencies[0]
         nodes_count = len(g.graph.nodes)
         edges_count = len(g.graph.edges)
         print(f"{fname}: nodes {nodes_count}, edges {edges_count}, dep[0] {dep0}")
-        for n in g.tacticalDefinitions:
+        for n in g.definitions:
             if g.graph.nodes[n].label.which() != 'definition':
                 print(f'{fname}: TacticalDefinitions Problem A')
-                raise Exception
-            if g.graph.nodes[n].label.definition.which() != 'tacticalConstant':
-                print(f'{fname}: TacticalDefinitions Problem B with '
-                      f'{g.graph.classifications[n].definition.which()}')
                 raise Exception
 
         for n in g.graph.nodes:
@@ -57,32 +59,61 @@ def process1(rootdir, args, fname):
                 raise Exception
             n = n.label
             if (n.which() == 'definition'):
-                if (n.definition.which() == 'tacticalConstant'):
-                    file_tactical_definitions.append(n.definition.name)
-                    tc = n.definition.tacticalConstant
+                file_definitions += 1
+                if n.definition.status.which() == 'original':
+                    file_original_definitions += 1
+                if n.definition.which() == 'tacticalConstant' or n.definition.which() == 'tacticalSectionConstant':
+                    if n.definition.which() == 'tacticalConstant':
+                        ps = n.definition.tacticalConstant
+                    else:
+                        ps = n.definition.tacticalSectionConstant
                     faithful = True
-                    for p in tc.tacticalProof:
+                    before_states = set()
+                    for p in ps:
+                        for outcome in p.outcomes:
+                            before_states.add(outcome.before.id)
+                    for p in ps:
+                        for outcome in p.outcomes:
+                            for after in outcome.after:
+                                if after.id not in before_states:
+                                    print(f'{fname}: After state {after} with tactic {p.tactic.text} of definition {n.definition.name} does not have a correspoinding before state')
+                                    raise Exception
+                    for p in ps:
                         proof_steps += 1
-                        if p.tactic.text == p.tactic.intermText:
-                            proof_steps_faithful += 1
+                        if n.definition.status.which() == 'original':
+                            original_proof_steps += 1
+                        if (n.definition.status.which() == 'original'
+                            and p.tactic.which() == 'known'
+                            and p.tactic.known.text == p.tactic.known.intermText):
+                            original_proof_steps_faithful += 1
                         else:
                             faithful = False
-                        file_tactics[p.tactic.ident] += 1
-                        file_tactic_arguments.setdefault(p.tactic.ident, len(p.tactic.arguments))
-                        if file_tactic_arguments[p.tactic.ident] != len(p.tactic.arguments):
-                            print(f'{fname}: Tactic with two different argument lengths detected')
-                            raise Exception
-                        file_base_tactics_text.add(p.tactic.baseText)
-                        file_base_tactics_intermtext.add(p.tactic.intermText)
-                        for a in p.tactic.arguments:
-                            if a.which() == 'unresolvable':
-                                unresolvable += 1
+                        if p.tactic.which() == 'known':
+                            ident = p.tactic.known.ident
+                        else:
+                            ident = 0
+                        file_tactics[ident] += 1
+                        if n.definition.status.which() == 'original':
+                            file_original_tactics[ident] += 1
+                        for outcome in p.outcomes:
+                            file_tactic_arguments.setdefault(ident, len(outcome.tacticArguments))
+                            if file_tactic_arguments[ident] != len(outcome.tacticArguments):
+                                print(f'{fname}: Tactic with two different argument lengths detected')
+                                raise Exception
+                            outcomes += 1
+                            if n.definition.status.which() == 'original':
+                                original_outcomes += 1
+                            for a in outcome.tacticArguments:
+                                if a.which() == 'unresolvable':
+                                    unresolvable += 1
+                        if p.tactic.which() == 'known':
+                            file_base_tactics_text.add(p.tactic.known.baseText)
+                            file_base_tactics_intermtext.add(p.tactic.known.intermText)
                     proofs += 1
-                    if faithful:
-                        proofs_faithful += 1
-        if len(file_tactical_definitions) != len(g.tacticalDefinitions):
-            print(f'{fname}: tacticalDefinitions list is incorrect')
-            raise Exception
+                    if n.definition.status.which() == 'original':
+                        original_proofs += 1
+                    if n.definition.status.which() == 'original' and faithful:
+                        original_proofs_faithful += 1
         for _dep in g.dependencies:
             check_dep(fname, rootdir, _dep)
         # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
@@ -90,12 +121,14 @@ def process1(rootdir, args, fname):
 
 
     return (fname, dep0, nodes_count, edges_count,
-            file_tactical_definitions, file_base_tactics_text,
-            file_base_tactics_intermtext, file_tactics, file_tactic_arguments,
-            proof_steps, proof_steps_faithful, proofs, proofs_faithful, unresolvable)
+            file_definitions, file_original_definitions, file_base_tactics_text,
+            file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
+            proof_steps, original_proof_steps, original_proof_steps_faithful,
+            outcomes, original_outcomes, proofs, original_proofs,
+            original_proofs_faithful, unresolvable)
 
 def process2(rootdir, args, res):
-    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _  = res
+    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _, _, _, _, _, _, _  = res
     with open(fname) as f:
         print(fname)
         g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
@@ -125,34 +158,40 @@ def process2(rootdir, args, res):
                       f"with node {x.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
                       f"is {len_nodes[g.dependencies[x.target.depIndex]]}")
                 raise Exception
-        for node_index in g.tacticalDefinitions:
+        for node_index in g.definitions:
             node_classification = g.graph.nodes[node_index].label
-            proof_steps = node_classification.definition.tacticalConstant.tacticalProof
+            if node_classification.definition.which() == 'tacticalConstant':
+                proof_steps = node_classification.definition.tacticalConstant
+            elif node_classification.definition.which() == 'tacticalSectionConstant':
+                proof_steps = node_classification.definition.tacticalSectionConstant
+            else:
+                proof_steps = []
             for x in proof_steps:
-                if not (x.state.root < local_count):
-                    print(f"{fname}: root {x.state.root} of a state {x.state} is "
-                          f"outside local node count {local_count}")
-                    raise Exception
-                for c in x.state.context:
-                    if not (c < local_count):
-                        print(f"{fname}: ctx {x} of a state {x.state} is "
+                for outcome in x.outcomes:
+                    if not (outcome.before.root < local_count):
+                        print(f"{fname}: root {outcome.before.root} of a state {outcome.before} is "
                               f"outside local node count {local_count}")
                         raise Exception
-                    cl = g.graph.nodes[c].label.which()
-                    if not (cl == 'contextDef' or cl == 'contextAssum'):
-                        print(f"{fname}: ctx {x} of a state {x.state} "
-                              f"has the wrong node classification {cn.label}")
-                        raise Exception
-                for a in x.tactic.arguments:
-                    if a.which () == 'unresolvable':
-                        pass
-                    elif a.which() == 'term':
-                        if not (a.term.nodeIndex < len_nodes[g.dependencies[a.term.depIndex]]):
-                            print(f"{fname} argument {a} of proof step {x} is not resolvable")
+                    for c in outcome.before.context:
+                        if not (c < local_count):
+                            print(f"{fname}: ctx {outcome.before.context} of a state {outcome.before} is "
+                                  f"outside local node count {local_count}")
                             raise Exception
-                        # TODO: We should check that this node is actually a definition
-                    else:
-                        print(f"{fname}: unknown tactical argument {a}")
+                        cl = g.graph.nodes[c].label.which()
+                        if not (cl == 'contextDef' or cl == 'contextAssum'):
+                            print(f"{fname}: ctx {outcome.before.context} of a state {outcme.before} "
+                                  f"has the wrong node classification {cn.label}")
+                            raise Exception
+                    for a in outcome.tacticArguments:
+                        if a.which () == 'unresolvable':
+                            pass
+                        elif a.which() == 'term':
+                            if not (a.term.nodeIndex < len_nodes[g.dependencies[a.term.depIndex]]):
+                                print(f"{fname} argument {a} of proof step {x} is not resolvable")
+                                raise Exception
+                            # TODO: We should check that this node is actually a definition
+                        else:
+                            print(f"{fname}: unknown tactical argument {a}")
         # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
         g.total_size
 
@@ -181,16 +220,22 @@ def main():
     rootdir = Path(os.path.expanduser(args.dir))
 
     tactics = Counter()
+    original_tactics = Counter()
     tactic_arguments = {}
     base_tactics_text = set()
     base_tactics_intermtext = set()
-    tactical_definitions = []
+    definitions = 0
+    original_definitions = 0
     nodes_total = 0
     edges_total = 0
     proof_steps_total = 0
-    proof_steps_faithful_total = 0
+    original_proof_steps_total = 0
+    original_proof_steps_faithful_total = 0
+    outcomes_total = 0
+    original_outcomes_total = 0
     proofs_total = 0
-    proofs_faithful_total = 0
+    original_proofs_total = 0
+    original_proofs_faithful_total = 0
     unresolvable_total = 0
 
     file_list = [f for f in rootdir.glob('**/*.bin') if f.is_file()]
@@ -201,21 +246,28 @@ def main():
 
     for res in results:
         (fname, dep0, nodes_count, edges_count,
-         file_tactical_definitions, file_base_tactics_text,
-         file_base_tactics_intermtext,
-         file_tactics, file_tactic_arguments, proof_steps, proof_steps_faithful,
-         proofs, proofs_faithful, unresolvable) = res
+         file_definitions, file_original_definitions, file_base_tactics_text,
+         file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
+         proof_steps, original_proof_steps, original_proof_steps_faithful,
+         outcomes, original_outcomes, proofs, original_proofs,
+         original_proofs_faithful, unresolvable) = res
         len_nodes[dep0] = nodes_count
         nodes_total += nodes_count
         edges_total += edges_count
         proof_steps_total += proof_steps
-        proof_steps_faithful_total += proof_steps_faithful
+        original_proof_steps_total += original_proof_steps
+        original_proof_steps_faithful_total += original_proof_steps_faithful
+        outcomes_total += outcomes
+        original_outcomes_total += original_outcomes
         proofs_total += proofs
-        proofs_faithful_total += proofs_faithful
-        tactical_definitions.extend(file_tactical_definitions)
+        original_proofs_total += original_proofs
+        original_proofs_faithful_total += original_proofs_faithful
+        definitions +=  file_definitions
+        original_definitions += file_original_definitions
         base_tactics_text.update(file_base_tactics_text)
         base_tactics_intermtext.update(file_base_tactics_intermtext)
         tactics += file_tactics
+        original_tactics += file_original_tactics
         for tac, length in file_tactic_arguments.items():
             tactic_arguments.setdefault(tac, length)
             if tactic_arguments[tac] != length:
@@ -227,14 +279,21 @@ def main():
     print(f"Nodes total {nodes_total}")
     print(f"Edges total {edges_total}")
     print(f"Tactics total {len(tactics)}")
+    print(f"Original tactics total {len(original_tactics)}")
     print(f"Tactics entropy (bits) {entropy(tactics)}")
+    print(f"Original tactics entropy (bits) {entropy(original_tactics)}")
     print(f"Tactics base text total {len(base_tactics_text)}")
     print(f"Tactics base intermtext total {len(base_tactics_intermtext)}")
-    print(f"Tactical definitions total {len(tactical_definitions)}")
+    print(f"Definitions total {definitions}")
+    print(f"Original definitions total {original_definitions}")
     print(f"Proof steps total {proof_steps_total}")
-    print(f"Faithfully represented proof steps total {proof_steps_faithful_total}")
+    print(f"Original proof steps total {original_proof_steps_total}")
+    print(f"Faithfully represented original proof steps total {original_proof_steps_faithful_total}")
+    print(f"Outcomes total {outcomes_total}")
+    print(f"Original outcomes total {original_outcomes_total}")
     print(f"Proofs total {proofs_total}")
-    print(f"Faithful proofs total {proofs_faithful_total}")
+    print(f"Original proofs total {original_proofs_total}")
+    print(f"Faithful original proofs total {original_proofs_faithful_total}")
     print(f"Unresolvable tactic arguments {unresolvable_total}")
 
     if (args.verbose >=1):

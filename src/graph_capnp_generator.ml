@@ -1,7 +1,5 @@
 open Graph_def
 open Names
-open Tactician_ltac1_record_plugin
-open Ltac_plugin
 
 module K = Graph_api.Make(Capnp.BytesMessage)
 
@@ -9,71 +7,119 @@ type graph_state = { node_index : int; edge_index : int }
 
 module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node = P.path * int) = struct
 
-  let nt2nt transformer (nt : G.node node_type) cnt =
+  let nt2nt ~include_metadata self_index transformer (nt : G.node node_type) cnt =
     let open K.Builder.Graph.Node.Label in
     match nt with
-    | Root -> root_set cnt
-    | ContextDef id -> context_def_set cnt (Id.to_string id)
-    | ContextAssum id -> context_assum_set cnt (Id.to_string id)
-    | Definition { previous; def_type } ->
+    | ProofState -> proof_state_set cnt
+    | UndefProofState -> undef_proof_state_set cnt
+    | ContextDef id -> context_def_set cnt (if include_metadata then Id.to_string id else "")
+    | ContextAssum id -> context_assum_set cnt (if include_metadata then Id.to_string id else "")
+    | Definition { previous; external_previous; def_type; path; status; type_text; term_text } ->
       let cdef = definition_init cnt in
       let open K.Builder.Definition in
+      (* TODO: We should probably derive the hash of a constant form its path (until we obtain actual hashes) *)
+      name_set cdef ((match def_type with | Proj _ -> "Projection:" | _ -> "") ^ Libnames.string_of_path path);
+      if include_metadata then begin
+          type_text_set cdef type_text;
+          term_text_set cdef @@ Option.default "" term_text
+        end;
+      let capnp_status = status_init cdef in
+      (match status with
+       | DOriginal -> Status.original_set capnp_status
+       | DDischarged (dep, index) ->
+         if transformer dep <> 0 then
+           CErrors.anomaly Pp.(str "discharged definition was not from the current file");
+         Status.discharged_set_int_exn capnp_status index
+       | DSubstituted (dep, index) ->
+         let capnp_node = Status.substituted_init capnp_status in
+         Status.Substituted.dep_index_set_exn capnp_node @@ transformer dep;
+         Status.Substituted.node_index_set_int_exn capnp_node index);
+      let write_proof arr proof =
+        let write_proof_state capnp_state { root; context; ps_string; evar } =
+          K.Builder.ProofState.root_set_int_exn capnp_state @@ snd root;
+          let _ = K.Builder.ProofState.context_set_list capnp_state
+              (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
+          if include_metadata then
+            K.Builder.ProofState.text_set capnp_state ps_string;
+          K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in
+        let write_outcome capnp { term; term_text; arguments; proof_state_before; proof_states_after } =
+          let capnp_state_before = K.Builder.Outcome.before_init capnp in
+          write_proof_state capnp_state_before proof_state_before;
+          let after_arr = K.Builder.Outcome.after_init capnp (List.length proof_states_after) in
+          List.iteri (fun i ps ->
+              let capnp_state = Capnp.Array.get after_arr i in
+              write_proof_state capnp_state ps;
+            ) proof_states_after;
+          K.Builder.Outcome.term_set_int_exn capnp @@ snd term;
+          if include_metadata then
+            K.Builder.Outcome.term_text_set capnp @@ term_text;
+          let arg_arr = K.Builder.Outcome.tactic_arguments_init capnp (List.length arguments) in
+          List.iteri (fun i arg ->
+              let arri = Capnp.Array.get arg_arr i in
+              match arg with
+              | None -> K.Builder.Argument.unresolvable_set arri
+              | Some (dep, index) ->
+                let node = K.Builder.Argument.term_init arri in
+                K.Builder.Argument.Term.dep_index_set_exn node @@ transformer dep;
+                K.Builder.Argument.Term.node_index_set_int_exn node index
+            ) arguments in
+        List.iteri (fun i { tactic; outcomes } ->
+            let arri = Capnp.Array.get arr i in
+            let capnp_tactic = K.Builder.ProofStep.tactic_init arri in
+            (match tactic with
+             | None -> K.Builder.ProofStep.Tactic.unknown_set capnp_tactic
+             | Some { tactic; base_tactic; interm_tactic; tactic_hash; tactic_exact } ->
+               let capnp_tactic = K.Builder.ProofStep.Tactic.known_init capnp_tactic in
+               K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
+               K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
+               if include_metadata then begin
+                 K.Builder.Tactic.text_set capnp_tactic tactic;
+                 K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
+                 K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic
+               end);
+            let outcome_arr = K.Builder.ProofStep.outcomes_init arri (List.length outcomes) in
+            List.iteri (fun i outcome ->
+                let outcome_arri = Capnp.Array.get outcome_arr i in
+                write_outcome outcome_arri outcome
+              ) outcomes
+          ) proof in
+      (match previous with
+       | None -> previous_set_int_exn cdef self_index;
+       | Some previous ->
+         if transformer (fst previous) <> 0 then
+           CErrors.anomaly Pp.(str "previous definition was not from the current file");
+         previous_set_int_exn cdef (snd previous));
+      ignore (external_previous_set_list cdef @@ List.map (fun x -> transformer (fst x)) external_previous);
       (match def_type with
        | TacticalConstant (c, proof) ->
          let hash = Constant.UserOrd.hash c in
          hash_set cdef (Stdint.Uint64.of_int hash);
-         name_set cdef (Constant.to_string c);
-         let tconst = tactical_constant_init cdef in
-         let arr = TacticalConstant.tactical_proof_init tconst (List.length proof) in
-         List.iteri (fun i ({ tactic; base_tactic; interm_tactic; tactic_hash; arguments; tactic_exact
-                            ; root; context; ps_string }
-                            : G.node tactical_step) ->
-                      let arri = Capnp.Array.get arr i in
-                      let state = K.Builder.ProofStep.state_init arri in
-                      let capnp_tactic = K.Builder.ProofStep.tactic_init arri in
-                      K.Builder.ProofState.root_set_int_exn state @@ snd root;
-                      let _ = K.Builder.ProofState.context_set_list state
-                          (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
-                      K.Builder.ProofState.text_set state ps_string;
-                      K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
-                      K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
-                      K.Builder.Tactic.text_set capnp_tactic
-                        (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) tactic));
-                      K.Builder.Tactic.base_text_set capnp_tactic
-                        (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) base_tactic));
-                      K.Builder.Tactic.interm_text_set capnp_tactic
-                        (Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) interm_tactic));
-                      let arg_arr = K.Builder.Tactic.arguments_init capnp_tactic (List.length arguments) in
-                      List.iteri (fun i arg ->
-                          let arri = Capnp.Array.get arg_arr i in
-                          match arg with
-                          | None -> K.Builder.Tactic.Argument.unresolvable_set arri
-                          | Some (dep, index) ->
-                            let node = K.Builder.Tactic.Argument.term_init arri in
-                            K.Builder.Tactic.Argument.Term.dep_index_set_exn node @@ transformer dep;
-                            K.Builder.Tactic.Argument.Term.node_index_set_int_exn node index
-                        ) arguments;
-                      ()
-                    ) proof;
+         let arr = tactical_constant_init cdef (List.length proof) in
+         write_proof arr proof
+       | TacticalSectionConstant (id, proof) ->
+         let hash = Id.hash id in
+         hash_set cdef (Stdint.Uint64.of_int hash);
+         let arr = tactical_section_constant_init cdef (List.length proof) in
+         write_proof arr proof
        | ManualConst c ->
          let hash = Constant.UserOrd.hash c in
          hash_set cdef (Stdint.Uint64.of_int hash);
-         name_set cdef (Constant.to_string c);
          manual_constant_set cdef
+       | ManualSectionConst id ->
+         let hash = Id.hash id in
+         hash_set cdef (Stdint.Uint64.of_int hash);
+         manual_section_constant_set cdef
        | Ind (m, i) ->
          let hash = Hashtbl.hash (i, MutInd.UserOrd.hash m) in
          hash_set cdef (Stdint.Uint64.of_int hash);
-         name_set cdef (Libnames.string_of_path @@ Nametab.path_of_global (GlobRef.IndRef (m, i)));
          inductive_set cdef
        | Construct ((m, i), j) ->
          let hash = Hashtbl.hash (i, j, MutInd.UserOrd.hash m) in
          hash_set cdef (Stdint.Uint64.of_int @@ hash);
-         name_set cdef (Libnames.string_of_path @@ Nametab.path_of_global (GlobRef.ConstructRef ((m, i), j)));
          constructor_set cdef
        | Proj p ->
          let hash = Projection.Repr.UserOrd.hash p in
          hash_set cdef @@ Stdint.Uint64.of_int hash; (* TODO: This is probably not a good hash *)
-         name_set cdef (projection_to_string p); (* TODO: Better name *)
          projection_set cdef
       )
     | ConstEmpty -> const_empty_set cnt
@@ -82,10 +128,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | SortSet -> sort_set_set cnt
     | SortType -> sort_type_set cnt
     | Rel -> rel_set cnt
-    | Var -> var_set cnt
-    | Evar i ->
-      let p = evar_init cnt in
-      K.Builder.IntP.value_set p @@ Stdint.Uint64.of_int i
+    | Evar -> evar_set cnt
     | EvarSubst -> evar_subst_set cnt
     | Cast -> cast_set cnt
     | Prod _ -> prod_set cnt
@@ -152,19 +195,19 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | CoFixFunType -> CoFixFunType
     | CoFixFunTerm -> CoFixFunTerm
     | RelPointer -> RelPointer
-    | VarPointer -> VarPointer
     | EvarSubstPointer -> EvarSubstPointer
-    | EvarSubstOrder -> EvarSubstOrder
-    | EvarSubstValue -> EvarSubstValue
+    | EvarSubstTerm -> EvarSubstTerm
+    | EvarSubstTarget -> EvarSubstTarget
+    | EvarSubject -> EvarSubject
 
-  let write_graph capnp_graph transformer
-      { node_count; edge_count; builder; _ } =
+  let write_graph ?(include_metadata=false) capnp_graph transformer
+      node_count edge_count builder =
     let nodes = K.Builder.Graph.nodes_init capnp_graph node_count in
     let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
     let state = { node_index = node_count - 1; edge_index = 0 } in
     let arrays_add { node_index; edge_index } label children =
       let node = Capnp.Array.get nodes node_index in
-      nt2nt transformer label @@ K.Builder.Graph.Node.label_init node;
+      nt2nt ~include_metadata node_index transformer label @@ K.Builder.Graph.Node.label_init node;
       let cc = List.length children in
       K.Builder.Graph.Node.children_count_set_exn node cc;
       K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);
