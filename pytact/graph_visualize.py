@@ -170,7 +170,7 @@ def visualize_global_context(root, graphs, definitions, representative, dependen
                      arrowtail="dot", dir="both", constraint="true")
 
     file = global_context_url(dependencies[0])
-    dot.render(os.path.splitext(file)[0], view=False, cleanup=False)
+    dot.render(os.path.splitext(file)[0], view=False, cleanup=True)
     return file
 
 def visualize_definition_dependencies(root, graphs, definitions, dependencies, representative):
@@ -233,7 +233,7 @@ def visualize_definition_dependencies(root, graphs, definitions, dependencies, r
             dot.edge(id1, id2)
 
     file = definitions_dependencies_url(dependencies[0])
-    dot.render(os.path.splitext(file)[0], view=False, cleanup=False)
+    dot.render(os.path.splitext(file)[0], view=False, cleanup=True)
     return file
 
 def visualize_term(dot, root, graphs, start, dependencies, depth,
@@ -413,7 +413,7 @@ def visualize_outcome(root, graphs, definition, proof, stepi, outcomei, dependen
     dot.attr('graph', URL=proof_url(dependencies[0], definition))
 
     file = proof_outcome_url(dependencies[0], definition, stepi, outcomei)
-    dot.render(os.path.splitext(file)[0], view=False, cleanup=False)
+    dot.render(os.path.splitext(file)[0], view=False, cleanup=True)
 
 def visualize_file_deps(root, deps):
     trans_deps = {}
