@@ -20,6 +20,22 @@ let with_depth f =
   Fun.protect ~finally:(fun () -> Topfmt.set_depth_boxes old)
     (fun () -> Topfmt.set_depth_boxes (Some 32); f ())
 
+(* Safe version of Learner_helper.proof_state_to_string *)
+let proof_state_to_string_safe (hyps, concl) env evar_map =
+  let open Context in
+  let constr_str t = Pp.string_of_ppcmds (Sexpr.format_oneline (
+      Printer.safe_pr_constr_env env evar_map t)) in
+  let goal = constr_str concl in
+  let id_str id = Names.Id.to_string id.binder_name in
+  let hyps = List.rev hyps in
+  let hyps = List.map (function
+      | Named.Declaration.LocalAssum (id, typ) ->
+        id_str id ^ " : " ^ constr_str typ
+      | Named.Declaration.LocalDef (id, term, typ) ->
+        id_str id ^ " := " ^ constr_str term ^ " : " ^ constr_str typ
+    ) hyps in
+  String.concat ", " hyps ^ " |- " ^ goal
+
 type proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
 type outcome = proof_state * Constr.t * proof_state list
 type tactical_proof = (outcome list * glob_tactic_expr option) list
@@ -460,22 +476,6 @@ end = struct
       | ManualConst c | TacticalConstant (c, _) -> register_constant c n
       | ManualSectionConst id | TacticalSectionConstant (id, _) -> register_section_variable id n in
     n, def
-
-  (* Safe version of Learner_helper.proof_state_to_string *)
-  let proof_state_to_string_safe (hyps, concl) env evar_map =
-    let open Context in
-    let constr_str t = Pp.string_of_ppcmds (Sexpr.format_oneline (
-        Printer.safe_pr_constr_env env evar_map t)) in
-    let goal = constr_str concl in
-    let id_str id = Names.Id.to_string id.binder_name in
-    let hyps = OList.rev hyps in
-    let hyps = OList.map (function
-        | Named.Declaration.LocalAssum (id, typ) ->
-          id_str id ^ " : " ^ constr_str typ
-        | Named.Declaration.LocalDef (id, term, typ) ->
-          id_str id ^ " := " ^ constr_str term ^ " : " ^ constr_str typ
-      ) hyps in
-    String.concat ", " hyps ^ " |- " ^ goal
 
   let follow_def alt m =
     let* follow_defs = lookup_def_depth in
