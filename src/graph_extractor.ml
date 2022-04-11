@@ -553,13 +553,13 @@ end = struct
           let* subject = gen_constr before_concl
           and+ term = gen_constr term
           and+ map = lookup_named_map in
-          let warn_arg id =
-            let tac = match tactic with
-              | None -> "Unknown-tac"
-              | Some tactic -> tactic.tactic in
-            Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++
-                                     str tac (* ++ str " in context\n" ++ *)
-                                     (* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *)) in
+          let warn_arg id = () in
+            (* let tac = match tactic with *)
+            (*   | None -> "Unknown-tac" *)
+            (*   | Some tactic -> tactic.tactic in *)
+            (* Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++ *)
+            (*                          str tac (\* ++ str " in context\n" ++ *\) *)
+            (*                          (\* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *\)) in *)
           let check_default id = function
             | None -> warn_arg id; None
             | x -> x in
