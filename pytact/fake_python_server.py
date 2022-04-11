@@ -11,6 +11,32 @@ capnp.remove_import_hook()
 graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
 
+def prediction_loop_text(r, s):
+    tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
+    while True:
+        g = next(r)
+        msg_type = g.which()
+        if msg_type == "predict":
+            print(g.predict.state.text)
+            preds = [
+                {'tacticText': t,
+                 'confidence': 0.5} for t in tactics ]
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
+            print(response)
+            response.write_packed(s)
+            import time
+            time.sleep(1)
+        elif msg_type == "synchronize":
+            print(g)
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
+            print(response)
+            response.write_packed(s)
+        elif msg_type == "initialize":
+            return g
+        else:
+            print("Capnp protocol error")
+            raise Exception
+
 def prediction_loop(r, s, tacs, graph1, definitions):
     while True:
         g = next(r)
@@ -52,35 +78,45 @@ def prediction_loop(r, s, tacs, graph1, definitions):
             print("Capnp protocol error")
             raise Exception
 
-def initialize_loop(r, s):
+def initialize_loop(r, s, textmode):
     g = next(r)
     msg_type = g.which()
     if msg_type == "initialize":
         while True:
             print('---------------- New prediction context -----------------')
-            gv.visualize_defs(g.initialize.graph, g.initialize.definitions)
-            print(g.initialize.tactics)
-            tacs = list(g.initialize.tactics)
+            if not textmode:
+                gv.visualize_defs(g.initialize.graph, g.initialize.definitions)
+                print(g.initialize.tactics)
             response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
             response.write_packed(s)
             print(response)
             import time
             time.sleep(1)
-            g = prediction_loop(r, s, tacs, g.initialize.graph, g.initialize.definitions)
+            if textmode:
+                g = prediction_loop_text(r, s)
+            else:
+                tacs = list(g.initialize.tactics)
+                g = prediction_loop(r, s, tacs, g.initialize.graph, g.initialize.definitions)
     elif msg_type == "synchronize":
         print(g)
         response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
         print(response)
         response.write_packed(s)
-        initialize_loop(r, s)
+        initialize_loop(r, s, textmode)
     else:
         print("Capnp protocol error")
         raise Exception
 
 def main():
     s = socket.socket(fileno=sys.stdin.fileno())
+    if sys.argv[1] == 'text':
+        print('Python server running in text mode')
+        textmode = True
+    elif sys.argv[1] == 'graph':
+        print('Python server running in graph mode')
+        textmode = False
     r = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(s, traversal_limit_in_words=2**64-1)
-    initialize_loop(r, s)
+    initialize_loop(r, s, textmode)
 
 if __name__ == '__main__':
     main()

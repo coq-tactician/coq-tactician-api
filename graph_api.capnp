@@ -444,14 +444,19 @@ struct PredictionProtocol {
     arguments @1 :List(Argument);
     confidence @2 :Float64;
   }
+  struct TextPrediction {
+    tacticText @0 :Text;
+    confidence @1 :Float64;
+  }
   struct Response {
     # See Request for documentation.
     union {
       initialized @0 :Void;
       prediction @1 :List(Prediction);
+      textPrediction @2 :List(TextPrediction);
       # Output is a list of predictions with a confidence. The list is expected to be
       # sorted by decreasing confidence.
-      synchronized @2 :UInt64;
+      synchronized @3 :UInt64;
     }
   }
 }
@@ -459,7 +464,7 @@ struct PredictionProtocol {
 
 ######################################################################################################
 #
-#             Common datastructures that are too long and cumbersome, and uninteresting
+#             Common datastructures that are too long, cumbersome, and uninteresting
 #             to put at the beginning of this file.
 #
 ######################################################################################################

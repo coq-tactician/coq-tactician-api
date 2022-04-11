@@ -42,6 +42,7 @@ let declare_string_option ~name ~default =
   optread
 
 let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
+let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -118,6 +119,21 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       | None -> raise MismatchedArguments
       | Some x -> x
 
+  let init_predict_text rc wc =
+
+    let module Request = Api.Builder.PredictionProtocol.Request in
+    let module Response = Api.Reader.PredictionProtocol.Response in
+    let request = Request.init_root () in
+    ignore(Request.initialize_init request);
+    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    match Capnp_unix.IO.ReadContext.read_message rc with
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
+    | Some response ->
+      let response = Response.of_message response in
+      match Response.get response with
+      | Response.Initialized -> ()
+      | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
+
   let init_predict rc wc tacs env =
     let builder, state =
       let globrefs = Environ.Globals.view Environ.(env.env_globals) in
@@ -180,6 +196,39 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       match Response.get response with
       | Response.Initialized -> tacs, state
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
+
+  let predict_text rc wc env ps =
+    let module Tactic = Api.Reader.Tactic in
+    let module Argument = Api.Reader.Argument in
+    let module ProofState = Api.Builder.ProofState in
+    let module Request = Api.Builder.PredictionProtocol.Request in
+    let module Prediction = Api.Reader.PredictionProtocol.TextPrediction in
+    let module Response = Api.Reader.PredictionProtocol.Response in
+    let request = Request.init_root () in
+    let predict = Request.predict_init request in
+    let state = Request.Predict.state_init predict in
+    let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
+    let concl = term_repr @@ proof_state_goal ps in
+    ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
+    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    match Capnp_unix.IO.ReadContext.read_message rc with
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+    | Some response ->
+      let response = Response.of_message response in
+      match Response.get response with
+      | Response.TextPrediction preds ->
+        let preds = Capnp.Array.to_list preds in
+        let preds = List.filter_map (fun p ->
+            try
+              let tac = Tacintern.intern_pure_tactic (Genintern.empty_glob_sign env) @@
+                Pcoq.parse_string Pltac.tactic_eoi @@ Prediction.tactic_text_get p in
+              let conf = Prediction.confidence_get p in
+              Some (tac, conf)
+            with e when CErrors.noncritical e ->
+              None
+          ) preds in
+        preds
+      | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
   let predict rc wc find_global_argument state tacs env ps =
     let module Tactic = Api.Reader.Tactic in
@@ -262,8 +311,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   let empty () =
     let ours, theirs = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    let mode = if textmode_option () then "text" else "graph" in
     let pid = Unix.create_process
-        "pytact-server" [| "pytact-server" |] theirs Unix.stdout Unix.stderr in
+        "pytact-server" [| "pytact-server"; mode |] theirs Unix.stdout Unix.stderr in
     Declaremods.append_end_library_hook (fun () ->
         Unix.kill pid Sys.sigkill;
         ignore (Unix.waitpid [] pid));
@@ -282,15 +332,25 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       { db with tactics }
   let predict { tactics; write_context; read_context } =
     drain read_context write_context;
-    let env = Global.env () in
-    let tacs, state = init_predict read_context write_context tactics env in
-    let find_global_argument = find_global_argument state in
-    fun f ->
-      if f = [] then IStream.empty else
-        let preds = predict read_context write_context find_global_argument state tacs env
-            (List.hd f).state in
-        let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
-        IStream.of_list preds
+    if not @@ textmode_option () then
+      let env = Global.env () in
+      let tacs, state = init_predict read_context write_context tactics env in
+      let find_global_argument = find_global_argument state in
+      fun f ->
+        if f = [] then IStream.empty else
+          let preds = predict read_context write_context find_global_argument state tacs env
+              (List.hd f).state in
+          let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
+          IStream.of_list preds
+    else
+      let env = Global.env () in
+      init_predict_text read_context write_context;
+      fun f ->
+        if f = [] then IStream.empty else
+          let preds = predict_text read_context write_context env
+              (List.hd f).state in
+          let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
+          IStream.of_list preds
   let evaluate db _ _ = 0., db
 
 end
