@@ -1,2 +1,2 @@
 #!/bin/bash
-tactician exec coqc tests/server_test0.v
+tactician exec coqc tests/server_test1.v

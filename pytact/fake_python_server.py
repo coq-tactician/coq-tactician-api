@@ -27,14 +27,22 @@ def debug(*args):
     print("PYTHON: ", *args)
 
 
+def debug_record(msg, fname: str):
+    msg_copy = msg.as_builder()
+    debug("DUMP msg to ", fname)
+    with open(fname, 'wb') as f_out:
+        msg_copy.write(f_out)
+
+
+
+
 def process_synchronize(sock, msg):
     debug(msg)
     response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
     debug("sending synchronize response in the initialize loop", response)
     response.write_packed(sock)
 
-def process_initialize(sock, msg, pred_context_cnt):
-    debug(f'---------------- Prediction CONTEXT {pred_context_cnt} -----------------')
+def process_initialize(sock, msg):
     graph1 = msg.initialize.graph
     definitions = msg.initialize.definitions
     # gv.visualize_defs(graph1, definitions, filename='initialize')
@@ -46,12 +54,13 @@ def process_initialize(sock, msg, pred_context_cnt):
     response.write_packed(sock)
     time.sleep(DELAY)
 
-    selected_graph1_nodes = [node_idx for node_idx in definitions if graph1.nodes[node_idx].label.definition.hash in SELECTED_HASHES]
+    selected_graph1_nodes = [node_idx for node_idx in definitions
+                             if graph1.nodes[node_idx].label.definition.hash in SELECTED_HASHES]
     debug(selected_graph1_nodes)
 
     return tacs, selected_graph1_nodes
 
-def process_predict(sock, msg,  selected_graph1_nodes, tacs, theorem_step_cnt):
+def process_predict(sock, msg,  selected_graph1_nodes, tacs):
      # gv.visualize(msg.predict.graph, msg.predict.state, graph1=graph1, filename=f'predict{theorem_step_cnt}')
     preds = []
     for tac in tacs:
@@ -70,19 +79,22 @@ def process_predict(sock, msg,  selected_graph1_nodes, tacs, theorem_step_cnt):
 
 
 def main_loop(reader, sock):
-    pred_context_cnt = 0
+    context_cnt = -1
     for msg in reader:
         msg_type = msg.which()
         debug("message: ", msg.which())
         if msg_type == "synchronize":
             process_synchronize(sock, msg)
         elif msg_type == "initialize":
-            pred_context_cnt += 1
-            tacs, selected_graph1_nodes = process_initialize(sock, msg, pred_context_cnt)
-            theorem_step_cnt = 0
+            context_cnt += 1
+            debug(f'### CONTEXT {context_cnt} ####')
+            debug_record(msg, f'msg_init.{context_cnt}.bin')
+            tacs, selected_graph1_nodes = process_initialize(sock, msg)
+            theorem_cnt = 0
         elif msg_type == "predict":
-            process_predict(sock, msg,  selected_graph1_nodes, tacs, theorem_step_cnt)
-            theorem_step_cnt += 1
+            process_predict(sock, msg,  selected_graph1_nodes, tacs)
+            debug_record(msg, f'msg_predict.{context_cnt}.{theorem_cnt}.bin')
+            theorem_cnt += 1
 
         else:
             raise Exception("Capnp protocol error in prediction_loop: "
