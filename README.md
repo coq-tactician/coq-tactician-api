@@ -137,6 +137,15 @@ tactician inject # you can answer 'no' to recompiling
 opam install coq-tactician-stdlib --keep-build-dir # make sure that you have the coq-extra-dev repo enabled
 ```
 
+If that crashes, it possible due to high memory consumption because of the parallel build. Try to reduce
+the number of parallel jobs. For example, 4 jobs seems to be ok on 16Gb machine.
+
+```
+export OPAMJOBS=4
+```
+
+
+
 3. For your Coq dataset, e.g. `propositional`
 ```
 cd ../propositional
