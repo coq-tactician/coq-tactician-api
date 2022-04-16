@@ -255,9 +255,9 @@ struct Definition {
   # Attempts are made to make the ordering of the global context consistent with the ordering of definitions
   # in the source document. However, when closing modules and sections this ordering is not guaranteed to be
   # maintained.
-  # The contract on this field is that any nodes reachable from the forward closure of the definition must also be
-  # reachable through the chain of previous fields. An exception to this rule are mutually recursive definitions.
-  # Those nodes are placed into the global context in an arbitrary ordering.
+  # The contract on this field is that definition any nodes reachable from the forward closure of the definition
+  # must also be reachable through the chain of previous fields. An exception to this rule are mutually
+  # recursive definitions. Those nodes are placed into the global context in an arbitrary ordering.
 
   externalPrevious @3 :List(DepIndex);
   # This field provides information about the external global context.
