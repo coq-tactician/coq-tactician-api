@@ -366,8 +366,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
 
 
-  let empty () = connect_stdin ()
-  (* let empty () = connect_tcpip "127.0.0.1" 33333*)
+  (* let empty () = connect_stdin () *)
+  let empty () = connect_tcpip "127.0.0.1" 33333
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with

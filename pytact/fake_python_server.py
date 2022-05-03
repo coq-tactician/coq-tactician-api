@@ -136,7 +136,6 @@ def main():
         textmode = False
     r = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(s, traversal_limit_in_words=2**64-1)
     initialize_loop(r, s, textmode)
->>>>>>> origin/coq8.11
 
 if __name__ == '__main__':
     main()
