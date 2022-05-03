@@ -337,8 +337,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   let connect_stdin () =
     ThisLogs.info (fun m -> m "%s" "starting proving server on stdin");
     let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    let mode = if textmode_option () then "text" else "graph" in
     let pid = Unix.create_process
-        "pytact-server" [| "pytact-server" |] other_socket Unix.stdout Unix.stderr in
+        "pytact-server" [| "pytact-server"; mode |] other_socket Unix.stdout Unix.stderr in
     Declaremods.append_end_library_hook (fun () ->
         Unix.kill pid Sys.sigkill;
         ignore (Unix.waitpid [] pid));
@@ -366,8 +367,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
 
 
-  (* let empty () = connect_stdin () *)
-  let empty () = connect_tcpip "127.0.0.1" 33333
+  let empty () = connect_stdin ()
+  (* let empty () = connect_tcpip "127.0.0.1" 33333 *)
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with
