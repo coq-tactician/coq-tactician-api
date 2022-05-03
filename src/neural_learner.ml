@@ -7,6 +7,7 @@ open Graph_extractor
 open Graph_def
 open Tacexpr
 
+
 let reporter ppf =
   let report src level ~over k msgf =
     let k _ = over (); k () in
@@ -25,6 +26,43 @@ module ThisLogs = (val Logs.src_log src : Logs.LOG)
 
 
 let service_name = Capnp_rpc_net.Restorer.Id.public ""
+
+let declare_bool_option ~name ~default =
+  let key = ["Tactician"; "Neural"; name] in
+  Goptions.declare_bool_option_and_ref
+    ~depr:false ~name:(String.concat " " key)
+    ~key ~value:default
+
+let declare_int_option ~name ~default =
+  let open Goptions in
+  let key = ["Tactician"; "Neural"; name] in
+  let r_opt = ref default in
+  let optwrite v = r_opt := match v with | None -> default | Some v -> v in
+  let optread () = Some !r_opt in
+  let _ = declare_int_option {
+      optdepr = false;
+      optname = String.concat " " key;
+      optkey = key;
+      optread; optwrite
+    } in
+  fun () -> !r_opt
+
+let declare_string_option ~name ~default =
+  let open Goptions in
+  let key = ["Tactician"; "Neural"; name] in
+  let r_opt = ref default in
+  let optwrite v = r_opt := v in
+  let optread () = !r_opt in
+  let _ = declare_string_option {
+      optdepr = false;
+      optname = String.concat " " key;
+      optkey = key;
+      optread; optwrite
+    } in
+  optread
+
+let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
+let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -45,7 +83,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 
-  let gen_proof_state ps =
+  let gen_proof_state env ps =
     let open GB in
     let hyps = proof_state_hypotheses ps in
     let concl = proof_state_goal ps in
@@ -53,11 +91,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let concl = term_repr concl in
     let open CICGraph in
     let open Monad_util.WithMonadNotations(CICGraph) in
-    let* hyps, (concl, map) = with_named_context hyps @@
+    let* hyps, (concl, map) = with_named_context env (Id.Map.empty, Cmap.empty) hyps @@
       let* map = lookup_named_map in
-      let+ concl = gen_constr concl in
+      let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
       concl, map in
-    let+ root = mk_node Root ((ContextSubject, concl)::hyps) in
+    let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
     root, map
 
   exception NoSuchTactic
@@ -80,31 +118,49 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     | None -> raise MismatchedArguments
     | Some x -> x
 
-  let find_global_argument CICGraph.{ constants; inductives; constructors; projections } =
+  let find_global_argument
+      CICGraph.{ section_nodes; definition_nodes = { constants; inductives; constructors; projections }; _ } =
     let open Tactic_one_variable in
-    let map = Cmap.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
+    let map = Cmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
         constants Int.Map.empty in
-    let map = Indmap.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.IndRef c)) m)
+    let map = Indmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.IndRef c)) m)
         inductives map in
-    let map = Constrmap.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
+    let map = Constrmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
         constructors map in
     let map = ProjMap.fold (fun c (_, node) m ->
         Feedback.msg_notice Pp.(str (Graph_def.projection_to_string c));
-        (* TODO: At some point we have to deal with this *) assert false)
+        (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
+        assert false)
         projections map in
+    let map = Id.Map.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
+        section_nodes map in
     fun id ->
       match Int.Map.find_opt id map with
       | None -> raise MismatchedArguments
       | Some x -> x
 
+  let init_predict_text rc wc =
+
+    let module Request = Api.Builder.PredictionProtocol.Request in
+    let module Response = Api.Reader.PredictionProtocol.Response in
+    let request = Request.init_root () in
+    ignore(Request.initialize_init request);
+    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    match Capnp_unix.IO.ReadContext.read_message rc with
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
+    | Some response ->
+      let response = Response.of_message response in
+      match Response.get response with
+      | Response.Initialized -> ()
+      | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
+
   let init_predict rc wc tacs env =
-    let builder, known_definitions =
+    let builder, state =
       let globrefs = Environ.Globals.view Environ.(env.env_globals) in
-      let constants = Cset_env.elements @@ Cmap_env.domain @@ globrefs.constants in
       (* We are only interested in canonical constants *)
-      let _constants = Cset.elements @@ List.fold_left (fun m c ->
+      let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
           let c = Constant.make1 @@ Constant.canonical c in
-          Cset.add c m) Cset.empty constants in
+          Cset.add c m) globrefs.constants Cset.empty in
       let minductives = Mindmap_env.Set.elements @@ Mindmap_env.domain globrefs.inductives in
       (* We are only interested in canonical inductives *)
       let minductives = Mindset.elements @@ List.fold_left (fun m c ->
@@ -116,11 +172,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open GB in
       let updater =
         let* () = List.iter (fun c ->
-            let+ _ = gen_const c in ()) constants in
-        List.iter gen_mutinductive_helper minductives in
-      let (known_definitions, ()), builder =
-        CICGraph.run_empty ~def_truncate:true Cmap.empty updater Global in
-      builder, known_definitions in
+            let+ _ = gen_const env (Id.Map.empty, Cmap.empty) c in ()) constants in
+        List.iter (gen_mutinductive_helper env (Id.Map.empty, Cmap.empty)) minductives in
+      let ( state, ()), builder =
+        CICGraph.run_empty ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
+      builder, state in
 
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Response = Api.Reader.PredictionProtocol.Response in
@@ -141,14 +197,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       (TacticMap.bindings tacs);
 
     let graph = Request.Initialize.graph_init init in
-    CapnpGraphWriter.write_graph graph (fun _ -> 0) builder;
+    CapnpGraphWriter.write_graph graph (fun _ -> 0) builder.node_count builder.edge_count builder.builder;
 
     let definitions =
-      let f (_, (_, n)) = Stdint.Uint32.of_int n in
-      (List.map f @@ Cmap.bindings known_definitions.constants) @
-      (List.map f @@ Indmap.bindings known_definitions.inductives) @
-      (List.map f @@ Constrmap.bindings known_definitions.constructors) @
-      (List.map f @@ ProjMap.bindings known_definitions.projections)
+      let f (_, (_, (_, n))) = Stdint.Uint32.of_int n in
+      (List.map f @@ Cmap.bindings state.definition_nodes.constants) @
+      (List.map f @@ Indmap.bindings state.definition_nodes.inductives) @
+      (List.map f @@ Constrmap.bindings state.definition_nodes.constructors) @
+      (List.map f @@ ProjMap.bindings state.definition_nodes.projections) @
+      (List.map (fun (_, (_, n)) -> Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
     in
     ignore (Request.Initialize.definitions_set_list init definitions);
     Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
@@ -157,11 +214,45 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     | Some response ->
       let response = Response.of_message response in
       match Response.get response with
-      | Response.Initialized -> tacs, known_definitions
+      | Response.Initialized -> tacs, state
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-  let predict rc wc find_global_argument known_definitions tacs ps =
+  let predict_text rc wc env ps =
     let module Tactic = Api.Reader.Tactic in
+    let module Argument = Api.Reader.Argument in
+    let module ProofState = Api.Builder.ProofState in
+    let module Request = Api.Builder.PredictionProtocol.Request in
+    let module Prediction = Api.Reader.PredictionProtocol.TextPrediction in
+    let module Response = Api.Reader.PredictionProtocol.Response in
+    let request = Request.init_root () in
+    let predict = Request.predict_init request in
+    let state = Request.Predict.state_init predict in
+    let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
+    let concl = term_repr @@ proof_state_goal ps in
+    ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
+    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    match Capnp_unix.IO.ReadContext.read_message rc with
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+    | Some response ->
+      let response = Response.of_message response in
+      match Response.get response with
+      | Response.TextPrediction preds ->
+        let preds = Capnp.Array.to_list preds in
+        let preds = List.filter_map (fun p ->
+            try
+              let tac = Tacintern.intern_pure_tactic (Genintern.empty_glob_sign env) @@
+                Pcoq.parse_string Pltac.tactic_eoi @@ Prediction.tactic_text_get p in
+              let conf = Prediction.confidence_get p in
+              Some (tac, conf)
+            with e when CErrors.noncritical e ->
+              None
+          ) preds in
+        preds
+      | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
+
+  let predict rc wc find_global_argument state tacs env ps =
+    let module Tactic = Api.Reader.Tactic in
+    let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Prediction = Api.Reader.PredictionProtocol.Prediction in
@@ -170,14 +261,14 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let predict = Request.predict_init request in
     let updater =
       let open Monad_util.WithMonadNotations(CICGraph) in
-      let+ root, context_map = gen_proof_state ps in
+      let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
-    let (definitions, (root, context_map)), builder =
-      CICGraph.run ~known_definitions Names.Cmap.empty updater Local in
+    let (_, (root, context_map)), G.{ paths=_; node_count; edge_count; builder } =
+      CICGraph.run ~state updater G.builder_nil Local in
     let context_range = List.map (fun (_, (_, n)) -> n) @@ Id.Map.bindings context_map in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
-    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) builder;
+    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) node_count edge_count builder;
     let state = Request.Predict.state_init predict in
     ProofState.root_set_int_exn state root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
@@ -190,11 +281,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       | Response.Prediction preds ->
         let convert_args args =
           List.map (fun arg ->
-              let term = match Tactic.Argument.get arg with
-                | Tactic.Argument.Undefined _ | Tactic.Argument.Unresolvable -> raise IllegalArgument
-                | Tactic.Argument.Term t -> t in
-              let dep_index = Tactic.Argument.Term.dep_index_get term in
-              let node_index = Stdint.Uint32.to_int @@ Tactic.Argument.Term.node_index_get term in
+              let term = match Argument.get arg with
+                | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
+                | Argument.Term t -> t in
+              let dep_index = Argument.Term.dep_index_get term in
+              let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
               match dep_index with
               | 0 -> find_local_argument node_index
               | 1 -> find_global_argument node_index
@@ -204,7 +295,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         let preds = List.filter_map (fun p ->
             let tac = Prediction.tactic_get p in
             let tid = Tactic.ident_get_int_exn tac in
-            let args = convert_args @@ Tactic.arguments_get_list tac in
+            let args = convert_args @@ Prediction.arguments_get_list p in
             let tac, params = find_tactic tacs tid in
             if params <> List.length args then raise MismatchedArguments;
             let conf = Prediction.confidence_get p in
@@ -219,9 +310,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let module Request = Api.Builder.PredictionProtocol.Request in
       let module Response = Api.Reader.PredictionProtocol.Response in
       let request = Request.init_root () in
-      let id = !drainid in
-      Request.synchronize_set_int_exn request id;
-      drainid := id + 1;
+      let hash = Hashtbl.hash_param 255 255 (!drainid, Unix.gettimeofday (), Unix.getpid ()) in
+      Request.synchronize_set_int_exn request hash;
+      drainid := !drainid + 1;
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
       let rec loop () =
         match Capnp_unix.IO.ReadContext.read_message rc with
@@ -229,7 +320,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         | Some response ->
           let response = Response.of_message response in
           match Response.get response with
-          | Response.Synchronized id' when Stdint.Uint64.to_int id' = id -> ()
+          | Response.Synchronized id when Stdint.Uint64.to_int id = hash -> ()
           | _ -> loop () in
       loop ()
 
@@ -279,20 +370,34 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   let empty () = connect_tcpip "127.0.0.1" 33333
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
-    let tac = tactic_repr tac in
-    let tactics = tac::tactics in
-    last_model := tactics;
-    { db with tactics }
+    match tac with
+    | None -> db
+    | Some tac ->
+      let tac = tactic_repr tac in
+      let tactics = tac::tactics in
+      last_model := tactics;
+      { db with tactics }
   let predict { tactics; write_context; read_context } =
     drain read_context write_context;
-    let tacs, known_definitions = init_predict read_context write_context tactics (Global.env ()) in
-    let find_global_argument = find_global_argument known_definitions in
-    fun f ->
-      if f = [] then IStream.empty else
-        let preds = predict read_context write_context find_global_argument known_definitions tacs
-            (List.hd f).state in
-        let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
-        IStream.of_list preds
+    if not @@ textmode_option () then
+      let env = Global.env () in
+      let tacs, state = init_predict read_context write_context tactics env in
+      let find_global_argument = find_global_argument state in
+      fun f ->
+        if f = [] then IStream.empty else
+          let preds = predict read_context write_context find_global_argument state tacs env
+              (List.hd f).state in
+          let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
+          IStream.of_list preds
+    else
+      let env = Global.env () in
+      init_predict_text read_context write_context;
+      fun f ->
+        if f = [] then IStream.empty else
+          let preds = predict_text read_context write_context env
+              (List.hd f).state in
+          let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
+          IStream.of_list preds
   let evaluate db _ _ = 0., db
 
 end

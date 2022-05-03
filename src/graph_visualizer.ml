@@ -37,7 +37,7 @@ module GraphvizGraph = struct
     [ `Dir `Both
     ; `Arrowtail (List.nth arrow_heads @@ edge_type_int_mod @@ E.label e)] @
     (match E.label e with
-    | AppArgOrder | EvarSubstOrder -> [`Constraint false]
+    | AppArgOrder -> [`Constraint false]
     | _ -> [`Constraint true])
   let get_subgraph _ = None
 
@@ -83,22 +83,22 @@ let make_global_graph ?def_depth x =
     try
       Smartlocate.locate_global_with_alias x
     with Not_found -> CErrors.user_err (Pp.str "Invalid ident given") in
-  let (_, _), ns = CICGraph.run_empty ?def_depth Names.Cmap.empty @@ Builder.gen_globref x in
+  let (_, _), ns = CICGraph.run_empty ?def_depth @@ Builder.gen_globref (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) x in
   make_graph ns
 
 let make_constr_graph ?def_depth c =
   let env = Global.env () in
   let sigma = Evd.from_env env in
   let evd, c = Constrintern.interp_constr_evars env sigma c in
-  let (_, _), ns = CICGraph.run_empty ?def_depth Names.Cmap.empty @@
-    Builder.gen_constr (EConstr.to_constr evd c) in
+  let (_, _), ns = CICGraph.run_empty ?def_depth @@
+    Builder.gen_constr (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) (EConstr.to_constr evd c) in
   make_graph ns
 
 let make_proof_graph ?def_depth state =
   let _ =
     Pfedit.solve (Goal_select.get_default_goal_selector ()) None
-      (Proofview.tclBIND Builder.gen_proof_state (fun res ->
-           let (_, _), ns = CICGraph.run_empty ?def_depth Names.Cmap.empty res in
+      (Proofview.tclBIND (Builder.gen_proof_state (Names.Id.Map.empty, Names.Cmap.empty)) (fun res ->
+           let (_, _), ns = CICGraph.run_empty ?def_depth res in
            make_graph ns;
            Proofview.tclUNIT ()))
       (Proof_global.get_proof state) in ()

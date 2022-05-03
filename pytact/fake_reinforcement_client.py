@@ -41,7 +41,7 @@ def localNode(id):
 
 # Helper function that runs a given tactic on a given proof state
 async def runTactic(obj, ident, args):
-    resp = await obj.runTactic({ 'ident': ident, 'arguments': args}).a_wait()
+    resp = await obj.runTactic( { 'ident': ident }, args).a_wait()
     state = resp.result
     visualize(state)
     return state
@@ -137,9 +137,9 @@ async def main():
     state = await runTactic(state.newState.obj, 126567959, [])
     state = await runTactic(state.newState.obj, 126567959, [])
     state = await runTactic(state.newState.obj, 126567959, [])
-    state = await runTactic(state.newState.obj, 165468576, [localNode(11)])
-    state = await runTactic(state.newState.obj, 165468576, [localNode(13)])
-    state = await runTactic(state.newState.obj, 165468576, [localNode(15)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(8)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(9)])
+    state = await runTactic(state.newState.obj, 165468576, [localNode(10)])
 
     if args.interactive:
         from ptpython.repl import embed

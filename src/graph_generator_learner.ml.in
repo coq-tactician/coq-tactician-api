@@ -5,6 +5,8 @@ open Graph_extractor
 open Graph_capnp_generator
 open Graph_def
 
+module OList = CList
+
 let dirpath = Global.current_dirpath ()
 let data_file () = match Tactician_util.base_filename with
   | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
@@ -22,58 +24,287 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   module LH = Learner_helper.L(TS)
   open TS
 
-  type model = ((proof_state list * tactic) list * Libnames.full_path) list
+  type model = (((proof_state * term * proof_state list) list * tactic option) list * data_status * KerName.t) list
 
   let last_model = Summary.ref ~name:"dataset-generator-learner-lastmodel" []
 
+  let cache_type kn =
+    let dirp = Global.current_dirpath () in
+    let kn_dirp =
+      let rec get_dirpath = function
+        | MPfile dp -> dp
+        | MPbound b ->
+          let (_, id, dp) = MBId.repr b in
+          dp
+        | MPdot (mp, l) -> get_dirpath mp in
+      get_dirpath @@ KerName.modpath kn in
+    if DirPath.equal dirp kn_dirp then `File else `Dependency
+
+  let empty () = []
+  let learn db (kn, path, status) outcomes tac =
+    match cache_type kn, status with
+    | `File, (QedTime | Discharged _ | Substituted _)  ->
+      let proof_states = List.map (fun x -> x.before, x.term, List.rev x.after) outcomes in
+      let db = match db with
+        | (ls, pstatus, pkn)::data when KerName.equal kn pkn ->
+          ((proof_states, tac)::ls, pstatus, pkn)::data
+        | _ -> ([proof_states, tac], status, kn)::db in
+      last_model := db;
+      db
+    | (`Dependency, _) | (`File, Original) -> db
+  let predict db situations = IStream.empty
+  let evaluate db _ _ = 0., db
+
+  type glob_ref2 =
+    | GConstant of constant
+    | GInductive of inductive
+    | GConstructor of constructor
+    | GProjection of Projection.Repr.t
+
   open CICGraph
-  let merge_global_nodes gn1 gn2 =
-    let mexn _ _ _ = CErrors.anomaly (Pp.str "Duplicate global nodes found") in
-    { constants = Cmap.union mexn gn1.constants gn2.constants
-    ; inductives = Indmap.union mexn gn1.inductives gn2.inductives
-    ; constructors = Constrmap.union mexn gn1.constructors gn2.constructors
-    ; projections = ProjMap.union mexn gn1.projections gn2.projections }
+
+  (* Global state of the graph generator *)
+  let graph_builder = ref G.builder_nil
+  let original_definitions = ref Int.Set.empty
+  let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
+  let section_nodes = Summary.ref ~name:"TacticianGraphSectionNodes" Id.Map.empty
   let global_nodes = Summary.ref ~name:"TacticianGraphGlobalNodes"
       { constants = Cmap.empty
       ; inductives = Indmap.empty
       ; constructors = Constrmap.empty
       ; projections = ProjMap.empty }
-  let in_global_nodes : definitions -> Libobject.obj =
+  let previous_definition = Summary.ref ~name:"TacticianGraphPreviousDefinition" None
+  let external_previous_definitions = Summary.ref ~name:"TacticianGraphExternalPreviousDefinition" DPmap.empty
+  let known_external_previous_definitions =
+    Summary.ref ~name:"TacticianGraphKnownExternalPreviousDefinition" DPmap.empty
+
+  let update_error p ns n = function
+    | None -> Some (ns, n)
+    | Some ((NActual, _) as x) ->
+      (match ns with
+       | NSubstituted ->
+         (* This is valid and can happen when the substitution of a constant is a null-op. We want to ignore these. *)
+         Some x
+       | _ ->
+         CErrors.anomaly Pp.(str "Map update attempt while key already existed: " ++ p))
+    | Some ((NDischarged | NSubstituted), _) -> Some (ns, n)
+  let in_global_nodes : node_status * glob_ref2 -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object "LTACRECORDGRAPHNODES"
-                 ~cache:(fun (_, gn') -> global_nodes := merge_global_nodes !global_nodes gn')
-                 ~subst:None
-                 ~discharge:(fun x -> Some (snd x)))
+                 ~cache:(fun ((fp, kn), ((ns, n), gr)) ->
+                     let gn = !global_nodes in
+                     global_nodes := match gr with
+                       | GConstant c ->
+                         { gn with constants = Cmap.update c (update_error (Constant.print c) ns n) gn.constants }
+                       | GInductive i ->
+                         { gn with inductives = Indmap.update i (update_error (Pp.str "ind") ns n) gn.inductives }
+                       | GConstructor c ->
+                         { gn with constructors = Constrmap.update c (update_error (Pp.str "constr") ns n) gn.constructors }
+                       | GProjection p ->
+                         { gn with projections = ProjMap.update p (update_error (Pp.str "proj") ns n) gn.projections }
+                   )
+                 ~subst:(Some (fun (o, ((_, n), gr)) ->
+                     (NSubstituted, n), match gr with
+                     | GConstant c ->
+                       GConstant (Mod_subst.subst_constant o c)
+                     | GInductive i -> GInductive (Mod_subst.subst_ind o i)
+                     | GConstructor (i, n) -> GConstructor (Mod_subst.subst_ind o i, n)
+                     | GProjection p -> GProjection (Mod_subst.subst_proj_repr o p)
+                   ))
+                 ~discharge:(fun (_, ((_, n), gr)) -> Some ((NDischarged, n), gr)))
+  let in_dependencies : (DirPath.t * string * DPset.t) -> Libobject.obj =
+    Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHDEPS"
+        ~cache:(fun (_, (path, bin, deps)) -> dependencies := DPmap.add path (bin, deps) !dependencies)
+        ~subst:None)
+  let in_previous_definition : node option -> Libobject.obj =
+    Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHPREVIOUS"
+                 ~cache:(fun (_, prev) ->
+                     match prev with
+                     | None -> ()
+                     | Some (d, n) when not @@ DirPath.equal d dirpath ->
+                       external_previous_definitions := DPmap.add d n !external_previous_definitions
+                     | Some _ -> previous_definition := prev)
+                 ~subst:(Some (fun (_, _) -> None)))
+  let in_known_external_previous_definition : node option -> Libobject.obj =
+    Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHKNOWNEXTERNAL"
+                 ~cache:(fun (_, prev) ->
+                     match prev with
+                     | None -> ()
+                     | Some (d, n) ->
+                       known_external_previous_definitions := DPmap.add d n !known_external_previous_definitions)
+                 ~subst:(Some (fun (_, _) -> None)))
 
-  let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
-  let in_dependencies : (DirPath.t * string) -> Libobject.obj =
-    Libobject.(declare_object @@ superglobal_object "LTACRECORDGRAPHDEPS"
-        ~cache:(fun (_, (path, bin)) -> dependencies := DPmap.add path bin !dependencies)
-        ~subst:None
-        ~discharge:(fun x -> Some (snd x)))
+  open GB
 
-  let cache_type name =
-    let dirp = Global.current_dirpath () in
-    if Libnames.is_dirpath_prefix_of dirp (Libnames.dirpath name) then `File else `Dependency
+  let proof_state_to_pair ps =
+    let concl = proof_state_goal ps in
+    let hyps = proof_state_hypotheses ps in
+    List.map (map_named term_repr) hyps, term_repr concl, proof_state_evar ps
 
-  let empty () = []
-  let learn db (path, _status) outcomes tac =
-    match cache_type path with
-    | `File ->
-      let proof_states = List.map (fun x -> x.before) outcomes in
-      let db = match db with
-        | (ls, ppath)::data when Libnames.eq_full_path path ppath ->
-          ((proof_states, tac)::ls, ppath)::data
-        | _ -> ([proof_states, tac], path)::db in
-      last_model := db; db
-    | `Dependency -> db
-  let predict db situations = IStream.empty
-  let evaluate db _ _ = 0., db
+  let grandfathered_constants =
+    [ match Coqlib.lib_ref "tactician.private_constant_placeholder" with
+      | Names.GlobRef.ConstRef const -> const
+      | _ -> assert false
+    ]
+
+  let update_graph () =
+    let err_msg c = Pp.(str "Unexpected definition" ++ ws 1 ++ c ++ ws 1 ++ str "encountered. " ++
+                        str "Did you forget to inject Tactician while installing a dependency?") in
+    let globrefs = Environ.Globals.view (Global.env ()).env_globals in
+    let section_vars = List.map Context.Named.Declaration.get_id  @@ Environ.named_context @@ Global.env () in
+    let constants = Cmap_env.filter
+        (fun c _ ->
+           (not @@ List.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
+           match Cmap.find_opt c !global_nodes.constants with
+           | Some (NActual, _) -> false
+           | None | Some ((NSubstituted | NDischarged), _) -> true
+        ) globrefs.constants in
+    (* We are only interested in canonical constants *)
+    let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
+        let c = Constant.make1 @@ Constant.canonical c in
+        if not @@ DirPath.equal dirpath @@ ModPath.dp @@ Constant.modpath c then
+          CErrors.user_err (err_msg (Constant.print c));
+        Cset.add c m) constants Cset.empty in
+    let minductives = Mindmap_env.filter
+        (fun m _ ->
+           match Indmap.find_opt (m, 0) !global_nodes.inductives with
+           | Some (NActual, _) -> false
+           | None | Some ((NSubstituted | NDischarged), _) -> true) globrefs.inductives in
+    (* We are only interested in canonical inductives *)
+    let minductives = Mindset.elements @@ Mindmap_env.fold (fun c _ m ->
+        let c = MutInd.make1 @@ MutInd.canonical c in
+        if not @@ DirPath.equal dirpath @@ ModPath.dp @@ MutInd.modpath c then
+          CErrors.user_err (err_msg (MutInd.print c));
+        Mindset.add c m) minductives Mindset.empty in
+    let open Monad_util.WithMonadNotations(CICGraph) in
+    let open Monad.Make(CICGraph) in
+
+    let proof_states = OList.map (fun (prf, status, c) -> OList.rev prf, status, c) @@ OList.rev !last_model in
+
+    (* Correctness check *)
+    let lemmas = OList.filter_map (function (_, Discharged _, _) -> None | (_, _, x) -> Some x) proof_states in
+    let global_context =
+      KNset.elements @@ Cmap_env.fold (fun c _ m ->
+        let c = Constant.canonical c in
+        KNset.add c m) globrefs.constants KNset.empty in
+    let lemmas = OList.filter (fun x ->
+        (not @@ OList.exists (KerName.equal x) global_context) &&
+        (not @@ OList.exists (Id.equal (Label.to_id @@ KerName.label x)) section_vars)
+      ) lemmas in
+    OList.iter (fun x ->
+        let base = Label.to_id @@ KerName.label x in
+        let candidates = OList.filter (fun x -> Names.Id.equal (Label.to_id @@ KerName.label x) base ) global_context in
+        CErrors.anomaly Pp.(str "Unknown lemma: " ++ KerName.print x ++ str "\nAlternatives:\n" ++
+                            prlist_with_sep (fun () -> str "\n") KerName.print candidates)) lemmas;
+    (* End correctness check *)
+
+    let env = Global.env () in
+    let env_extra_const = OList.fold_left (fun m c ->
+        let path = Constant.canonical c in
+        let proof = OList.find_opt (fun (p, _, path2) -> KerName.equal path path2) proof_states in
+        let proof = Option.map (fun (p, _, _) -> p) proof in
+        let proof = Option.map (OList.map (fun (pss, tac) ->
+            OList.map (fun (b, term, ass) ->
+                proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
+            Option.map tactic_repr tac)) proof in
+        Option.fold_left (fun m proof -> Cmap.add c proof m) m proof
+      ) Cmap.empty constants in
+    let env_extra_var = OList.fold_left (fun m id ->
+        let proof = OList.find_opt (fun (_, _, path) -> Id.equal id @@ Label.to_id @@ KerName.label path) proof_states in
+        let proof = Option.map (fun (p, _, _) -> p) proof in
+        let proof = Option.map (OList.map (fun (pss, tac) ->
+            OList.map (fun (b, term, ass) ->
+                proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
+            Option.map tactic_repr tac)) proof in
+        Option.fold_left (fun m proof -> Id.Map.add id proof m) m proof
+      ) Id.Map.empty section_vars in
+    let env_extra = env_extra_var, env_extra_const in
+
+    let updater =
+      let+ _ = List.map (fun c ->
+          let+ n = gen_const env env_extra c in
+        c, n) constants
+      and+ () = List.iter (gen_mutinductive_helper env env_extra) minductives
+      and+ _ = List.map (gen_section_var env env_extra) section_vars in
+      () in
+    let known = DPmap.domain !known_external_previous_definitions in
+    let external_previous = DPmap.bindings @@
+      DPmap.filter (fun p _ -> not @@ DPset.mem p known) !external_previous_definitions in
+    let (new_state, ()), builder =
+      CICGraph.run ~include_metadata:true ~state:{ previous = !previous_definition
+                          ; external_previous
+                          ; section_nodes = !section_nodes
+                          ; definition_nodes = !global_nodes }
+        updater !graph_builder (Global.current_dirpath ()) in
+    graph_builder := builder;
+    section_nodes := new_state.section_nodes;
+    original_definitions := Id.Map.fold (fun _ (path, n) s ->
+        if not @@ DirPath.equal path dirpath then CErrors.anomaly Pp.(str "Local node expected");
+        Int.Set.add n s) new_state.section_nodes !original_definitions;
+    original_definitions := Cmap.fold (fun _ (status, (path, n)) s ->
+        if DirPath.equal path dirpath then Int.Set.add n s else s)
+        new_state.definition_nodes.constants !original_definitions;
+    original_definitions := Indmap.fold (fun _ (status, (path, n)) s ->
+        if DirPath.equal path dirpath then Int.Set.add n s else s)
+        new_state.definition_nodes.inductives !original_definitions;
+    original_definitions := Constrmap.fold (fun _ (status, (path, n)) s ->
+        if DirPath.equal path dirpath then Int.Set.add n s else s)
+        new_state.definition_nodes.constructors !original_definitions;
+    original_definitions := ProjMap.fold (fun _ (status, (path, n)) s ->
+        if DirPath.equal path dirpath then Int.Set.add n s else s)
+        new_state.definition_nodes.projections !original_definitions;
+
+    let new_known = DPmap.filter
+        (fun p _ ->
+           (not @@ DPset.mem p known) &&
+           (not @@ OList.exists (fun (p', _) -> DirPath.equal p p') new_state.external_previous))
+        !external_previous_definitions in
+    DPmap.iter (fun d n -> Lib.add_anonymous_leaf @@ in_known_external_previous_definition (Some (d, n))) new_known;
+
+    Lib.add_anonymous_leaf @@ in_previous_definition new_state.previous;
+
+    let update_definitions iter find defs wrap check =
+      iter
+        (fun c (ns, n) ->
+           match ns with
+           | NDischarged | NSubstituted -> ()
+           | NActual ->
+             match find c with
+             | None ->
+               check c;
+               Lib.add_anonymous_leaf @@ in_global_nodes ((NActual, n), wrap c)
+             | Some (NActual, _) -> ()
+             | Some ((NDischarged | NSubstituted), _) ->
+               Lib.add_anonymous_leaf @@ in_global_nodes ((NActual, n), wrap c)
+        ) defs in
+    update_definitions Cmap.iter (fun c -> Cmap.find_opt c !global_nodes.constants)
+      new_state.definition_nodes.constants (fun c -> GConstant c)
+      (fun c ->
+         if (not @@ CList.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
+            (not @@ CList.exists (Constant.CanOrd.equal c) constants) then
+           CErrors.user_err (err_msg @@ Constant.print c));
+    update_definitions Indmap.iter (fun i -> Indmap.find_opt i !global_nodes.inductives)
+      new_state.definition_nodes.inductives (fun i -> GInductive i)
+      (fun i ->
+         if not @@ CList.exists (MutInd.CanOrd.equal (fst i)) minductives then
+           CErrors.user_err (err_msg @@  MutInd.print (fst i)));
+    update_definitions Constrmap.iter (fun c -> Constrmap.find_opt c !global_nodes.constructors)
+      new_state.definition_nodes.constructors (fun c -> GConstructor c)
+      (fun c ->
+         if not @@ CList.exists (MutInd.CanOrd.equal (fst (fst c))) minductives then
+           CErrors.user_err (err_msg @@  MutInd.print (fst (fst c))));
+    update_definitions ProjMap.iter (fun p -> ProjMap.find_opt p !global_nodes.projections)
+      new_state.definition_nodes.projections (fun p -> GProjection p)
+      (fun p ->
+         if not @@ CList.exists (MutInd.CanOrd.equal (Projection.Repr.mind p)) minductives then
+           CErrors.user_err (err_msg @@  MutInd.print (Projection.Repr.mind p)))
+
+  let () = Hook.set Stm.document_add_hook (fun _ _ -> update_graph ())
 
   let resolve_dependencies deps =
     let absolute_deps = List.map (fun p ->
         match DPmap.find_opt p !dependencies with
         | None -> CErrors.anomaly (Pp.str ("Dependency was not resolvable: " ^ DirPath.to_string p))
-        | Some f -> f
+        | Some (f, _) -> f
       ) deps in
     let pwd = Sys.getcwd () in
     (match Sys.getenv_opt "OPAM_PACKAGE_NAME" with
@@ -97,98 +328,40 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     relative_deps
 
   module K = Graph_api.Make(Capnp.BytesMessage)
-  let write_graph ({ paths; _ } as builder) tactical_constants =
+  let write_graph G.{ paths; node_count; edge_count; builder } original_definitions representative =
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
     let resolved_dependencies = resolve_dependencies depslist in
     let g = K.Builder.Dataset.init_root () in
     let _ = K.Builder.Dataset.dependencies_set_list g resolved_dependencies in
-    let _ = K.Builder.Dataset.tactical_definitions_set_list g @@
-      List.map (fun n -> Stdint.Uint32.of_int @@ snd n) tactical_constants in
+    (match representative with
+     | None ->
+       K.Builder.Dataset.representative_set_int_exn g node_count
+     | Some (rp, representative) ->
+       if not (DirPath.equal rp dirpath) then
+         CErrors.anomaly Pp.(str "Representative is not from the current file: " ++ DirPath.print rp);
+       K.Builder.Dataset.representative_set_int_exn g representative);
+    let _ = K.Builder.Dataset.definitions_set_list g @@
+      List.map (fun n -> Stdint.Uint32.of_int @@ n) @@ Int.Set.elements original_definitions in
     let transformer tp =
       DPmap.find tp path_index in
     let capnp_graph = K.Builder.Dataset.graph_init g in
-    CapnpGraphWriter.write_graph capnp_graph transformer builder;
+    CapnpGraphWriter.write_graph ~include_metadata:true capnp_graph transformer node_count edge_count builder;
     Capnp_unix.IO.write_message_to_file ~compression:`Packing (K.Builder.Dataset.to_message g) (data_file ())
 
-  open GB
+  let () = Declaremods.append_end_library_hook @@ fun () ->
+    print_endline "writing";
+    update_graph ();
 
-  let proof_state_to_pair ps =
-    let concl = proof_state_goal ps in
-    let hyps = proof_state_hypotheses ps in
-    (List.map (map_named term_repr) hyps, term_repr concl)
+    (* We want the dependencies of the graph to contain any non-transitive imports *)
+    let second_level_deps = DPmap.fold (fun _ (_, s') s -> DPset.union s s') !dependencies DPset.empty in
+    let non_trans_deps = DPset.filter (fun d -> not @@ DPset.mem d second_level_deps) @@ DPmap.domain !dependencies in
+    let graph_builder = !graph_builder in
+    let graph_builder = { graph_builder with paths = DPset.union graph_builder.paths non_trans_deps } in
 
-  let endline_hook () = print_endline "writing";
-    let globrefs = Environ.Globals.view (Global.env ()).env_globals in
-    let constants = Cset_env.elements @@ Cmap_env.domain @@ Cmap_env.filter
-        (fun c _ -> not @@ Cmap.mem c !global_nodes.constants) globrefs.constants in
-    (* We are only interested in canonical constants *)
-    let constants = Cset.elements @@ OList.fold_left (fun m c ->
-        let c = Constant.make1 @@ Constant.canonical c in
-        Cset.add c m) Cset.empty constants in
-    let minductives = Mindmap_env.Set.elements @@ Mindmap_env.domain @@ Mindmap_env.filter
-        (fun m _ -> not @@ Indmap.mem (m, 0) !global_nodes.inductives) globrefs.inductives in
-    (* We are only interested in canonical inductives *)
-    let minductives = Mindset.elements @@ OList.fold_left (fun m c ->
-        let c = MutInd.make1 @@ MutInd.canonical c in
-        Mindset.add c m) Mindset.empty minductives in
-    let open Monad_util.WithMonadNotations(CICGraph) in
-    let open Monad.Make(CICGraph) in
+    Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()), DPmap.domain !dependencies);
+    write_graph graph_builder !original_definitions !previous_definition
 
-    let proof_states = OList.rev !last_model in
-    let proof_states = OList.map (fun (prf, c) -> OList.rev prf, c) proof_states in
-
-    (* Correctness check *)
-    let lemmas = OList.map snd proof_states in
-    let context_lemmas = OList.map (fun x -> Nametab.path_of_global (Names.GlobRef.ConstRef x)) constants in
-    let lemmas = OList.filter (fun x -> not @@ OList.exists (fun y -> Libnames.eq_full_path x y ) context_lemmas) lemmas in
-    OList.iter (fun x ->
-        let base = Libnames.basename x in
-        let candidates = OList.filter (fun x -> Names.Id.equal (Libnames.basename x) base ) context_lemmas in
-        Feedback.msg_warning Pp.(str "Unknown lemma: " ++ Libnames.pr_path x ++ str "\nAlternatives:\n" ++
-                                 prlist_with_sep (fun () -> str "\n") Libnames.pr_path candidates)) lemmas;
-    (* End correctness check *)
-
-    let proofs_map = OList.fold_left (fun m c ->
-        let path = Nametab.path_of_global (Names.GlobRef.ConstRef c) in
-        let proof = OList.find_opt (fun (p, path2) -> Libnames.eq_full_path path path2) proof_states in
-        let proof = Option.map fst proof in
-        let proof = Option.map (OList.map (fun (pss, tac) ->
-            OList.map proof_state_to_pair pss, tactic_repr tac)) proof in
-        Option.fold_left (fun m proof -> Cmap.add c proof m) m proof
-      ) Cmap.empty constants in
-
-    let updater =
-      let+ cnodes = List.map (fun c ->
-          let+ n = gen_const c in
-        c, n) constants
-      and+ () = List.iter gen_mutinductive_helper minductives in
-      cnodes in
-    let known_definitions =
-        { constants = !global_nodes.constants
-        ; inductives = !global_nodes.inductives
-        ; constructors = !global_nodes.constructors
-        ; projections = !global_nodes.projections } in
-    let (known_definitions, constant_nodes), builder =
-      CICGraph.run ~known_definitions proofs_map updater (Global.current_dirpath ()) in
-    let tactical_constants = OList.filter_map (fun (c, n) ->
-        match Cmap.mem c proofs_map with
-        | true -> Some n
-        | false -> None) constant_nodes in
-    let global_node =
-      { constants = Cmap.filter
-            (fun c _ -> not @@ Cmap.mem c !global_nodes.constants) known_definitions.constants
-      ; inductives = Indmap.filter
-            (fun i _ -> not @@ Indmap.mem i !global_nodes.inductives) known_definitions.inductives
-      ; constructors = Constrmap.filter
-            (fun c _ -> not @@ Constrmap.mem c !global_nodes.constructors) known_definitions.constructors
-      ; projections = ProjMap.filter
-            (fun p _ -> not @@ ProjMap.mem p !global_nodes.projections) known_definitions.projections } in
-    Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()));
-    write_graph builder tactical_constants;
-    Lib.add_anonymous_leaf @@ in_global_nodes global_node
-
-  let () = Declaremods.append_end_library_hook endline_hook
 end
 
 (* let () = register_online_learner "Dataset Generator Learner" (module GraphGeneratorLearner) *)
