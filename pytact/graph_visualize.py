@@ -488,7 +488,7 @@ def visualize_file_deps(root, alt, deps):
     dot.render(os.path.splitext(file)[0], view=False, cleanup=True)
     return file
 
-def visualize_exception(reason):
+def visualize_exception(reason, filename='visualize_graph.pdf', cleanup=None):
     dot = graphviz.Digraph()
     dot.node(str(reason), str(reason))
     dot.render(filename, view=False, cleanup=cleanup)
