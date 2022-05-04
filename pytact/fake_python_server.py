@@ -1,24 +1,15 @@
-"""
-simulation of python server
-"""
-import typing
+import os
 import sys
-import time
 
 import socket
 
 import capnp
 import pytact.common
 import pytact.graph_visualize as gv
-import argparse
-
 capnp.remove_import_hook()
-
-Tactic = typing.NewType('Tactic', object)
 
 graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
-
 
 def prediction_loop_text(r, s):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
@@ -81,18 +72,8 @@ def prediction_loop(r, s, tacs, graph1, definitions):
             response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
             print(response)
             response.write_packed(s)
-
         elif msg_type == "initialize":
-            context_cnt += 1
-            debug(f'### CONTEXT {context_cnt} ####')
-            debug_record(msg, f'msg_init.{context_cnt}.bin')
-            tacs, selected_graph1_nodes = process_initialize(sock, msg)
-            theorem_cnt = 0
-        elif msg_type == "predict":
-            process_predict(sock, msg,  selected_graph1_nodes, tacs)
-            debug_record(msg, f'msg_predict.{context_cnt}.{theorem_cnt}.bin')
-            theorem_cnt += 1
-
+            return g
         else:
             print("Capnp protocol error")
             raise Exception
