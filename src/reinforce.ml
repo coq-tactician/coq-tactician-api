@@ -20,26 +20,6 @@ let debug_option = Goptions.declare_bool_option_and_ref
     ~value:false
 
 
-
-let reporter ppf =
-  let report src level ~over k msgf =
-    let k _ = over (); k () in
-    let with_stamp h tags k ppf fmt =
-      Format.kfprintf k ppf ("%s: %a @[" ^^ fmt ^^ "@]@.")
-        (Logs.Src.name src)
-        Logs.pp_header (level, h)
-    in
-    msgf @@ fun ?header ?tags fmt -> with_stamp header tags k ppf fmt
-  in
-  { Logs.report = report }
-
-
-
-let src = Logs.Src.create "reinforce" ~doc:"coq-tactician-reinforce events"
-
-module ThisLogs = (val Logs.src_log src : Logs.LOG)
-
-
 exception NoSuchTactic
 exception MismatchedArguments
 exception IllegalArgument
@@ -255,7 +235,7 @@ let capnp_main =
 
     method ping_impl params release_param_caps =
       release_param_caps ();
-      ThisLogs.debug (fun m -> m "%s" "ping from prover received");
+      Feedback.msg_notice Pp.(str "ping from prover received");
       let open Main.Ping in
       let response, results = Service.Response.create Results.init_pointer in
       Results.result_set results "Roger";
@@ -263,7 +243,7 @@ let capnp_main =
 
 
     method initialize_impl params release_param_caps =
-      ThisLogs.debug (fun m -> m "%s" "initialize_impl call");
+      Feedback.msg_notice Pp.(str "initialize_impl call");
       let open Main.Initialize in
       let response, results = Service.Response.create Results.init_pointer in
       let x = Params.push_get params in
@@ -281,10 +261,6 @@ let capnp_main =
       Lwt.return @@ Ok response
   end
 
-let () =
-  Logs.set_level (Some Logs.Info);
-  Logs.set_reporter (Logs_fmt.reporter ())
-
 let reinforce_file_descr file_descr =
   let service_name = Capnp_rpc_net.Restorer.Id.public "" in
   Lwt_main.run
@@ -298,15 +274,16 @@ let reinforce_file_descr file_descr =
                     ~switch in
       let restore = Capnp_rpc_net.Restorer.single service_name capnp_main  in
       let _ : Capnp_rpc_unix.CapTP.t = Capnp_rpc_unix.CapTP.connect ~restore endpoint in
-      ThisLogs.debug (fun m -> m "%s" "CapTP connection requested");
+      Feedback.msg_notice Pp.(str "CapTP connection requested");
       waiting
     end;
   let total_memory (a,b,c) = 8 * (int_of_float (a -. b +. c)) in
-  ThisLogs.info (fun m-> m "Proving session finished with   %d memory allocated, requesting GC.full_major"
-                           (total_memory @@ Gc.counters ()));
+  Feedback.msg_notice Pp.(str "Proving session finished with "
+                          ++ int (total_memory @@ Gc.counters ()) ++ str " allocated, requesting GC.full_major");
+
   Gc.full_major ();
-  ThisLogs.info (fun m-> m "GC.full_major has finished with %d memory allocated"
-                           (total_memory @@ Gc.counters ()))
+  Feedback.msg_notice Pp.(str "Proving session finished with memory allocated: "
+                          ++ int (total_memory @@ Gc.counters ()))
 
 
 let reinforce_stdin () =
@@ -314,21 +291,20 @@ let reinforce_stdin () =
 
 
 let reinforce_tcp ip_addr port =
-  Logs.set_reporter (reporter (Format.err_formatter));
-  if debug_option () then  Logs.set_level (Some Logs.Debug)
-  else Logs.set_level (Some Logs.Info);
-  ThisLogs.info (fun m -> m "connecting to prover to %s:%d" ip_addr port);
+  Feedback.msg_notice Pp.(str "connecting to prover to " ++ str ip_addr ++ str ":" ++ int port);
+
   let my_socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
   (try
     Unix.connect my_socket server_addr;
-    ThisLogs.info (fun m -> m "%s" "connected to prover");
+    Feedback.msg_notice Pp.(str "connected to prover");
     reinforce_file_descr my_socket;
   with
-  | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> ThisLogs.err (fun m->m "%s" "connection to prover refused")
+  | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) ->
+       Feedback.msg_notice Pp.(str "connection to prover refused");
   | ex ->
-     (ThisLogs.err (fun m -> m "%s" "exception caught, closing connection to prover");
+     (
+       Feedback.msg_notice Pp.(str "exception caught, closing connection to prover");
      Unix.close my_socket;
      raise ex));
     Unix.close my_socket
-
