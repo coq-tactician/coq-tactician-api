@@ -10,28 +10,19 @@ capnp.remove_import_hook()
 
 import pytact.common
 
-
-
 graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
 
-
-
 arrow_heads = [ "dot", "inv", "odot", "invdot", "invodot" ]
 edge_arrow_map = {}
-
-logger = logging.getLogger(__name__)
-
-
 for group in graph_api_capnp.groupedEdges:
-    cnt = 0
+    count = 0
     for sort in group.conflatable:
-        edge_arrow_map[sort] = arrow_heads[cnt]
-        cnt += 1
+        edge_arrow_map[sort] = arrow_heads[count]
+        count += 1
 
-def visualize(graph, state, showLabel=False, graph1=None,  filename='python_graph', cleanup=True):
+def visualize(graph, state, showLabel = False, graph1 = None):
     nodes = graph.nodes
-    edges = graph.edges
     root = state.root
     context = state.context
     assert all(n < len(nodes) for n in context)
