@@ -44,8 +44,10 @@ let declare_string_option ~name ~default =
     } in
   optread
 
+
 let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
+let tcp_option = declare_string_option ~name:"Server" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -321,6 +323,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     Feedback.msg_notice Pp.(str "starting proving server with connection through their stdin");
     let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
     let mode = if textmode_option () then "text" else "graph" in
+    Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
     let pid = Unix.create_process
         "pytact-server" [| "pytact-server"; mode |] other_socket Unix.stdout Unix.stderr in
     Declaremods.append_end_library_hook (fun () ->
@@ -331,6 +334,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   let connect_tcpip ip_addr port =
     Feedback.msg_notice Pp.(str "connecting to proving server on" ++ ws 1 ++ str ip_addr ++ ws 1 ++ int port);
+    Feedback.msg_notice Pp.(str "tcp option " ++ str (tcp_option ()));
     let my_socket =  Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
     let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
     (try
@@ -348,12 +352,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       );
     connect_socket my_socket
 
+  let empty () =
+    if (tcp_option ()) == "" then
+      connect_stdin ()
+    else
+      let addr = Str.split (Str.regexp ":") (tcp_option()) in
+      connect_tcpip (List.nth addr 0) (int_of_string (List.nth addr 1))
 
 
-  (* let empty () = connect_stdin () *)
-  let empty () = connect_tcpip "127.0.0.1" 33333
-
-  let learn ({ tactics; _ } as db) _origin _outcomes tac =
+  let learn ({ tactics; _ } as db) _origin _outocmes tac =
     match tac with
     | None -> db
     | Some tac ->
