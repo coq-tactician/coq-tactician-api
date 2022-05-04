@@ -21,7 +21,8 @@ for group in graph_api_capnp.groupedEdges:
         edge_arrow_map[sort] = arrow_heads[count]
         count += 1
 
-def visualize(graph, state, showLabel = False, graph1 = None):
+def visualize(graph, state, showLabel = False, graph1 = None,
+              filename='python_graph', cleanup=True):
     nodes = graph.nodes
     root = state.root
     context = state.context
