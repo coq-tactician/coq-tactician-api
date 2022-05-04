@@ -114,9 +114,9 @@ async def example_script_prover(args, pull):
     result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
     result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
     result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [11]))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [13]))
-    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [15]))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [8]))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [9]))
+    result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_APPLY, [10]))
     assert result.which() == 'complete'  # if this is correct proof
 
 

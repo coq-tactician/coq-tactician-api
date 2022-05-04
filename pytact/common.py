@@ -4,8 +4,8 @@ common  wrapping functions for python - capnp - tactician interface
 provides class Proving with method run_prover that evaluates your python
 proving session in coq environment over capnp communication
 
-you need yourself to establish socket/pipe connection with capnp end of coq 
-and instantiate Proving object with 
+you need yourself to establish socket/pipe connection with capnp end of coq
+and instantiate Proving object with
 """
 
 import pkg_resources
@@ -52,7 +52,7 @@ class Connection:
         logger.debug("_reading_socket ended")
         return '_reading_socket ended'
 
-    
+
     async def _writing_socket(self):
         """
         This reads from local capnp client and writes to connected pipe
@@ -66,7 +66,7 @@ class Connection:
             writer.write(data.tobytes())
             await writer.drain()
             logger.debug("wrote to socket %d bytes", len(data))
-            
+
         logger.debug("_writing to socket ended")
         return '_writing_socket ended'
 
@@ -87,7 +87,7 @@ class Connection:
     async def run(self, proc):
         """
         this method runs the function proc
-        that defines the process of interacting with capnp connection 
+        that defines the process of interacting with capnp connection
         on python side
 
         the function proc should be of async awaitable type that takes
@@ -144,12 +144,12 @@ class Proving(Connection):
 
     Example:
 
-    proving = Proving(reader, writer)  
+    proving = Proving(reader, writer)
     await proving.run_prover(your_super_prover)
 
-    where reader and writer are the read and write end of socket/pipe to 
-    the other end of capnp coq 
-    
+    where reader and writer are the read and write end of socket/pipe to
+    the other end of capnp coq
+
     and where you need to implement your_super_prover function as you like
 
     See doc string of run_prover method
@@ -171,7 +171,7 @@ class Proving(Connection):
 
     async def run_prover(self, prover):
         """
-        The method run_prover runs your function prover in coq 
+        The method run_prover runs your function prover in coq
         evaluation session  using capnp protocol graph_api.capnp schema
 
         Your function prover should take one argument
@@ -183,13 +183,13 @@ class Proving(Connection):
         You can start the  proving session in your functin prover
         by opening coq proving environment with a call to pull as follows:
 
-        response = await pull.reinforce(lemma).a_wait 
+        response = await pull.reinforce(lemma).a_wait
 
         You get available tactics with
 
         available = await response.available.tactics().a_wait
 
-        You get the context and goal packed in response.result 
+        You get the context and goal packed in response.result
         as specified in graph_api.capnp schema
 
         NOTICE: the implementation of this class depends on the particular naming
@@ -210,8 +210,8 @@ def capnpLocalTactic(ident: int, local_arguments: List[int]):
     """
     returns capnpTactic argument given  ident and a list of local nodes
     """
-    res = {'ident': ident,
-            'arguments': [{'term': globalNode(nodeIndex)} for nodeIndex in local_arguments]}
+    res = {'ident': ident}, [{'term': globalNode(nodeIndex)} for nodeIndex in local_arguments]
+#           'arguments': [{'term': globalNode(nodeIndex)} for nodeIndex in local_arguments]}
     return res
 
 def graph_api_capnp():
@@ -223,7 +223,7 @@ async def runTactic(obj, tactic, vis=None):
     vis: pytact.graph_visualize.Visualizer
     """
     logger.info("awaiting tactic %s", repr(tactic))
-    resp = await obj.runTactic(tactic).a_wait()
+    resp = await obj.runTactic(*tactic).a_wait()
     result = resp.result
     logger.info('received result of type %s', result.which())
     if result.which() == 'newState':
@@ -237,7 +237,5 @@ async def runTactic(obj, tactic, vis=None):
     if result.which() == 'protocolError':
         logger.error('received protocolError %s', result.protocolError.which())
     #    raise ProtocolError  # our code is wrong
-        
+
     return result
-
-
