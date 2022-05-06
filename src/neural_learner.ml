@@ -7,9 +7,6 @@ open Graph_extractor
 open Graph_def
 open Tacexpr
 
-
-let service_name = Capnp_rpc_net.Restorer.Id.public ""
-
 let declare_bool_option ~name ~default =
   let key = ["Tactician"; "Neural"; name] in
   Goptions.declare_bool_option_and_ref
