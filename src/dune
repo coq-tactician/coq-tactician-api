@@ -29,7 +29,7 @@
     ;__dep_extract_finish__
     coq.kernel
     coq-tactician.record-plugin)
- (preprocess (staged_pps ppx_deriving.show lwt_ppx))
+ (preprocess (staged_pps ppx_deriving.show))
 )
 
 (rule
