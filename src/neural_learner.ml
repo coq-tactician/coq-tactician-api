@@ -338,7 +338,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
        Unix.connect my_socket server_addr;
        Feedback.msg_notice Pp.(str "connected to python server");
     with
-    | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> Feedback.msg_notice Pp.(str "connection to proving server refused")
+    | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> CErrors.user_err Pp.(str "connection to proving server refused")
     | ex ->
          (Feedback.msg_notice Pp.(str "exception caught, closing connection to prover");
           Unix.close my_socket;
