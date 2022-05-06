@@ -27,7 +27,6 @@
     lwt.unix
     ocamlgraph
     ;__dep_extract_finish__
-    coq.kernel
     coq-tactician.record-plugin)
  (preprocess (staged_pps ppx_deriving.show))
 )
