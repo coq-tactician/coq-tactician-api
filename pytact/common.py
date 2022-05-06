@@ -156,17 +156,8 @@ class Proving(Connection):
     """
     @staticmethod
     async def __proc(prover, client, api):
-        logger.info("calling bootstrap of Main")
-        coq_main = client.bootstrap().cast_as(api.Main)
-
-        logger.info("calling ping")
-        resp = await coq_main.ping().a_wait()
-        logger.info("ping responded: %s", resp.result)
-
-        logger.info("calling Main initialize")
-        initialized = await coq_main.initialize(api.LegacyPushReinforce.Server()).a_wait()
-
-        pull = initialized.pull
+        logger.info("calling PullReinforce")
+        pull = client.bootstrap().cast_as(api.PullReinforce)
         await prover(pull)
 
     async def run_prover(self, prover):

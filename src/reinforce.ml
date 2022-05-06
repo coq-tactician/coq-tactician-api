@@ -13,12 +13,6 @@ open Neural_learner.GB
 
 module TacticMap = Int.Map
 
-open Lwt.Infix
-let debug_option = Goptions.declare_bool_option_and_ref
-    ~depr:false ~name:"debug reinforce"
-    ~key:["Tactician"; "Reinforce"; "Debug"]
-    ~value:false
-
 
 exception NoSuchTactic
 exception MismatchedArguments
@@ -228,38 +222,21 @@ let pull_reinforce =
       Service.return response
   end
 
-let capnp_main =
-  let module Main = Api.Service.Main in
-  Main.local @@ object
-    inherit Main.service
+let reinforce () =
+  let service_name = Capnp_rpc_net.Restorer.Id.public "" in
+  Lwt_main.run @@
+  (Lwt_switch.with_switch @@ fun switch ->
+   let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr Unix.stdin)
+                  |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
+                    ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
+                    ~switch in
+   let restore = Capnp_rpc_net.Restorer.single service_name pull_reinforce in
+   let _ : Capnp_rpc_unix.CapTP.t = Capnp_rpc_unix.CapTP.connect ~restore endpoint in
+   let w, f = Lwt.wait () in
+   Lwt_switch.add_hook (Some switch) (fun () -> Lwt.return @@ Lwt.wakeup f ());
+   w);
+  Gc.full_major ()
 
-    method ping_impl params release_param_caps =
-      release_param_caps ();
-      Feedback.msg_notice Pp.(str "ping from prover received");
-      let open Main.Ping in
-      let response, results = Service.Response.create Results.init_pointer in
-      Results.result_set results "Roger";
-      Service.return response;
-
-
-    method initialize_impl params release_param_caps =
-      Feedback.msg_notice Pp.(str "initialize_impl call");
-      let open Main.Initialize in
-      let response, results = Service.Response.create Results.init_pointer in
-      let x = Params.push_get params in
-
-      (* let callback s = *)
-      (*   let open Api.Client.PushReinforce.Reinforce in *)
-      (*   let request, params = Capability.Request.create Params.init_pointer in *)
-      (*   let res = Params.result_init params in *)
-      (*   execution_result res; *)
-      (*   Capability.call_for_unit_exn s method_id request in *)
-      Service.return_lwt @@ fun () -> Capability.with_ref (Option.get x) @@ fun s ->
-      (* callback s *) Lwt.return_unit >>= fun () ->
-      Results.pull_set results (Some pull_reinforce);
-      release_param_caps ();
-      Lwt.return @@ Ok response
-  end
 
 let reinforce_file_descr file_descr =
   let service_name = Capnp_rpc_net.Restorer.Id.public "" in
@@ -272,7 +249,7 @@ let reinforce_file_descr file_descr =
                   |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
                     ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
                     ~switch in
-      let restore = Capnp_rpc_net.Restorer.single service_name capnp_main  in
+      let restore = Capnp_rpc_net.Restorer.single service_name pull_reinforce  in
       let _ : Capnp_rpc_unix.CapTP.t = Capnp_rpc_unix.CapTP.connect ~restore endpoint in
       Feedback.msg_notice Pp.(str "CapTP connection requested");
       waiting

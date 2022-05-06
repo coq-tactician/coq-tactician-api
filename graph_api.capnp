@@ -379,18 +379,6 @@ struct ExecutionResult {
   }
 }
 
-
-interface LegacyPushReinforce {
-  reinforce @0 (result :ExecutionResult);
-  embed @1 (graph :Graph, root :NodeIndex) -> (emb :List(Float64));
-}
-
-interface Main {
-  initialize @0 (push :LegacyPushReinforce) -> (pull :PullReinforce);
-  ping @1 () -> (result: Text);
-}
-
-
 interface ProofObject {
   # Represents a particular proof state.
   runTactic @0 (tactic: Tactic, arguments: List(Argument)) -> (result: ExecutionResult);
