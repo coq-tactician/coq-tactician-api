@@ -360,7 +360,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       connect_tcpip (List.nth addr 0) (int_of_string (List.nth addr 1))
 
 
-  let learn ({ tactics; _ } as db) _origin _outocmes tac =
+  let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with
     | None -> db
     | Some tac ->
