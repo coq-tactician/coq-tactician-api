@@ -11,15 +11,12 @@ RUN eval $(opam env) && opam update \
 
 RUN pip install .
 
-RUN eval $(opam env) \
-    && pytact-test
-
 
 # run script proof as in former pytact-test
 RUN eval $(opam env) \
     && pytact-prover --with-coq --loglevel=INFO
 
-# run script proof over a single tcp connection 
+# run script proof over a single tcp connection
 
 RUN eval $(opam env) \
     && pytact-prover --tcp --with-coq --tcp-sessions 1  --loglevel=INFO
@@ -28,4 +25,3 @@ RUN eval $(opam env) \
 
 RUN eval $(opam env) \
     && pytact-prover  --tcp --with-coq --tcp-sessions 1 --dfs --test prop4.txt --loglevel=ERROR --dfs-limit=20
-

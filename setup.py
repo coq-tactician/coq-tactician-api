@@ -36,7 +36,7 @@ setuptools.setup(
                                'tests/TestReinforceTcp.v',
                                'tests/prop4.txt']},
     install_requires=['pycapnp', 'graphviz', 'ptpython'],
-    entry_points={'console_scripts': ['pytact-test=pytact.fake_reinforcement_client:run_main',
+    entry_points={'console_scripts': [
                                       'pytact-server=pytact.fake_python_server:main',
                                       'pytact-check=pytact.graph_sanity_check:main',
                                       'pytact-visualize=pytact.visualize_file:main',
