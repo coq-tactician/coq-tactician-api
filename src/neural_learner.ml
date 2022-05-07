@@ -342,7 +342,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     | ex ->
          (Unix.close my_socket;
           CErrors.user_err Pp.(str "exception caught, closing connection to prover"));
-
+    );
     Declaremods.append_end_library_hook (fun () ->
         Unix.close my_socket;
       );
