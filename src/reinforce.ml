@@ -223,6 +223,10 @@ let pull_reinforce =
       Service.return response
   end
 
+let () =
+  Logs.set_level (Some Logs.Warning);
+  Logs.set_reporter (Logs_fmt.reporter ())
+
 let reinforce file_descr =
   let service_name = Capnp_rpc_net.Restorer.Id.public "" in
   Lwt_main.run @@
