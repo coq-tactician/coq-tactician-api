@@ -13,6 +13,7 @@ open Neural_learner.GB
 
 module TacticMap = Int.Map
 
+
 exception NoSuchTactic
 exception MismatchedArguments
 exception IllegalArgument
@@ -146,7 +147,6 @@ let rec proof_object env state tacs context_map =
       Service.return response
   end
 
-let service_name = Capnp_rpc_net.Restorer.Id.public ""
 
 let available_tactics tacs =
   let module AvailableTactics = Api.Service.AvailableTactics in
@@ -227,10 +227,11 @@ let () =
   Logs.set_level (Some Logs.Warning);
   Logs.set_reporter (Logs_fmt.reporter ())
 
-let reinforce () =
+let reinforce file_descr =
+  let service_name = Capnp_rpc_net.Restorer.Id.public "" in
   Lwt_main.run @@
   (Lwt_switch.with_switch @@ fun switch ->
-   let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr Unix.stdin)
+   let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr file_descr)
                   |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
                     ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
                     ~switch in
@@ -239,4 +240,30 @@ let reinforce () =
    let w, f = Lwt.wait () in
    Lwt_switch.add_hook (Some switch) (fun () -> Lwt.return @@ Lwt.wakeup f ());
    w);
-  Gc.full_major ()
+  let total_memory (a,b,c) = 8 * (int_of_float (a -. b +. c)) in
+  Feedback.msg_notice Pp.(str "Proving session finished with "
+                          ++ int (total_memory @@ Gc.counters ()) ++ str " allocated, requesting GC.full_major");
+  Gc.full_major ();
+  Feedback.msg_notice Pp.(str "Proving session finished with memory allocated: "
+                          ++ int (total_memory @@ Gc.counters ()))
+
+let reinforce_stdin () =
+  reinforce Unix.stdin
+
+let reinforce_tcp ip_addr port =
+  Feedback.msg_notice Pp.(str "connecting to prover to " ++ str ip_addr ++ str ":" ++ int port);
+  let my_socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
+  (try
+    Unix.connect my_socket server_addr;
+    Feedback.msg_notice Pp.(str "connected to prover");
+    reinforce my_socket;
+  with
+  | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) ->
+       Feedback.msg_notice Pp.(str "connection to prover refused");
+  | ex ->
+     (
+       Feedback.msg_notice Pp.(str "exception caught, closing connection to prover");
+     Unix.close my_socket;
+     raise ex));
+    Unix.close my_socket

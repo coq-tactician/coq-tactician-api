@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 import graphviz
 
@@ -20,7 +21,8 @@ for group in graph_api_capnp.groupedEdges:
         edge_arrow_map[sort] = arrow_heads[count]
         count += 1
 
-def visualize(graph, state, showLabel = False, graph1 = None):
+def visualize(graph, state, showLabel = False, graph1 = None,
+              filename='python_graph', cleanup=True):
     nodes = graph.nodes
     root = state.root
     context = state.context
@@ -53,12 +55,11 @@ def visualize(graph, state, showLabel = False, graph1 = None):
             dot.edge(str(node), target, label=label,
                      arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
 
-    dot.render('python_graph', view=False)
+    dot.render(filename=filename, view=False, cleanup=cleanup)
 
-def visualize_defs(graph, defs, showLabel = False):
+def visualize_defs(graph, defs, showLabel=False, filename='python_grapn', cleanup=True):
     nodes = graph.nodes
     assert all(n < len(nodes) for n in defs)
-
     dot = graphviz.Digraph()
     dot.attr('graph', ordering="out")
     for node, value in enumerate(nodes):
@@ -78,7 +79,7 @@ def visualize_defs(graph, defs, showLabel = False):
             dot.edge(str(node), str(edge.target.nodeIndex), label=label,
                      arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
 
-    dot.render('python_graph', view=False)
+    dot.render(filename=filename, view=False, cleanup=True)
 
 def definition_url(file, defid):
     base = os.path.splitext(file)[0]
@@ -479,7 +480,31 @@ def visualize_file_deps(root, alt, deps):
     dot.render(os.path.splitext(file)[0], view=False, cleanup=True)
     return file
 
-def visualize_exception(reason):
+def visualize_exception(reason, filename='visualize_graph.pdf', cleanup=None):
     dot = graphviz.Digraph()
     dot.node(str(reason), str(reason))
-    dot.render('python_graph', view=False)
+    dot.render(filename, view=False, cleanup=cleanup)
+
+
+class Visualizer:
+    def __init__(self, filename, count, show_labels, cleanup):
+        self.filename = filename
+        self.cnt = 0
+        self.count = count
+        self.show_labels = show_labels
+        self.cleanup = cleanup
+        logger.error("with self.count %d", self.count)
+    def _visualize(self, filename, result):
+        if result.which() == 'newState':
+            visualize(result.newState.graph, result.newState.state,
+                         filename=filename, showLabel=self.show_labels, cleanup=self.cleanup)
+        else:
+            visualize_exception(result, filename=self.filename, cleanup=self.cleanup)
+
+    def render(self, result):
+        filename = self.filename
+        if self.count:
+            filename += str(self.cnt)
+            self.cnt += 1
+
+        self._visualize(filename, result)

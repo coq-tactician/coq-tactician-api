@@ -41,8 +41,10 @@ let declare_string_option ~name ~default =
     } in
   optread
 
+
 let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
+let tcp_option = declare_string_option ~name:"Server" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -309,18 +311,50 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     ; write_context : Unix.file_descr Capnp_unix.IO.WriteContext.t
     ; read_context : Unix.file_descr Capnp_unix.IO.ReadContext.t }
 
-  let empty () =
-    let ours, theirs = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let connect_socket my_socket =
+    { tactics = []
+    ; write_context = Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
+    ; read_context = Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing my_socket }
+
+  let connect_stdin () =
+    Feedback.msg_notice Pp.(str "starting proving server with connection through their stdin");
+    let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
     let mode = if textmode_option () then "text" else "graph" in
+    Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
     let pid = Unix.create_process
-        "pytact-server" [| "pytact-server"; mode |] theirs Unix.stdout Unix.stderr in
+        "pytact-server" [| "pytact-server"; mode |] other_socket Unix.stdout Unix.stderr in
     Declaremods.append_end_library_hook (fun () ->
         Unix.kill pid Sys.sigkill;
         ignore (Unix.waitpid [] pid));
-    Unix.close theirs;
-    { tactics = []
-    ; write_context = Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing ours
-    ; read_context = Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing ours }
+    Unix.close other_socket;
+    connect_socket my_socket
+
+  let connect_tcpip ip_addr port =
+    Feedback.msg_notice Pp.(str "connecting to proving server on" ++ ws 1 ++ str ip_addr ++ ws 1 ++ int port);
+    Feedback.msg_notice Pp.(str "tcp option " ++ str (tcp_option ()));
+    let my_socket =  Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
+    (try
+       Unix.connect my_socket server_addr;
+       Feedback.msg_notice Pp.(str "connected to python server");
+    with
+    | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> CErrors.user_err Pp.(str "connection to proving server refused")
+    | ex ->
+      Unix.close my_socket;
+      CErrors.user_err Pp.(str "exception caught, closing connection to prover")
+    );
+    Declaremods.append_end_library_hook (fun () ->
+        Unix.close my_socket;
+      );
+    connect_socket my_socket
+
+  let empty () =
+    if (tcp_option ()) == "" then
+      connect_stdin ()
+    else
+      let addr = Str.split (Str.regexp ":") (tcp_option()) in
+      connect_tcpip (List.nth addr 0) (int_of_string (List.nth addr 1))
+
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with
