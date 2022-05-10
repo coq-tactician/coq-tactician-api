@@ -223,11 +223,11 @@ let pull_reinforce =
       Service.return response
   end
 
-let reinforce () =
+let reinforce file_descr =
   let service_name = Capnp_rpc_net.Restorer.Id.public "" in
   Lwt_main.run @@
   (Lwt_switch.with_switch @@ fun switch ->
-   let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr Unix.stdin)
+   let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr file_descr)
                   |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
                     ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
                     ~switch in
@@ -236,47 +236,24 @@ let reinforce () =
    let w, f = Lwt.wait () in
    Lwt_switch.add_hook (Some switch) (fun () -> Lwt.return @@ Lwt.wakeup f ());
    w);
-  Gc.full_major ()
-
-
-let reinforce_file_descr file_descr =
-  let service_name = Capnp_rpc_net.Restorer.Id.public "" in
-  Lwt_main.run
-    begin
-      let waiting, finish = Lwt.wait () in
-      let switch = Lwt_switch.create () in
-      let () = Lwt_switch.add_hook (Some switch) (fun () -> Lwt.return (Lwt.wakeup finish ())) in
-      let endpoint = Capnp_rpc_unix.Unix_flow.connect (Lwt_unix.of_unix_file_descr file_descr)
-                  |> Capnp_rpc_net.Endpoint.of_flow (module Capnp_rpc_unix.Unix_flow)
-                    ~peer_id:Capnp_rpc_net.Auth.Digest.insecure
-                    ~switch in
-      let restore = Capnp_rpc_net.Restorer.single service_name pull_reinforce  in
-      let _ : Capnp_rpc_unix.CapTP.t = Capnp_rpc_unix.CapTP.connect ~restore endpoint in
-      Feedback.msg_notice Pp.(str "CapTP connection requested");
-      waiting
-    end;
   let total_memory (a,b,c) = 8 * (int_of_float (a -. b +. c)) in
   Feedback.msg_notice Pp.(str "Proving session finished with "
                           ++ int (total_memory @@ Gc.counters ()) ++ str " allocated, requesting GC.full_major");
-
   Gc.full_major ();
   Feedback.msg_notice Pp.(str "Proving session finished with memory allocated: "
                           ++ int (total_memory @@ Gc.counters ()))
 
-
 let reinforce_stdin () =
-  reinforce_file_descr Unix.stdin
-
+  reinforce Unix.stdin
 
 let reinforce_tcp ip_addr port =
   Feedback.msg_notice Pp.(str "connecting to prover to " ++ str ip_addr ++ str ":" ++ int port);
-
   let my_socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
   (try
     Unix.connect my_socket server_addr;
     Feedback.msg_notice Pp.(str "connected to prover");
-    reinforce_file_descr my_socket;
+    reinforce my_socket;
   with
   | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) ->
        Feedback.msg_notice Pp.(str "connection to prover refused");
