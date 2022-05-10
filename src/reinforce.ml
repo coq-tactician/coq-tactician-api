@@ -119,7 +119,8 @@ let rec proof_object env state tacs context_map =
           if List.length params <> List.length tac_args then raise MismatchedArguments;
           let tac_args = List.map (find_argument context_map) tac_args in
           let subst = List.combine (List.map snd params) tac_args in
-          let tac = Tactic_substitute.tactic_substitute (fun id -> List.assoc id subst) tac in
+          (* TODO: This needs to be upgraded to full capture avoiding substitution *)
+          let tac = Tactic_substitute.alpha_convert (fun id -> List.assoc id subst) tac in
 
           let prtac = pp_tac tac in
           Feedback.msg_notice @@ Pp.(str "run tactic " ++ prtac);
