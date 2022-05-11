@@ -214,7 +214,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
     Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
-    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3a")
     | Some response ->
       let response = Response.of_message response in
       match Response.get response with
@@ -256,7 +256,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
     Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
-    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
       let response = Response.of_message response in
       match Response.get response with
@@ -298,7 +298,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
       let rec loop () =
         match Capnp_unix.IO.ReadContext.read_message rc with
-        | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+        | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3c")
         | Some response ->
           let response = Response.of_message response in
           match Response.get response with
