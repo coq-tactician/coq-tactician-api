@@ -86,8 +86,6 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
       (match previous with
        | None -> previous_set_int_exn cdef self_index;
        | Some previous ->
-         if transformer (fst previous) <> 0 then
-           CErrors.anomaly Pp.(str "previous definition was not from the current file");
          previous_set_int_exn cdef (snd previous));
       ignore (external_previous_set_list cdef @@ List.map (fun x -> transformer (fst x)) external_previous);
       (match def_type with
