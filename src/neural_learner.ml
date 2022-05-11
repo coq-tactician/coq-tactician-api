@@ -148,15 +148,18 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let minductives = Mindset.elements @@ List.fold_left (fun m c ->
           let c = MutInd.make1 @@ MutInd.canonical c in
           Mindset.add c m) Mindset.empty minductives in
+      let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
       let open Monad_util.WithMonadNotations(CICGraph) in
       let open Monad.Make(CICGraph) in
 
       let open GB in
+      let env_extra = Id.Map.empty, Cmap.empty in
       let updater =
         let* () = List.iter (fun c ->
-            let+ _ = gen_const env (Id.Map.empty, Cmap.empty) c in ()) constants in
-        List.iter (gen_mutinductive_helper env (Id.Map.empty, Cmap.empty)) minductives in
-      let ( state, ()), builder =
+            let+ _ = gen_const env env_extra c in ()) constants in
+        let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
+        List.map (gen_section_var env env_extra) section_vars in
+      let (state, _), builder =
         CICGraph.run_empty ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
       builder, state in
 

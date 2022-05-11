@@ -150,7 +150,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let err_msg c = Pp.(str "Unexpected definition" ++ ws 1 ++ c ++ ws 1 ++ str "encountered. " ++
                         str "Did you forget to inject Tactician while installing a dependency?") in
     let globrefs = Environ.Globals.view (Global.env ()).env_globals in
-    let section_vars = List.map Context.Named.Declaration.get_id  @@ Environ.named_context @@ Global.env () in
+    let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
     let constants = Cmap_env.filter
         (fun c _ ->
            (not @@ List.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
