@@ -340,16 +340,18 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     (try
        Unix.connect my_socket server_addr;
        Feedback.msg_notice Pp.(str "connected to python server");
-    with
-    | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> CErrors.user_err Pp.(str "connection to proving server refused")
-    | ex ->
-      Unix.close my_socket;
-      CErrors.user_err Pp.(str "exception caught, closing connection to prover")
+     with
+     | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> CErrors.user_err Pp.(str "connection to proving server refused")
+     | ex ->
+       Unix.close my_socket;
+       CErrors.user_err Pp.(str "exception caught, closing connection to prover")
     );
+    let ({ read_context; write_context; _ } as connection) = connect_socket my_socket in
     Declaremods.append_end_library_hook (fun () ->
+        drain read_context write_context;
         Unix.close my_socket;
       );
-    connect_socket my_socket
+    connection
 
   let empty () =
     if (tcp_option ()) == "" then
