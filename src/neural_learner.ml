@@ -41,8 +41,10 @@ let declare_string_option ~name ~default =
     } in
   optread
 
+
 let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
+let tcp_option = declare_string_option ~name:"Server" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -146,15 +148,18 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let minductives = Mindset.elements @@ List.fold_left (fun m c ->
           let c = MutInd.make1 @@ MutInd.canonical c in
           Mindset.add c m) Mindset.empty minductives in
+      let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
       let open Monad_util.WithMonadNotations(CICGraph) in
       let open Monad.Make(CICGraph) in
 
       let open GB in
+      let env_extra = Id.Map.empty, Cmap.empty in
       let updater =
         let* () = List.iter (fun c ->
-            let+ _ = gen_const env (Id.Map.empty, Cmap.empty) c in ()) constants in
-        List.iter (gen_mutinductive_helper env (Id.Map.empty, Cmap.empty)) minductives in
-      let ( state, ()), builder =
+            let+ _ = gen_const env env_extra c in ()) constants in
+        let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
+        List.map (gen_section_var env env_extra) section_vars in
+      let (state, _), builder =
         CICGraph.run_empty ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
       builder, state in
 
@@ -212,7 +217,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
     Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
-    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3a")
     | Some response ->
       let response = Response.of_message response in
       match Response.get response with
@@ -254,7 +259,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
     Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
-    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
       let response = Response.of_message response in
       match Response.get response with
@@ -296,7 +301,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
       let rec loop () =
         match Capnp_unix.IO.ReadContext.read_message rc with
-        | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3")
+        | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3c")
         | Some response ->
           let response = Response.of_message response in
           match Response.get response with
@@ -309,18 +314,52 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     ; write_context : Unix.file_descr Capnp_unix.IO.WriteContext.t
     ; read_context : Unix.file_descr Capnp_unix.IO.ReadContext.t }
 
-  let empty () =
-    let ours, theirs = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let connect_socket my_socket =
+    { tactics = []
+    ; write_context = Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
+    ; read_context = Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing my_socket }
+
+  let connect_stdin () =
+    Feedback.msg_notice Pp.(str "starting proving server with connection through their stdin");
+    let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
     let mode = if textmode_option () then "text" else "graph" in
+    Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
     let pid = Unix.create_process
-        "pytact-server" [| "pytact-server"; mode |] theirs Unix.stdout Unix.stderr in
+        "pytact-server" [| "pytact-server"; mode |] other_socket Unix.stdout Unix.stderr in
     Declaremods.append_end_library_hook (fun () ->
         Unix.kill pid Sys.sigkill;
         ignore (Unix.waitpid [] pid));
-    Unix.close theirs;
-    { tactics = []
-    ; write_context = Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing ours
-    ; read_context = Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing ours }
+    Unix.close other_socket;
+    connect_socket my_socket
+
+  let connect_tcpip ip_addr port =
+    Feedback.msg_notice Pp.(str "connecting to proving server on" ++ ws 1 ++ str ip_addr ++ ws 1 ++ int port);
+    Feedback.msg_notice Pp.(str "tcp option " ++ str (tcp_option ()));
+    let my_socket =  Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
+    (try
+       Unix.connect my_socket server_addr;
+       Feedback.msg_notice Pp.(str "connected to python server");
+     with
+     | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> CErrors.user_err Pp.(str "connection to proving server refused")
+     | ex ->
+       Unix.close my_socket;
+       CErrors.user_err Pp.(str "exception caught, closing connection to prover")
+    );
+    let ({ read_context; write_context; _ } as connection) = connect_socket my_socket in
+    Declaremods.append_end_library_hook (fun () ->
+        drain read_context write_context;
+        Unix.close my_socket;
+      );
+    connection
+
+  let empty () =
+    if (tcp_option ()) == "" then
+      connect_stdin ()
+    else
+      let addr = Str.split (Str.regexp ":") (tcp_option()) in
+      connect_tcpip (List.nth addr 0) (int_of_string (List.nth addr 1))
+
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with

@@ -1,7 +1,7 @@
 pin-depends: [
   [
     "coq-tactician.8.11.dev"
-    "git+https://github.com/coq-tactician/coq-tactician.git#d30b5e3c063e5c2880ab70e56e5958cf223a00f5"
+    "git+https://github.com/coq-tactician/coq-tactician.git#5cc85ea083888bc0a170db9eae4d708717d7bd97"
   ]
 ]
 
@@ -10,7 +10,7 @@ pin-depends: [
 # is optionally present. Something in the
 # resolution chain of opam / META / our dependencies
 # dependencies didn't resolve properly depopts case
-# therefore we add it explicitly 
+# therefore we add it explicitly
 # commit 544cf04bac7e0d15a459395f5b43fa002ec52389
 
 
