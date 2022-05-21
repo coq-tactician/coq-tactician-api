@@ -124,9 +124,17 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   (* Whenever we write a message to the server, we prevent a timeout from triggering.
      Otherwise, we might be sending corrupted messages, which causes the server to crash. *)
   let write_read_capnp_message_uninterrupted rc wc m =
+    let terminate = ref false in
+    let prev_sigterm =
+      Sys.signal Sys.sigterm @@ Sys.Signal_handle (fun i ->
+          Feedback.msg_notice Pp.(str "sigterm received" ++ int i);
+          terminate := true) in
     ignore (Thread.sigmask Unix.SIG_BLOCK [Sys.sigalrm]);
     try
-      Fun.protect ~finally:(fun () -> ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigalrm])) @@ fun () ->
+      Fun.protect ~finally:(fun () ->
+          Sys.set_signal Sys.sigterm prev_sigterm;
+          ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigalrm]);
+          if !terminate then exit 1) @@ fun () ->
       Capnp_unix.IO.WriteContext.write_message wc m;
       Capnp_unix.IO.ReadContext.read_message rc
     with Fun.Finally_raised e ->
