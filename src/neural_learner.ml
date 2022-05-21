@@ -334,11 +334,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         Unix.create_process
           (List.hd split) (Array.of_list split) other_socket Unix.stdout Unix.stderr
     in
+    let ({ read_context; write_context; _ } as connection) = connect_socket my_socket in
     Declaremods.append_end_library_hook (fun () ->
-        Unix.kill pid Sys.sigkill;
+        drain read_context write_context;
+        Unix.shutdown my_socket Unix.SHUTDOWN_SEND;
+        Unix.shutdown my_socket Unix.SHUTDOWN_RECEIVE;
+        Unix.close my_socket;
         ignore (Unix.waitpid [] pid));
     Unix.close other_socket;
-    connect_socket my_socket
+    connection
 
   let connect_tcpip ip_addr port =
     Feedback.msg_notice Pp.(str "connecting to proving server on" ++ ws 1 ++ str ip_addr ++ ws 1 ++ int port);
