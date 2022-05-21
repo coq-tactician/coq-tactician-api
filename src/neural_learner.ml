@@ -111,9 +111,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let map = Constrmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
         constructors map in
     let map = ProjMap.fold (fun c (_, node) m ->
-        Feedback.msg_notice Pp.(str (Graph_def.projection_to_string c));
         (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
-        assert false)
+        m)
         projections map in
     let map = Id.Map.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
         section_nodes map in
