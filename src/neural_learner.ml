@@ -121,13 +121,23 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       | None -> raise MismatchedArguments
       | Some x -> x
 
+  (* Whenever we write a message to the server, we prevent a timeout from triggering.
+     Otherwise, we might be sending corrupted messages, which causes the server to crash. *)
+  let write_capnp_message_uninterrupted wc m =
+    ignore (Thread.sigmask Unix.SIG_BLOCK [Sys.sigalrm]);
+    try
+      Fun.protect ~finally:(fun () -> ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigalrm])) @@ fun () ->
+      Capnp_unix.IO.WriteContext.write_message wc m
+    with Fun.Finally_raised e ->
+        raise e
+
   let init_predict_text rc wc =
 
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Response = Api.Reader.PredictionProtocol.Response in
     let request = Request.init_root () in
     ignore(Request.initialize_init request);
-    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    write_capnp_message_uninterrupted wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
     | Some response ->
@@ -193,7 +203,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       (List.map (fun (_, (_, n)) -> Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
     in
     ignore (Request.Initialize.definitions_set_list init definitions);
-    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    write_capnp_message_uninterrupted wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
     | Some response ->
@@ -215,7 +225,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
     let concl = term_repr @@ proof_state_goal ps in
     ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
-    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    write_capnp_message_uninterrupted wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3a")
     | Some response ->
@@ -257,7 +267,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let state = Request.Predict.state_init predict in
     ProofState.root_set_int_exn state root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
-    Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+    write_capnp_message_uninterrupted wc @@ Request.to_message request;
     match Capnp_unix.IO.ReadContext.read_message rc with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
@@ -298,7 +308,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let hash = Hashtbl.hash_param 255 255 (!drainid, Unix.gettimeofday (), Unix.getpid ()) in
       Request.synchronize_set_int_exn request hash;
       drainid := !drainid + 1;
-      Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message request;
+      write_capnp_message_uninterrupted wc @@ Request.to_message request;
       let rec loop () =
         match Capnp_unix.IO.ReadContext.read_message rc with
         | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3c")
