@@ -45,6 +45,7 @@ let declare_string_option ~name ~default =
 let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
 let tcp_option = declare_string_option ~name:"Server" ~default:""
+let executable_option = declare_string_option ~name:"Executable" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
@@ -324,8 +325,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
     let mode = if textmode_option () then "text" else "graph" in
     Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
-    let pid = Unix.create_process
-        "pytact-server" [| "pytact-server"; mode |] other_socket Unix.stdout Unix.stderr in
+    let pid =
+      if CString.is_empty @@ executable_option () then
+        Unix.create_process
+          "pytact-server" [| "pytact-server"; mode |] other_socket Unix.stdout Unix.stderr
+      else
+        let split = CString.split_on_char ' ' @@ executable_option () in
+        Unix.create_process
+          (List.hd split) (Array.of_list split) other_socket Unix.stdout Unix.stderr
+    in
     Declaremods.append_end_library_hook (fun () ->
         Unix.kill pid Sys.sigkill;
         ignore (Unix.waitpid [] pid));
@@ -354,7 +362,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     connection
 
   let empty () =
-    if (tcp_option ()) == "" then
+    if CString.is_empty @@ tcp_option () then
       connect_stdin ()
     else
       let addr = Str.split (Str.regexp ":") (tcp_option()) in
