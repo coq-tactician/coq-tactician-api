@@ -123,11 +123,12 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   (* Whenever we write a message to the server, we prevent a timeout from triggering.
      Otherwise, we might be sending corrupted messages, which causes the server to crash. *)
-  let write_capnp_message_uninterrupted wc m =
+  let write_read_capnp_message_uninterrupted rc wc m =
     ignore (Thread.sigmask Unix.SIG_BLOCK [Sys.sigalrm]);
     try
       Fun.protect ~finally:(fun () -> ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigalrm])) @@ fun () ->
-      Capnp_unix.IO.WriteContext.write_message wc m
+      Capnp_unix.IO.WriteContext.write_message wc m;
+      Capnp_unix.IO.ReadContext.read_message rc
     with Fun.Finally_raised e ->
         raise e
 
@@ -137,8 +138,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let module Response = Api.Reader.PredictionProtocol.Response in
     let request = Request.init_root () in
     ignore(Request.initialize_init request);
-    write_capnp_message_uninterrupted wc @@ Request.to_message request;
-    match Capnp_unix.IO.ReadContext.read_message rc with
+    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
     | Some response ->
       let response = Response.of_message response in
@@ -203,8 +203,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       (List.map (fun (_, (_, n)) -> Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
     in
     ignore (Request.Initialize.definitions_set_list init definitions);
-    write_capnp_message_uninterrupted wc @@ Request.to_message request;
-    match Capnp_unix.IO.ReadContext.read_message rc with
+    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
     | Some response ->
       let response = Response.of_message response in
@@ -225,8 +224,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
     let concl = term_repr @@ proof_state_goal ps in
     ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
-    write_capnp_message_uninterrupted wc @@ Request.to_message request;
-    match Capnp_unix.IO.ReadContext.read_message rc with
+    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3a")
     | Some response ->
       let response = Response.of_message response in
@@ -267,8 +265,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let state = Request.Predict.state_init predict in
     ProofState.root_set_int_exn state root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
-    write_capnp_message_uninterrupted wc @@ Request.to_message request;
-    match Capnp_unix.IO.ReadContext.read_message rc with
+    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
       let response = Response.of_message response in
@@ -308,16 +305,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let hash = Hashtbl.hash_param 255 255 (!drainid, Unix.gettimeofday (), Unix.getpid ()) in
       Request.synchronize_set_int_exn request hash;
       drainid := !drainid + 1;
-      write_capnp_message_uninterrupted wc @@ Request.to_message request;
-      let rec loop () =
-        match Capnp_unix.IO.ReadContext.read_message rc with
+      let rec loop msg =
+        match msg with
         | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3c")
         | Some response ->
           let response = Response.of_message response in
           match Response.get response with
           | Response.Synchronized id when Stdint.Uint64.to_int id = hash -> ()
-          | _ -> loop () in
-      loop ()
+          | _ -> loop @@ Capnp_unix.IO.ReadContext.read_message rc in
+      loop @@ write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request
 
   type model =
     { tactics : glob_tactic_expr list
