@@ -82,7 +82,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     root, map
 
   exception NoSuchTactic
-  exception MismatchedArguments
+  exception UnknownLocalArgument
+  exception UnknownArgument of int
+  exception MismatchedArgumentLength
   exception IllegalArgument
   (* exception ParseError *)
 
@@ -98,7 +100,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         context_map Int.Map.empty in
     fun id ->
     match Int.Map.find_opt id context_map_inv with
-    | None -> raise MismatchedArguments
+    | None -> raise UnknownLocalArgument
     | Some x -> x
 
   let find_global_argument
@@ -118,7 +120,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         section_nodes map in
     fun id ->
       match Int.Map.find_opt id map with
-      | None -> raise MismatchedArguments
+      | None ->
+        raise (UnknownArgument id)
       | Some x -> x
 
   (* Whenever we write a message to the server, we prevent a timeout from triggering.
@@ -250,6 +253,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
+
   let predict rc wc find_global_argument state tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
@@ -278,28 +282,45 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let response = Response.of_message response in
       match Response.get response with
       | Response.Prediction preds ->
-        let convert_args args =
-          List.map (fun arg ->
-              let term = match Argument.get arg with
-                | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
-                | Argument.Term t -> t in
-              let dep_index = Argument.Term.dep_index_get term in
-              let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
-              match dep_index with
-              | 0 -> find_local_argument node_index
-              | 1 -> find_global_argument node_index
-              | _ -> raise IllegalArgument
-            ) args in
         let preds = Capnp.Array.to_list preds in
-        let preds = List.filter_map (fun p ->
+        let preds = CList.filter_map (fun (i, p) ->
             let tac = Prediction.tactic_get p in
             let tid = Tactic.ident_get_int_exn tac in
-            let args = convert_args @@ Prediction.arguments_get_list p in
             let tac, params = find_tactic tacs tid in
-            if params <> List.length args then raise MismatchedArguments;
+            let convert_args args =
+              List.mapi (fun j arg ->
+                  let term = match Argument.get arg with
+                    | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
+                    | Argument.Term t -> t in
+                  let dep_index = Argument.Term.dep_index_get term in
+                  let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
+                  match dep_index with
+                  | 0 -> find_local_argument node_index
+                  | 1 ->
+                    (try
+                       find_global_argument node_index
+                     with UnknownArgument id ->
+                       CErrors.anomaly
+                         Pp.(str "Unknown global argument " ++ int id ++ str " at index " ++ int j ++
+                             str " for prediction " ++ int i ++ str " which is tactic " ++
+                             Pptactic.pr_glob_tactic (Global.env ()) tac ++
+                             str " with hash" ++ int tid))
+                  | _ -> raise IllegalArgument
+                ) args in
+            let args = convert_args @@ Prediction.arguments_get_list p in
+            if params <> List.length args then begin
+              CErrors.anomaly
+                Pp.(str "Mismatched argument length for prediction " ++ int i ++ str " which is tactic " ++
+                    Pptactic.pr_glob_tactic (Global.env ()) tac ++
+                    str " with hash" ++ int tid ++
+                    str ". Number of arguments expected: " ++ int params ++
+                    str ". Number of argument given: " ++ int (List.length args))
+            end;
             let conf = Prediction.confidence_get p in
-            Option.map (fun tac -> tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
-          ) preds in
+            Option.map (fun tac ->
+                Feedback.msg_notice @@ Pptactic.pr_glob_tactic (Global.env ()) tac;
+                tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
+          ) @@ CList.mapi (fun i x -> i, x) preds in
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
