@@ -13,8 +13,7 @@ graph_api_capnp = capnp.load(graph_api_capnp)
 
 def prediction_loop_text(r, s):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
-    while True:
-        g = next(r)
+    for g in r:
         msg_type = g.which()
         if msg_type == "predict":
             print(g.predict.state.text)
@@ -38,8 +37,7 @@ def prediction_loop_text(r, s):
             raise Exception
 
 def prediction_loop(r, s, tacs, graph1, definitions):
-    while True:
-        g = next(r)
+    for g in r:
         msg_type = g.which()
         if msg_type == "predict":
             gv.visualize(g.predict.graph, g.predict.state, graph1=graph1)
@@ -82,7 +80,7 @@ def initialize_loop(r, s, textmode):
     g = next(r)
     msg_type = g.which()
     if msg_type == "initialize":
-        while True:
+        while g:
             print('---------------- New prediction context -----------------')
             if not textmode:
                 gv.visualize_defs(g.initialize.graph, g.initialize.definitions)
