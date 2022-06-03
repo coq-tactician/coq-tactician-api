@@ -150,7 +150,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let err_msg c = Pp.(str "Unexpected definition" ++ ws 1 ++ c ++ ws 1 ++ str "encountered. " ++
                         str "Did you forget to inject Tactician while installing a dependency?") in
     let globrefs = Environ.Globals.view (Global.env ()).env_globals in
-    let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
+    let section_vars = Id.Set.of_list @@
+      List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
     let constants = Cmap_env.filter
         (fun c _ ->
            (not @@ List.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
@@ -159,7 +160,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
            | None | Some ((NSubstituted | NDischarged), _) -> true
         ) globrefs.constants in
     (* We are only interested in canonical constants *)
-    let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
+    let constants = Cmap_env.fold (fun c _ m ->
         let c = Constant.make1 @@ Constant.canonical c in
         if not @@ DirPath.equal dirpath @@ ModPath.dp @@ Constant.modpath c then
           CErrors.user_err (err_msg (Constant.print c));
@@ -170,7 +171,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
            | Some (NActual, _) -> false
            | None | Some ((NSubstituted | NDischarged), _) -> true) globrefs.inductives in
     (* We are only interested in canonical inductives *)
-    let minductives = Mindset.elements @@ Mindmap_env.fold (fun c _ m ->
+    let minductives = Mindmap_env.fold (fun c _ m ->
         let c = MutInd.make1 @@ MutInd.canonical c in
         if not @@ DirPath.equal dirpath @@ ModPath.dp @@ MutInd.modpath c then
           CErrors.user_err (err_msg (MutInd.print c));
@@ -188,7 +189,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         KNset.add c m) globrefs.constants KNset.empty in
     let lemmas = OList.filter (fun x ->
         (not @@ OList.exists (KerName.equal x) global_context) &&
-        (not @@ OList.exists (Id.equal (Label.to_id @@ KerName.label x)) section_vars)
+        (not @@ Id.Set.mem (Label.to_id @@ KerName.label x) section_vars)
       ) lemmas in
     OList.iter (fun x ->
         let base = Label.to_id @@ KerName.label x in
@@ -198,7 +199,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     (* End correctness check *)
 
     let env = Global.env () in
-    let env_extra_const = OList.fold_left (fun m c ->
+    let env_extra_const = Cset.fold (fun c m ->
         let path = Constant.canonical c in
         let proof = OList.find_opt (fun (p, _, path2) -> KerName.equal path path2) proof_states in
         let proof = Option.map (fun (p, _, _) -> p) proof in
@@ -207,8 +208,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                 proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
             Option.map tactic_repr tac)) proof in
         Option.fold_left (fun m proof -> Cmap.add c proof m) m proof
-      ) Cmap.empty constants in
-    let env_extra_var = OList.fold_left (fun m id ->
+      ) constants Cmap.empty in
+    let env_extra_var = Id.Set.fold (fun id m ->
         let proof = OList.find_opt (fun (_, _, path) -> Id.equal id @@ Label.to_id @@ KerName.label path) proof_states in
         let proof = Option.map (fun (p, _, _) -> p) proof in
         let proof = Option.map (OList.map (fun (pss, tac) ->
@@ -216,16 +217,18 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                 proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
             Option.map tactic_repr tac)) proof in
         Option.fold_left (fun m proof -> Id.Map.add id proof m) m proof
-      ) Id.Map.empty section_vars in
+      ) section_vars Id.Map.empty in
     let env_extra = env_extra_var, env_extra_const in
 
+    (* We calculate a topological ordering of the definitions, in order to create a layout with more reference of
+       locality in the graph encoding. This is not needed for correctness, it's an optimization only. *)
+    let defs = Definition_order.order env section_vars constants minductives in
     let updater =
-      let+ _ = List.map (fun c ->
-          let+ n = gen_const env env_extra c in
-        c, n) constants
-      and+ () = List.iter (gen_mutinductive_helper env env_extra) minductives
-      and+ _ = List.map (gen_section_var env env_extra) section_vars in
-      () in
+      List.iter (function
+          | Definition_order.TConst c -> map (fun _ -> ()) @@ gen_const env env_extra c
+          | Definition_order.TMutInd m -> gen_mutinductive_helper env env_extra m
+          | Definition_order.TVar id -> map (fun _ -> ()) @@ gen_section_var env env_extra id) defs
+    in
     let known = DPmap.domain !known_external_previous_definitions in
     let external_previous = DPmap.bindings @@
       DPmap.filter (fun p _ -> not @@ DPset.mem p known) !external_previous_definitions in
@@ -280,22 +283,22 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       new_state.definition_nodes.constants (fun c -> GConstant c)
       (fun c ->
          if (not @@ CList.exists (Constant.CanOrd.equal c) grandfathered_constants) &&
-            (not @@ CList.exists (Constant.CanOrd.equal c) constants) then
+            (not @@ Cset.mem c constants) then
            CErrors.user_err (err_msg @@ Constant.print c));
     update_definitions Indmap.iter (fun i -> Indmap.find_opt i !global_nodes.inductives)
       new_state.definition_nodes.inductives (fun i -> GInductive i)
       (fun i ->
-         if not @@ CList.exists (MutInd.CanOrd.equal (fst i)) minductives then
+         if not @@ Mindset.mem (fst i) minductives then
            CErrors.user_err (err_msg @@  MutInd.print (fst i)));
     update_definitions Constrmap.iter (fun c -> Constrmap.find_opt c !global_nodes.constructors)
       new_state.definition_nodes.constructors (fun c -> GConstructor c)
       (fun c ->
-         if not @@ CList.exists (MutInd.CanOrd.equal (fst (fst c))) minductives then
+         if not @@ Mindset.mem (fst (fst c)) minductives then
            CErrors.user_err (err_msg @@  MutInd.print (fst (fst c))));
     update_definitions ProjMap.iter (fun p -> ProjMap.find_opt p !global_nodes.projections)
       new_state.definition_nodes.projections (fun p -> GProjection p)
       (fun p ->
-         if not @@ CList.exists (MutInd.CanOrd.equal (Projection.Repr.mind p)) minductives then
+         if not @@ Mindset.mem (Projection.Repr.mind p) minductives then
            CErrors.user_err (err_msg @@  MutInd.print (Projection.Repr.mind p)))
 
   let () = Hook.set Stm.document_add_hook (fun _ _ -> update_graph ())

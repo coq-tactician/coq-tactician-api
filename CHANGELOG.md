@@ -13,6 +13,7 @@ None of these changes break the public API of the format. The only observable ch
 - Reverse the ordering of the `graph.edges` array to improve pre-fetch predictability.
 - Move the nodes of a definitions body before the node of its type. This improves locality for readers that are
   not interested in opaque bodies.
+- Do not entangle the nodes of different definitions.
 
 Changes to the dataset organization:
 - Capn'proto `.bin` files now contain plain, non-packed messages. This increases the size of the dataset
