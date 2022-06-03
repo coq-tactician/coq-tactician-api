@@ -3,6 +3,14 @@
 Changes to the Capn'proto format:
 - The first definition in a file now has it's `previous` field set to `len(graph.nodes)`. Previously,
   the field was set to point to the definition itself.
+  
+Memory layout changes:
+
+These changes modify the ordering in which nodes and edges are placed in their storage array. It's purpose is
+to improve the locality of reference within the dataset. This should improve speeds when reading small parts of
+the dataset using `mmap` due to improved caching (both in RAM and CPU caches) and pre-fetch predictability.
+None of these changes break the public API of the format. The only observable change is a speed improvement.
+- Reverse the ordering of the `graph.edges` array to improve pre-fetch predictability.
 
 Changes to the dataset organization:
 - Capn'proto `.bin` files now contain plain, non-packed messages. This increases the size of the dataset

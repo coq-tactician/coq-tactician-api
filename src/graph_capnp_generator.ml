@@ -204,14 +204,15 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
       node_count edge_count builder =
     let nodes = K.Builder.Graph.nodes_init capnp_graph node_count in
     let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
-    let state = { node_index = node_count - 1; edge_index = 0 } in
+    let state = { node_index = node_count - 1; edge_index = edge_count } in
     let arrays_add { node_index; edge_index } label children =
       let node = Capnp.Array.get nodes node_index in
       nt2nt ~include_metadata node_count transformer label @@ K.Builder.Graph.Node.label_init node;
       let cc = List.length children in
+      let edge_index = edge_index - cc in
       K.Builder.Graph.Node.children_count_set_exn node cc;
       K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);
-      let edge_index = List.fold_left (fun ei (label, (tp, ti)) ->
+      let _ = List.fold_left (fun ei (label, (tp, ti)) ->
           let et = Capnp.Array.get edges ei in
           K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
           let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
