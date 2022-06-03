@@ -1,3 +1,9 @@
+# unreleased
+
+Misc changes:
+- Many modifications to upstream Tactician in preparation for larger datasets. This includes improvements
+  to the tactical decomposition and possibly some changes in the hashes of tactics.
+
 # stdlib-lgraph-intermediate-v9-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v9-global.tar.xz
 
