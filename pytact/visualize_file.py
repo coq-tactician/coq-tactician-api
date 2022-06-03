@@ -43,10 +43,6 @@ def main():
         print(g.graph.nodes[definition].label.definition.name)
         gv.visualize_definition(root, alt, graphs, definition, dependencies)
 
-    for definition in g.definitions:
-        print(g.graph.nodes[definition].label.definition.name)
-        gv.visualize_definition(root, alt, graphs, definition, dependencies)
-
     gv.visualize_definition_dependencies(root, alt, graphs, g.definitions, dependencies, g.representative)
 
     print(context_file)
