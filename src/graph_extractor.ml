@@ -609,7 +609,6 @@ end = struct
       let* env = lookup_env in
       let { const_body; const_type; _ } = Environ.lookup_constant c env in
       let* children = if_not_truncate (return []) @@
-        let* typ = gen_constr const_type in
         let bt, b = match const_body with
           | Undef _ -> ConstUndef, mk_node ConstEmpty []
           | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
@@ -617,7 +616,8 @@ end = struct
             let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
             ConstOpaqueDef, gen_constr c
           | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
-        let+ b = b in
+        let+ b = b
+        and+ typ = gen_constr const_type in
         [ ConstType, typ; bt, b ] in
       let+ (n, _) = mk_definition d p (fun d -> mk_node d children) in
       n
