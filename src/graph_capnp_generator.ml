@@ -7,7 +7,7 @@ type graph_state = { node_index : int; edge_index : int }
 
 module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node = P.path * int) = struct
 
-  let nt2nt ~include_metadata self_index transformer (nt : G.node node_type) cnt =
+  let nt2nt ~include_metadata none_index transformer (nt : G.node node_type) cnt =
     let open K.Builder.Graph.Node.Label in
     match nt with
     | ProofState -> proof_state_set cnt
@@ -84,7 +84,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
               ) outcomes
           ) proof in
       (match previous with
-       | None -> previous_set_int_exn cdef self_index;
+       | None -> previous_set_int_exn cdef none_index;
        | Some previous ->
          if transformer (fst previous) <> 0 then
            CErrors.anomaly Pp.(str "previous definition was not from the current file");
@@ -207,7 +207,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     let state = { node_index = node_count - 1; edge_index = 0 } in
     let arrays_add { node_index; edge_index } label children =
       let node = Capnp.Array.get nodes node_index in
-      nt2nt ~include_metadata node_index transformer label @@ K.Builder.Graph.Node.label_init node;
+      nt2nt ~include_metadata node_count transformer label @@ K.Builder.Graph.Node.label_init node;
       let cc = List.length children in
       K.Builder.Graph.Node.children_count_set_exn node cc;
       K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);

@@ -166,8 +166,9 @@ def visualize_global_context(root, alt, graphs, definitions, representative, dep
                                         target.depIndex, target.nodeIndex, dependencies, representative)
                     g.edge(id, id2,
                              arrowtail="odot", dir="both", constraint="false", style="dashed")
-        dot.edge(id, get_id(0, value.label.definition.previous),
-                 arrowtail="dot", dir="both", constraint="true")
+        if value.label.definition.previous != len(nodes):
+            dot.edge(id, get_id(0, value.label.definition.previous),
+                     arrowtail="dot", dir="both", constraint="true")
         for fi in value.label.definition.externalPrevious:
             fid = render_file_node(root, alt, dot, fi, dependencies)
             dot.edge(id, fid,

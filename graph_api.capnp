@@ -251,7 +251,7 @@ struct Definition {
 
   previous @2 :NodeIndex;
   # The previous definition within the global context of the current file.
-  # For the first definition, the previous node is the node itself, so beware of loops.
+  # For the first definition this field is set to `len(graph.nodes)`.
   # Attempts are made to make the ordering of the global context consistent with the ordering of definitions
   # in the source document. However, when closing modules and sections this ordering is not guaranteed to be
   # maintained.

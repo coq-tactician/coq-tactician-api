@@ -1,5 +1,9 @@
 # unreleased
 
+Changes to the Capn'proto format:
+- The first definition in a file now has it's `previous` field set to `len(graph.nodes)`. Previously,
+  the field was set to point to the definition itself.
+
 Changes to the dataset organization:
 - Capn'proto `.bin` files now contain plain, non-packed messages. This increases the size of the dataset
   but facilitates random access to the graph by `mmap`ing the files.
