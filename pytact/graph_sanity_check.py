@@ -43,7 +43,7 @@ def process1(rootdir, args, fname):
         original_proofs = 0
         original_proofs_faithful = 0
         unresolvable = 0
-        g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
+        g = graph_api_capnp.Dataset.read(f, traversal_limit_in_words=2**64-1)
         dep0 = g.dependencies[0]
         nodes_count = len(g.graph.nodes)
         edges_count = len(g.graph.edges)
@@ -131,7 +131,7 @@ def process2(rootdir, args, res):
     fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _, _, _, _, _, _, _  = res
     with open(fname) as f:
         print(fname)
-        g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
+        g = graph_api_capnp.Dataset.read(f, traversal_limit_in_words=2**64-1)
         local_count = nodes_count
         for t in g.graph.edges:
             if not (t.target.depIndex < len(g.dependencies)):

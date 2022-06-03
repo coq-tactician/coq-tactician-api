@@ -1,5 +1,22 @@
 # unreleased
 
+Changes to the dataset organization:
+- Capn'proto `.bin` files now contain plain, non-packed messages. This increases the size of the dataset
+  but facilitates random access to the graph by `mmap`ing the files.
+- The dataset is now distributed as a compressed SquashFS image instead of a tarball. This should
+  compensate for the increased size of the non-packed messages. Advantages of this approach:
+  + The SquashFS image can be mounted, allowing the on-the-fly decompression. This saves disk space
+    and may make the random access faster because the hard-disk has to do less work. Note however that
+    currently the image is compressed using `xz`. Such heavy compression may make the CPU the bottleneck.
+    Experimentation with cheaper compression may be needed.
+  For using the SquashFS image there are several options in order of preference:
+  + When you have root access: Mount the image using `mount dataset.squ mountpoint/`
+  + Without root access: On some machines you may be able to mount using `udisksctl` (depending on the
+    configuration). Otherwise, you can mount in userspace by installing `squashfuse` and running
+    `squashfuse dataset.squ /mountpoint`. An userspace mount has the disadvantage that it is slower due to
+    the usage of Fuse and the lack of mutli-core decompression.
+  + If all else fails, you can unpack the image using `unsquashfs dataset.squ`.
+
 Misc changes:
 - Many modifications to upstream Tactician in preparation for larger datasets. This includes improvements
   to the tactical decomposition and possibly some changes in the hashes of tactics.
