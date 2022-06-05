@@ -187,6 +187,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let request = Request.init_root () in
     let init = Request.initialize_init request in
     let tacs = List.fold_left (fun map tac ->
+        let tac = Tactic_name_remove.tactic_name_remove tac in
         let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac in
         let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
         let base_tactic = Tactic_one_variable.tactic_strip tac in
