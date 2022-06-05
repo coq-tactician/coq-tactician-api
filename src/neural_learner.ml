@@ -84,7 +84,6 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   exception NoSuchTactic
   exception UnknownLocalArgument
   exception UnknownArgument of int
-  exception MismatchedArgumentLength
   exception IllegalArgument
   (* exception ParseError *)
 
@@ -112,9 +111,9 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         inductives map in
     let map = Constrmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
         constructors map in
-    let map = ProjMap.fold (fun c (_, node) m ->
+    let map = ProjMap.fold (fun c (_, (_, node)) m ->
         (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
-        m)
+        Int.Map.add node (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
         projections map in
     let map = Id.Map.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
         section_nodes map in
@@ -304,7 +303,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
                          Pp.(str "Unknown global argument " ++ int id ++ str " at index " ++ int j ++
                              str " for prediction " ++ int i ++ str " which is tactic " ++
                              Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                             str " with hash" ++ int tid))
+                             str " with hash " ++ int tid))
                   | _ -> raise IllegalArgument
                 ) args in
             let args = convert_args @@ Prediction.arguments_get_list p in
@@ -312,14 +311,12 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
               CErrors.anomaly
                 Pp.(str "Mismatched argument length for prediction " ++ int i ++ str " which is tactic " ++
                     Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                    str " with hash" ++ int tid ++
+                    str " with hash " ++ int tid ++
                     str ". Number of arguments expected: " ++ int params ++
                     str ". Number of argument given: " ++ int (List.length args))
             end;
             let conf = Prediction.confidence_get p in
-            Option.map (fun tac ->
-                Feedback.msg_notice @@ Pptactic.pr_glob_tactic (Global.env ()) tac;
-                tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
+            Option.map (fun tac -> tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
           ) @@ CList.mapi (fun i x -> i, x) preds in
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
