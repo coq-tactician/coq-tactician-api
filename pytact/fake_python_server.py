@@ -72,6 +72,12 @@ def prediction_loop(r, s, tacs, graph1, definitions):
             response.write_packed(s)
         elif msg_type == "initialize":
             return g
+        elif msg_type == "checkAlignment":
+            print(g)
+            alignment = {'unalignedTactics': [ t.ident for t in g.checkAlignment.tactics],
+                         'unalignedDefinitions': list(g.checkAlignment.definitions)}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+            response.write_packed(s)
         else:
             print("Capnp protocol error")
             raise Exception
@@ -99,6 +105,13 @@ def initialize_loop(r, s, textmode):
         print(g)
         response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
         print(response)
+        response.write_packed(s)
+        initialize_loop(r, s, textmode)
+    elif msg_type == "checkAlignment":
+        print(g)
+        alignment = {'unalignedTactics': [ t.ident for t in g.checkAlignment.tactics],
+                     'unalignedDefinitions': list(g.checkAlignment.definitions)}
+        response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
         response.write_packed(s)
         initialize_loop(r, s, textmode)
     else:
