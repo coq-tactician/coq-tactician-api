@@ -60,7 +60,8 @@ module GB = GraphBuilder(CICGraph)
 module CapnpGraphWriter = CapnpGraphWriter(struct type nonrec path = path end)(G)
 
 exception NoSuchTactic
-exception MismatchedArguments
+exception UnknownLocalArgument
+exception UnknownArgument of int
 exception IllegalArgument
 
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
@@ -77,7 +78,7 @@ let find_local_argument context_map =
       context_map Int.Map.empty in
   fun id ->
     match Int.Map.find_opt id context_map_inv with
-    | None -> raise MismatchedArguments
+    | None -> raise UnknownLocalArgument
     | Some x -> x
 
 let find_global_argument
@@ -89,24 +90,33 @@ let find_global_argument
       inductives map in
   let map = Constrmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
       constructors map in
-  let map = ProjMap.fold (fun c (_, node) m ->
+  let map = ProjMap.fold (fun c (_, (_, node)) m ->
       (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
-      m)
+      Int.Map.add node (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
       projections map in
   let map = Id.Map.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
       section_nodes map in
   fun id ->
     match Int.Map.find_opt id map with
-    | None -> raise MismatchedArguments
+    | None ->
+      raise (UnknownArgument id)
     | Some x -> x
 
 (* Whenever we write a message to the server, we prevent a timeout from triggering.
    Otherwise, we might be sending corrupted messages, which causes the server to crash. *)
-let write_capnp_message_uninterrupted wc m =
+let write_read_capnp_message_uninterrupted rc wc m =
+  let terminate = ref false in
+  let prev_sigterm =
+    Sys.signal Sys.sigterm @@ Sys.Signal_handle (fun i ->
+        terminate := true) in
   ignore (Thread.sigmask Unix.SIG_BLOCK [Sys.sigalrm]);
   try
-    Fun.protect ~finally:(fun () -> ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigalrm])) @@ fun () ->
-    Capnp_unix.IO.WriteContext.write_message wc m
+    Fun.protect ~finally:(fun () ->
+        Sys.set_signal Sys.sigterm prev_sigterm;
+        ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigalrm]);
+        if !terminate then exit 1) @@ fun () ->
+    Capnp_unix.IO.WriteContext.write_message wc m;
+    Capnp_unix.IO.ReadContext.read_message rc
   with Fun.Finally_raised e ->
     raise e
 
@@ -119,16 +129,15 @@ let drain =
     let hash = Hashtbl.hash_param 255 255 (!drainid, Unix.gettimeofday (), Unix.getpid ()) in
     Request.synchronize_set_int_exn request hash;
     drainid := !drainid + 1;
-    write_capnp_message_uninterrupted wc @@ Request.to_message request;
-    let rec loop () =
-      match Capnp_unix.IO.ReadContext.read_message rc with
+    let rec loop msg =
+      match msg with
       | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3c")
       | Some response ->
         let response = Response.of_message response in
         match Response.get response with
         | Response.Synchronized id when Stdint.Uint64.to_int id = hash -> ()
-        | _ -> loop () in
-    loop ()
+        | _ -> loop @@ Capnp_unix.IO.ReadContext.read_message rc in
+    loop @@ write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request
 
 let connect_socket my_socket =
   Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing my_socket,
@@ -200,8 +209,7 @@ let init_predict_text rc wc =
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
   ignore(Request.initialize_init request);
-  write_capnp_message_uninterrupted wc @@ Request.to_message request;
-  match Capnp_unix.IO.ReadContext.read_message rc with
+  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
     let response = Response.of_message response in
@@ -272,8 +280,7 @@ let init_predict rc wc tacs env =
     (Request.Initialize.tactics_init init)
     (Request.Initialize.graph_init init)
     (Request.Initialize.definitions_set_list init) in
-  write_capnp_message_uninterrupted wc @@ Request.to_message request;
-  match Capnp_unix.IO.ReadContext.read_message rc with
+  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
     let response = Response.of_message response in
@@ -293,8 +300,7 @@ let check_neural_alignment () =
       (Request.CheckAlignment.tactics_init init)
       (Request.CheckAlignment.graph_init init)
       (Request.CheckAlignment.definitions_set_list init) in
-  write_capnp_message_uninterrupted wc @@ Request.to_message request;
-  match Capnp_unix.IO.ReadContext.read_message rc with
+  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
     let response = Response.of_message response in
@@ -356,8 +362,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
     let concl = term_repr @@ proof_state_goal ps in
     ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
-    write_capnp_message_uninterrupted wc @@ Request.to_message request;
-    match Capnp_unix.IO.ReadContext.read_message rc with
+    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3a")
     | Some response ->
       let response = Response.of_message response in
@@ -398,35 +403,49 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let state = Request.Predict.state_init predict in
     ProofState.root_set_int_exn state root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
-    write_capnp_message_uninterrupted wc @@ Request.to_message request;
-    match Capnp_unix.IO.ReadContext.read_message rc with
+    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
       let response = Response.of_message response in
       match Response.get response with
       | Response.Prediction preds ->
-        let convert_args args =
-          List.map (fun arg ->
-              let term = match Argument.get arg with
-                | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
-                | Argument.Term t -> t in
-              let dep_index = Argument.Term.dep_index_get term in
-              let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
-              match dep_index with
-              | 0 -> find_local_argument node_index
-              | 1 -> find_global_argument node_index
-              | _ -> raise IllegalArgument
-            ) args in
         let preds = Capnp.Array.to_list preds in
-        let preds = List.filter_map (fun p ->
+        let preds = CList.filter_map (fun (i, p) ->
             let tac = Prediction.tactic_get p in
             let tid = Tactic.ident_get_int_exn tac in
-            let args = convert_args @@ Prediction.arguments_get_list p in
             let tac, params = find_tactic tacs tid in
-            if params <> List.length args then raise MismatchedArguments;
+            let convert_args args =
+              List.mapi (fun j arg ->
+                  let term = match Argument.get arg with
+                    | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
+                    | Argument.Term t -> t in
+                  let dep_index = Argument.Term.dep_index_get term in
+                  let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
+                  match dep_index with
+                  | 0 -> find_local_argument node_index
+                  | 1 ->
+                    (try
+                       find_global_argument node_index
+                     with UnknownArgument id ->
+                       CErrors.anomaly
+                         Pp.(str "Unknown global argument " ++ int id ++ str " at index " ++ int j ++
+                             str " for prediction " ++ int i ++ str " which is tactic " ++
+                             Pptactic.pr_glob_tactic (Global.env ()) tac ++
+                             str " with hash " ++ int tid))
+                  | _ -> raise IllegalArgument
+                ) args in
+            let args = convert_args @@ Prediction.arguments_get_list p in
+            if params <> List.length args then begin
+              CErrors.anomaly
+                Pp.(str "Mismatched argument length for prediction " ++ int i ++ str " which is tactic " ++
+                    Pptactic.pr_glob_tactic (Global.env ()) tac ++
+                    str " with hash " ++ int tid ++
+                    str ". Number of arguments expected: " ++ int params ++
+                    str ". Number of argument given: " ++ int (List.length args))
+            end;
             let conf = Prediction.confidence_get p in
             Option.map (fun tac -> tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
-          ) preds in
+          ) @@ CList.mapi (fun i x -> i, x) preds in
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
