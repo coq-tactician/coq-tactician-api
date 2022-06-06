@@ -5,9 +5,9 @@ module K = Graph_api.Make(Capnp.BytesMessage)
 
 type graph_state = { node_index : int; edge_index : int }
 
-module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node = P.path * int) = struct
+module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node = P.path * (bool * int)) = struct
 
-  let nt2nt ~include_metadata none_index transformer (nt : G.node node_type) cnt =
+  let nt2nt ~include_metadata none_index transformer node_index_transform (nt : G.node node_type) cnt =
     let open K.Builder.Graph.Node.Label in
     match nt with
     | ProofState -> proof_state_set cnt
@@ -29,16 +29,16 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
        | DDischarged (dep, index) ->
          if transformer dep <> 0 then
            CErrors.anomaly Pp.(str "discharged definition was not from the current file");
-         Status.discharged_set_int_exn capnp_status index
+         Status.discharged_set_int_exn capnp_status @@ node_index_transform index
        | DSubstituted (dep, index) ->
          let capnp_node = Status.substituted_init capnp_status in
          Status.Substituted.dep_index_set_exn capnp_node @@ transformer dep;
-         Status.Substituted.node_index_set_int_exn capnp_node index);
+         Status.Substituted.node_index_set_int_exn capnp_node @@ node_index_transform index);
       let write_proof arr proof =
         let write_proof_state capnp_state { root; context; ps_string; evar } =
-          K.Builder.ProofState.root_set_int_exn capnp_state @@ snd root;
+          K.Builder.ProofState.root_set_int_exn capnp_state @@ node_index_transform @@ snd root;
           let _ = K.Builder.ProofState.context_set_list capnp_state
-              (List.map (fun x -> Stdint.Uint32.of_int @@ snd x) context) in
+              (List.map (fun x -> Stdint.Uint32.of_int @@ node_index_transform @@ snd x) context) in
           if include_metadata then
             K.Builder.ProofState.text_set capnp_state ps_string;
           K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in
@@ -50,7 +50,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
               let capnp_state = Capnp.Array.get after_arr i in
               write_proof_state capnp_state ps;
             ) proof_states_after;
-          K.Builder.Outcome.term_set_int_exn capnp @@ snd term;
+          K.Builder.Outcome.term_set_int_exn capnp @@ node_index_transform @@ snd term;
           if include_metadata then
             K.Builder.Outcome.term_text_set capnp @@ term_text;
           let arg_arr = K.Builder.Outcome.tactic_arguments_init capnp (List.length arguments) in
@@ -61,7 +61,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
               | Some (dep, index) ->
                 let node = K.Builder.Argument.term_init arri in
                 K.Builder.Argument.Term.dep_index_set_exn node @@ transformer dep;
-                K.Builder.Argument.Term.node_index_set_int_exn node index
+                K.Builder.Argument.Term.node_index_set_int_exn node @@ node_index_transform index
             ) arguments in
         List.iteri (fun i { tactic; outcomes } ->
             let arri = Capnp.Array.get arr i in
@@ -88,7 +88,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
        | Some previous ->
          if transformer (fst previous) <> 0 then
            CErrors.anomaly Pp.(str "previous definition was not from the current file");
-         previous_set_int_exn cdef (snd previous));
+         previous_set_int_exn cdef @@ node_index_transform @@ snd previous);
       ignore (external_previous_set_list cdef @@ List.map (fun x -> transformer (fst x)) external_previous);
       (match def_type with
        | TacticalConstant (c, proof) ->
@@ -201,13 +201,17 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | EvarSubject -> EvarSubject
 
   let write_graph ?(include_metadata=false) capnp_graph transformer
-      node_count edge_count builder =
-    let nodes = K.Builder.Graph.nodes_init capnp_graph node_count in
+      def_count node_count edge_count defs_builder nodes_builder =
+    Feedback.msg_notice Pp.(str "dc: " ++ int def_count ++ str " nc: " ++ int node_count ++ str " ec: " ++ int edge_count);
+    let nodes = K.Builder.Graph.nodes_init capnp_graph (def_count + node_count) in
     let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
-    let state = { node_index = node_count - 1; edge_index = edge_count } in
+    let state = { node_index = def_count + node_count - 1; edge_index = edge_count } in
+    let node_index_transform (def, i) =
+      if def then i else def_count + i in
     let arrays_add { node_index; edge_index } label children =
       let node = Capnp.Array.get nodes node_index in
-      nt2nt ~include_metadata node_count transformer label @@ K.Builder.Graph.Node.label_init node;
+      nt2nt ~include_metadata (def_count + node_count) transformer node_index_transform label @@
+      K.Builder.Graph.Node.label_init node;
       let cc = List.length children in
       let edge_index = edge_index - cc in
       K.Builder.Graph.Node.children_count_set_exn node cc;
@@ -217,9 +221,12 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
           K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
           let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
           K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
-          K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ ti;
+          K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ node_index_transform ti;
           ei + 1
         ) edge_index children in
       { node_index = node_index - 1; edge_index } in
-    ignore(builder state arrays_add)
+    let state = nodes_builder state arrays_add in
+    print_endline ("nodei: " ^ string_of_int state.node_index ^ " edgei: " ^ string_of_int state.edge_index);
+    let state = defs_builder state arrays_add in
+    print_endline ("nodei: " ^ string_of_int state.node_index ^ " edgei: " ^ string_of_int state.edge_index);
 end

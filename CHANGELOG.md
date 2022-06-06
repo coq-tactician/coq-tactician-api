@@ -15,6 +15,8 @@ None of these changes break the public API of the format. The only observable ch
 - Move the nodes of a definitions body before the node of its type. This improves locality for readers that are
   not interested in opaque bodies.
 - Do not entangle the nodes of different definitions.
+- Layout definition nodes in one cluster at the beginning of the nodes array. This allows a clever OS to keep this
+  block permanently into memory because it is used often.
 
 Changes to the dataset organization:
 - Capn'proto `.bin` files now contain plain, non-packed messages. This increases the size of the dataset

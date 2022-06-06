@@ -14,7 +14,7 @@ let data_file () = match Tactician_util.base_filename with
 
 module G = GlobalGraph(DPset)(struct type result = graph_state end)
 module CICGraph = struct
-  type node' = DirPath.t * int
+  type node' = DirPath.t * (bool * int)
   include CICGraphMonad(G)
 end
 module GB = GraphBuilder(CICGraph)
@@ -240,19 +240,24 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         updater !graph_builder (Global.current_dirpath ()) in
     graph_builder := builder;
     section_nodes := new_state.section_nodes;
-    original_definitions := Id.Map.fold (fun _ (path, n) s ->
+    original_definitions := Id.Map.fold (fun _ (path, (def, n)) s ->
         if not @@ DirPath.equal path dirpath then CErrors.anomaly Pp.(str "Local node expected");
+        assert def;
         Int.Set.add n s) new_state.section_nodes !original_definitions;
-    original_definitions := Cmap.fold (fun _ (status, (path, n)) s ->
+    original_definitions := Cmap.fold (fun _ (status, (path, (def, n))) s ->
+        assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
         new_state.definition_nodes.constants !original_definitions;
-    original_definitions := Indmap.fold (fun _ (status, (path, n)) s ->
+    original_definitions := Indmap.fold (fun _ (status, (path, (def, n))) s ->
+        assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
         new_state.definition_nodes.inductives !original_definitions;
-    original_definitions := Constrmap.fold (fun _ (status, (path, n)) s ->
+    original_definitions := Constrmap.fold (fun _ (status, (path, (def, n))) s ->
+        assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
         new_state.definition_nodes.constructors !original_definitions;
-    original_definitions := ProjMap.fold (fun _ (status, (path, n)) s ->
+    original_definitions := ProjMap.fold (fun _ (status, (path, (def, n))) s ->
+        assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
         new_state.definition_nodes.projections !original_definitions;
 
@@ -331,7 +336,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     relative_deps
 
   module K = Graph_api.Make(Capnp.BytesMessage)
-  let write_graph G.{ paths; node_count; edge_count; builder } original_definitions representative =
+  let write_graph G.{ paths; def_count; node_count; edge_count; defs_builder; nodes_builder }
+      original_definitions representative =
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
     let resolved_dependencies = resolve_dependencies depslist in
@@ -340,7 +346,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     (match representative with
      | None ->
        K.Builder.Dataset.representative_set_int_exn g node_count
-     | Some (rp, representative) ->
+     | Some (rp, (def, representative)) ->
+       assert def;
        if not (DirPath.equal rp dirpath) then
          CErrors.anomaly Pp.(str "Representative is not from the current file: " ++ DirPath.print rp);
        K.Builder.Dataset.representative_set_int_exn g representative);
@@ -349,7 +356,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let transformer tp =
       DPmap.find tp path_index in
     let capnp_graph = K.Builder.Dataset.graph_init g in
-    CapnpGraphWriter.write_graph ~include_metadata:true capnp_graph transformer node_count edge_count builder;
+    CapnpGraphWriter.write_graph ~include_metadata:true capnp_graph transformer
+      def_count node_count edge_count defs_builder nodes_builder;
     Capnp_unix.IO.write_message_to_file ~compression:`None (K.Builder.Dataset.to_message g) (data_file ())
 
   let () = Declaremods.append_end_library_hook @@ fun () ->

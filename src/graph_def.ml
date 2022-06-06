@@ -283,7 +283,7 @@ module type GraphMonadType = sig
   type children = (edge_label * node) list
   type 'a repr_t
   val mk_node : node_label -> children -> node t
-  val with_delayed_node : (node -> ('a * node_label * children) t) -> 'a t
+  val with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t
   val register_external : node -> unit t
   val run : 'a t -> 'a repr_t
 end
@@ -343,7 +343,7 @@ module SimpleGraph
     put (i + 1) >>
     let+ () = tell (0, fun c r -> c r nl ch) in
     i
-  let with_delayed_node f =
+  let with_delayed_node ?definition:_ f =
     let* i = get in
     put (i + 1) >>
     pass @@
@@ -361,42 +361,60 @@ module GlobalGraph(S : Set.S)(D : sig type result end) : sig
   open D
   type builder =
     { paths : S.t
+    ; def_count : int
     ; node_count : int
     ; edge_count : int
-    ; builder : result ->
-        (result -> (S.elt * int) node_type -> (edge_label * (S.elt * int)) list -> result) -> result }
+    ; defs_builder : result ->
+        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
+        result
+    ; nodes_builder : result ->
+        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
+        result }
   val builder_nil : builder
   include GraphMonadType
-  with type node_label = (S.elt * int) node_type
+  with type node_label = (S.elt * (bool * int)) node_type
    and type edge_label = edge_label
-   and type node = S.elt * int
+   and type node = S.elt * (bool * int)
    and type 'a repr_t = builder -> S.elt -> 'a * builder
 end = struct
   open D
   type builder =
     { paths : S.t
+    ; def_count : int
     ; node_count : int
     ; edge_count : int
-    ; builder : result ->
-        (result -> (S.elt * int) node_type -> (edge_label * (S.elt * int)) list -> result) -> result }
-  let builder_nil = { paths = S.empty; node_count = 0; edge_count = 0; builder = fun r _ -> r }
-  type node = S.elt * int
+    ; defs_builder : result ->
+        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
+        result
+    ; nodes_builder : result ->
+        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
+        result }
+  let builder_nil = { paths = S.empty; def_count = 0; node_count = 0; edge_count = 0
+                    ; defs_builder = (fun r _ -> r); nodes_builder = (fun r _ -> r) }
+  type node = S.elt * (bool * int)
   type edge_label = edge_type
   type node_label = node node_type
   type children = (edge_label * node) list
+  type state =
+    { def_count : int
+    ; node_count : int }
   type writer =
-    { nodes : result -> (result -> node_label -> children -> result) -> result
+    { defs : result -> (result -> node_label -> children -> result) -> result
+    ; nodes : result -> (result -> node_label -> children -> result) -> result
     ; paths : S.t
     ; edge_count : int }
   module M = Monad_util.ReaderStateWriterMonad
       (struct type r = S.elt end)
-      (struct type s = int end)
+      (struct type s = state end)
       (struct type w = writer
-        let id = { nodes = (fun r _ -> r); paths = S.empty; edge_count = 0 }
+        let id = { defs = (fun r _ -> r); nodes = (fun r _ -> r); paths = S.empty; edge_count = 0 }
         let comb = fun
-          { nodes = f1; paths = p1; edge_count = ec1 }
-          { nodes = f2; paths = p2; edge_count = ec2 } ->
-          { nodes = (fun r c -> f1 (f2 r c) c); paths = S.union p1 p2; edge_count = ec1 + ec2 } end)
+          { defs = d1; nodes = f1; paths = p1; edge_count = ec1 }
+          { defs = d2; nodes = f2; paths = p2; edge_count = ec2 } ->
+          { defs = (fun r c -> d1 (d2 r c) c)
+          ; nodes = (fun r c -> f1 (f2 r c) c)
+          ; paths = S.union p1 p2; edge_count = ec1 + ec2 }
+      end)
   include M
   type nonrec 'a repr_t = builder -> S.elt -> 'a * builder
   open Monad_util.WithMonadNotations(M)
@@ -406,26 +424,51 @@ end = struct
   let children_paths ch ps =
     List.fold_left (fun ps (_, (p, _)) -> S.add p ps) ps ch
   let mk_node nl ch =
-    let* i = get in
-    put (i + 1) >>
-    let* () = tell { nodes = (fun r c -> c r nl ch); paths = children_paths ch S.empty
+    let* { def_count; node_count } = get in
+    let* defs, nodes, i =
+      match nl with
+      | Definition _ ->
+        let+ () = put { def_count = def_count + 1; node_count } in
+        (fun r c -> c r nl ch), (fun r _ -> r), (true, def_count)
+      | _ ->
+        let+ () = put { def_count; node_count = node_count + 1 } in
+        (fun r _ -> r), (fun r c -> c r nl ch), (false, node_count)
+    in
+    let* () = tell { defs; nodes; paths = children_paths ch S.empty
                    ; edge_count = List.length ch } in
     index_to_node i
-  let with_delayed_node f =
-    let* i = get in
-    put (i + 1) >>
+  let with_delayed_node ?(definition=false) f =
+    let* { def_count; node_count } = get in
+    let* i =
+      match definition with
+      | true ->
+        let+ () = put { def_count = def_count + 1; node_count } in
+        true, def_count
+      | false ->
+        let+ () = put { def_count; node_count = node_count + 1 } in
+        false, node_count
+    in
     pass @@
     let* n = index_to_node i in
-    let+ (v, nl, ch) = f n in
-    v, fun { nodes; paths; edge_count } -> { nodes = (fun r c -> c (nodes r c) nl ch)
-                                           ; paths = children_paths ch paths
-                                           ; edge_count = edge_count + List.length ch }
+    let+ v, nl, ch = f n in
+    v, fun { defs; nodes; paths; edge_count } ->
+      let defs, nodes =
+        match definition, nl with
+        | true, Definition _ ->
+          (fun r c -> c (defs r c) nl ch), nodes
+        | false, _ ->
+          defs, (fun r c -> c (nodes r c) nl ch)
+        | _, _ -> assert false in
+      { defs; nodes
+      ; paths = children_paths ch paths
+      ; edge_count = edge_count + List.length ch }
   let register_external (tp, _) =
-    tell { nodes = (fun r _ -> r); paths = S.singleton tp; edge_count = 0 }
-  let run m { paths; node_count; edge_count; builder } current =
-    let node_count, ({ nodes; paths; edge_count }, result) =
-      let m = tell { nodes=builder; paths; edge_count } >> m in
-      run m current node_count in
-    result, { paths; node_count; edge_count
-            ; builder = nodes }
+    tell { defs = (fun r _ -> r); nodes = (fun r _ -> r); paths = S.singleton tp; edge_count = 0 }
+  let run m { paths; def_count; node_count; edge_count; defs_builder; nodes_builder } current =
+    let { def_count; node_count }, ({ defs; nodes; paths; edge_count }, result) =
+      let m = tell { defs = defs_builder; nodes = nodes_builder; paths; edge_count } >> m in
+      run m current { def_count; node_count } in
+    result, { paths; def_count; node_count; edge_count
+            ; defs_builder = defs
+            ; nodes_builder = nodes }
 end

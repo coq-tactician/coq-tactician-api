@@ -53,7 +53,7 @@ module PathSet = Set.Make(struct type t = path let compare = compare end)
 
 module G = GlobalGraph(PathSet)(struct type result = graph_state end)
 module CICGraph = struct
-  type node' = path * int
+  type node' = path * (bool * int)
   include CICGraphMonad(G)
 end
 module GB = GraphBuilder(CICGraph)
@@ -84,17 +84,17 @@ let find_local_argument context_map =
 let find_global_argument
     CICGraph.{ section_nodes; definition_nodes = { constants; inductives; constructors; projections }; _ } =
   let open Tactic_one_variable in
-  let map = Cmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
+  let map = Cmap.fold (fun c (_, (_, (_, node))) m -> Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
       constants Int.Map.empty in
-  let map = Indmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.IndRef c)) m)
+  let map = Indmap.fold (fun c (_, (_, (_, node))) m -> Int.Map.add node (TRef (GlobRef.IndRef c)) m)
       inductives map in
-  let map = Constrmap.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
+  let map = Constrmap.fold (fun c (_, (_, (_, node))) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
       constructors map in
-  let map = ProjMap.fold (fun c (_, (_, node)) m ->
+  let map = ProjMap.fold (fun c (_, (_, (_, node))) m ->
       (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
       Int.Map.add node (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
       projections map in
-  let map = Id.Map.fold (fun c (_, node) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
+  let map = Id.Map.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
       section_nodes map in
   fun id ->
     match Int.Map.find_opt id map with
@@ -258,15 +258,16 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
       Api.Builder.AbstractTactic.parameters_set_exn arri params)
     (TacticMap.bindings tacs);
 
-  CapnpGraphWriter.write_graph cgraph (fun _ -> 0) builder.node_count builder.edge_count builder.builder;
+  CapnpGraphWriter.write_graph cgraph (fun _ -> 0)
+    builder.def_count builder.node_count builder.edge_count builder.defs_builder builder.nodes_builder;
 
   let definitions =
-    let f (_, (_, (_, n))) = Stdint.Uint32.of_int n in
+    let f (_, (_, (_, (def, n)))) = assert def; Stdint.Uint32.of_int n in
     (List.map f @@ Cmap.bindings state.definition_nodes.constants) @
     (List.map f @@ Indmap.bindings state.definition_nodes.inductives) @
     (List.map f @@ Constrmap.bindings state.definition_nodes.constructors) @
     (List.map f @@ ProjMap.bindings state.definition_nodes.projections) @
-    (List.map (fun (_, (_, n)) -> Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
+    (List.map (fun (_, (_, (def, n))) -> assert def; Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
   in
   ignore(cdefinitions definitions);
   state, tacs
@@ -394,14 +395,19 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open Monad_util.WithMonadNotations(CICGraph) in
       let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
-    let (_, (root, context_map)), G.{ paths=_; node_count; edge_count; builder } =
+    let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs_builder; nodes_builder } =
       CICGraph.run ~state updater G.builder_nil Local in
-    let context_range = List.map (fun (_, (_, n)) -> n) @@ Id.Map.bindings context_map in
+    let node_index_transform (def, i) =
+      if def then i else def_count + i in
+    let context_map = Id.Map.map (fun (p, n) -> p, node_index_transform n) context_map in
+    let context_range = List.map (fun (_, (_, n)) -> n) @@
+      Id.Map.bindings context_map in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
-    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) node_count edge_count builder;
+    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1)
+      def_count node_count edge_count defs_builder nodes_builder;
     let state = Request.Predict.state_init predict in
-    ProofState.root_set_int_exn state root;
+    ProofState.root_set_int_exn state @@ node_index_transform root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
     match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
