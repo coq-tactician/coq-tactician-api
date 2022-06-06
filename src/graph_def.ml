@@ -355,43 +355,79 @@ module SimpleGraph
     res, fun mki c -> let r = mki ~node_count ~edge_count in ns c r
 end
 
+module AList : sig
+  type 'a t
+  val nil : 'a t
+  val append : 'a t -> 'a t -> 'a t
+  val cons : 'a -> 'a t -> 'a t
+  val rcons : 'a t -> 'a -> 'a t
+  val singleton : 'a -> 'a t
+  val of_list : 'a list -> 'a t
+  val to_list : 'a t -> 'a list
+  val fold : ('b -> 'a -> 'b) -> 'a t -> 'b -> 'b
+end = struct
+  type 'a t =
+    | Nil
+    | Singleton of 'a
+    | Append of 'a t * 'a t
+  let nil = Nil
+  let append ls1 ls2 = match ls1, ls2 with
+    | Nil, _ -> ls2
+    | _, Nil -> ls1
+    | _, _ -> Append (ls1, ls2)
+  let cons x ls = match ls with
+    | Nil -> Singleton x
+    | _ -> Append (Singleton x, ls)
+  let rcons ls x = match ls with
+    | Nil -> Singleton x
+    | _ -> Append (ls, Singleton x)
+  let singleton x = Singleton x
+  let of_list ls = List.fold_left (fun ls' x -> cons x ls') Nil ls
+  let to_list ls =
+    let rec aux acc ls =
+      match ls with
+      | Nil -> acc
+      | Singleton x -> x::acc
+      | Append (ls1, ls2) -> aux (aux acc ls2) ls1 in
+    aux [] ls
+  let fold f ls init =
+    let rec aux acc ls =
+      match ls with
+      | Nil -> acc
+      | Singleton x -> f acc x
+      | Append (ls1, ls2) -> aux (aux acc ls1) ls2 in
+    aux init ls
+end
+
 (* TODO: See if this can be merged with SimpleGraph *)
 type edge_label = edge_type
-module GlobalGraph(S : Set.S)(D : sig type result end) : sig
-  open D
+module GlobalGraph(S : Set.S) : sig
+  type node' = S.elt * (bool * int)
   type builder =
     { paths : S.t
     ; def_count : int
     ; node_count : int
     ; edge_count : int
-    ; defs_builder : result ->
-        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
-        result
-    ; nodes_builder : result ->
-        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
-        result }
+    ; defs : (node' node_type * (edge_label * node') list) AList.t
+    ; nodes : (node' node_type * (edge_label * node') list) AList.t }
   val builder_nil : builder
   include GraphMonadType
-  with type node_label = (S.elt * (bool * int)) node_type
+  with type node_label = node' node_type
    and type edge_label = edge_label
-   and type node = S.elt * (bool * int)
+   and type node = node'
    and type 'a repr_t = builder -> S.elt -> 'a * builder
 end = struct
-  open D
+  type node' = S.elt * (bool * int)
+  type node = node'
   type builder =
     { paths : S.t
     ; def_count : int
     ; node_count : int
     ; edge_count : int
-    ; defs_builder : result ->
-        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
-        result
-    ; nodes_builder : result ->
-        (result -> (S.elt * (bool * int)) node_type -> (edge_label * (S.elt * (bool * int))) list -> result) ->
-        result }
+    ; defs : (node' node_type * (edge_label * node') list) AList.t
+    ; nodes : (node' node_type * (edge_label * node') list) AList.t }
   let builder_nil = { paths = S.empty; def_count = 0; node_count = 0; edge_count = 0
-                    ; defs_builder = (fun r _ -> r); nodes_builder = (fun r _ -> r) }
-  type node = S.elt * (bool * int)
+                    ; defs = AList.nil; nodes = AList.nil }
   type edge_label = edge_type
   type node_label = node node_type
   type children = (edge_label * node) list
@@ -399,20 +435,20 @@ end = struct
     { def_count : int
     ; node_count : int }
   type writer =
-    { defs : result -> (result -> node_label -> children -> result) -> result
-    ; nodes : result -> (result -> node_label -> children -> result) -> result
+    { defs : (node_label * children) AList.t
+    ; nodes : (node_label * children) AList.t
     ; paths : S.t
     ; edge_count : int }
   module M = Monad_util.ReaderStateWriterMonad
       (struct type r = S.elt end)
       (struct type s = state end)
       (struct type w = writer
-        let id = { defs = (fun r _ -> r); nodes = (fun r _ -> r); paths = S.empty; edge_count = 0 }
+        let id = { defs = AList.nil; nodes = AList.nil; paths = S.empty; edge_count = 0 }
         let comb = fun
           { defs = d1; nodes = f1; paths = p1; edge_count = ec1 }
           { defs = d2; nodes = f2; paths = p2; edge_count = ec2 } ->
-          { defs = (fun r c -> d1 (d2 r c) c)
-          ; nodes = (fun r c -> f1 (f2 r c) c)
+          { defs = AList.append d1 d2
+          ; nodes = AList.append f1 f2
           ; paths = S.union p1 p2; edge_count = ec1 + ec2 }
       end)
   include M
@@ -429,10 +465,10 @@ end = struct
       match nl with
       | Definition _ ->
         let+ () = put { def_count = def_count + 1; node_count } in
-        (fun r c -> c r nl ch), (fun r _ -> r), (true, def_count)
+        AList.singleton (nl, ch), AList.nil, (true, def_count)
       | _ ->
         let+ () = put { def_count; node_count = node_count + 1 } in
-        (fun r _ -> r), (fun r c -> c r nl ch), (false, node_count)
+        AList.nil, AList.singleton (nl, ch), (false, node_count)
     in
     let* () = tell { defs; nodes; paths = children_paths ch S.empty
                    ; edge_count = List.length ch } in
@@ -455,20 +491,19 @@ end = struct
       let defs, nodes =
         match definition, nl with
         | true, Definition _ ->
-          (fun r c -> c (defs r c) nl ch), nodes
+          AList.rcons defs (nl, ch), nodes
         | false, _ ->
-          defs, (fun r c -> c (nodes r c) nl ch)
+          defs, AList.cons (nl, ch) nodes
         | _, _ -> assert false in
       { defs; nodes
       ; paths = children_paths ch paths
       ; edge_count = edge_count + List.length ch }
   let register_external (tp, _) =
-    tell { defs = (fun r _ -> r); nodes = (fun r _ -> r); paths = S.singleton tp; edge_count = 0 }
-  let run m { paths; def_count; node_count; edge_count; defs_builder; nodes_builder } current =
+    tell { defs = AList.nil; nodes = AList.nil; paths = S.singleton tp; edge_count = 0 }
+  let run m { paths; def_count; node_count; edge_count; defs; nodes } current =
     let { def_count; node_count }, ({ defs; nodes; paths; edge_count }, result) =
-      let m = tell { defs = defs_builder; nodes = nodes_builder; paths; edge_count } >> m in
+      let m = tell { defs = defs; nodes; paths; edge_count } >> m in
       run m current { def_count; node_count } in
     result, { paths; def_count; node_count; edge_count
-            ; defs_builder = defs
-            ; nodes_builder = nodes }
+            ; defs; nodes }
 end

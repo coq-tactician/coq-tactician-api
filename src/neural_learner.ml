@@ -51,7 +51,7 @@ let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 type path = Local | Global
 module PathSet = Set.Make(struct type t = path let compare = compare end)
 
-module G = GlobalGraph(PathSet)(struct type result = graph_state end)
+module G = GlobalGraph(PathSet)
 module CICGraph = struct
   type node' = path * (bool * int)
   include CICGraphMonad(G)
@@ -258,8 +258,10 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
       Api.Builder.AbstractTactic.parameters_set_exn arri params)
     (TacticMap.bindings tacs);
 
-  CapnpGraphWriter.write_graph cgraph (fun _ -> 0)
-    builder.def_count builder.node_count builder.edge_count builder.defs_builder builder.nodes_builder;
+  let node_index_transform (def, i) =
+    if def then i else builder.def_count + i in
+  CapnpGraphWriter.write_graph cgraph (fun _ -> 0) node_index_transform
+    (builder.def_count + builder.node_count) builder.edge_count (AList.append builder.defs builder.nodes);
 
   let definitions =
     let f (_, (_, (_, (def, n)))) = assert def; Stdint.Uint32.of_int n in
@@ -395,7 +397,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open Monad_util.WithMonadNotations(CICGraph) in
       let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
-    let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs_builder; nodes_builder } =
+    let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs; nodes } =
       CICGraph.run ~state updater G.builder_nil Local in
     let node_index_transform (def, i) =
       if def then i else def_count + i in
@@ -404,8 +406,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       Id.Map.bindings context_map in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
-    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1)
-      def_count node_count edge_count defs_builder nodes_builder;
+    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) node_index_transform
+      (def_count + node_count) edge_count (AList.append defs nodes);
     let state = Request.Predict.state_init predict in
     ProofState.root_set_int_exn state @@ node_index_transform root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in

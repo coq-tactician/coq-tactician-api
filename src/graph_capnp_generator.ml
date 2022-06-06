@@ -200,33 +200,27 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | EvarSubstTarget -> EvarSubstTarget
     | EvarSubject -> EvarSubject
 
-  let write_graph ?(include_metadata=false) capnp_graph transformer
-      def_count node_count edge_count defs_builder nodes_builder =
-    Feedback.msg_notice Pp.(str "dc: " ++ int def_count ++ str " nc: " ++ int node_count ++ str " ec: " ++ int edge_count);
-    let nodes = K.Builder.Graph.nodes_init capnp_graph (def_count + node_count) in
+  let write_graph ?(include_metadata=false) capnp_graph transformer node_index_transform
+      node_count edge_count nodes =
+    let cnodes = K.Builder.Graph.nodes_init capnp_graph node_count in
     let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
-    let state = { node_index = def_count + node_count - 1; edge_index = edge_count } in
-    let node_index_transform (def, i) =
-      if def then i else def_count + i in
-    let arrays_add { node_index; edge_index } label children =
-      let node = Capnp.Array.get nodes node_index in
-      nt2nt ~include_metadata (def_count + node_count) transformer node_index_transform label @@
-      K.Builder.Graph.Node.label_init node;
-      let cc = List.length children in
-      let edge_index = edge_index - cc in
-      K.Builder.Graph.Node.children_count_set_exn node cc;
-      K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);
-      let _ = List.fold_left (fun ei (label, (tp, ti)) ->
-          let et = Capnp.Array.get edges ei in
-          K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
-          let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
-          K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
-          K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ node_index_transform ti;
-          ei + 1
-        ) edge_index children in
-      { node_index = node_index - 1; edge_index } in
-    let state = nodes_builder state arrays_add in
-    print_endline ("nodei: " ^ string_of_int state.node_index ^ " edgei: " ^ string_of_int state.edge_index);
-    let state = defs_builder state arrays_add in
-    print_endline ("nodei: " ^ string_of_int state.node_index ^ " edgei: " ^ string_of_int state.edge_index);
+    let state = { node_index = 0; edge_index = 0 } in
+    let _ = AList.fold (fun { node_index; edge_index } (label, children) ->
+        let node = Capnp.Array.get cnodes node_index in
+        nt2nt ~include_metadata node_count transformer node_index_transform label @@
+        K.Builder.Graph.Node.label_init node;
+        let cc = List.length children in
+        K.Builder.Graph.Node.children_count_set_exn node cc;
+        K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);
+        let edge_index = List.fold_left (fun ei (label, (tp, ti)) ->
+            let et = Capnp.Array.get edges ei in
+            K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
+            let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
+            K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
+            K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ node_index_transform ti;
+            ei + 1
+          ) edge_index children in
+        { node_index = node_index + 1; edge_index })
+        nodes state in
+    ()
 end
