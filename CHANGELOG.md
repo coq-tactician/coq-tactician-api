@@ -1,6 +1,7 @@
 # unreleased
 
 Changes to the Capn'proto format:
+- Upgraded magic id to v10
 - The first definition in a file now has it's `previous` field set to `len(graph.nodes)`. Previously,
   the field was set to point to the definition itself.
   
