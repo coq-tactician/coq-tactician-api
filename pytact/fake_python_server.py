@@ -13,8 +13,7 @@ graph_api_capnp = capnp.load(graph_api_capnp)
 
 def prediction_loop_text(r, s):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
-    while True:
-        g = next(r)
+    for g in r:
         msg_type = g.which()
         if msg_type == "predict":
             print(g.predict.state.text)
@@ -38,8 +37,7 @@ def prediction_loop_text(r, s):
             raise Exception
 
 def prediction_loop(r, s, tacs, graph1, definitions):
-    while True:
-        g = next(r)
+    for g in r:
         msg_type = g.which()
         if msg_type == "predict":
             gv.visualize(g.predict.graph, g.predict.state, graph1=graph1)
@@ -74,6 +72,12 @@ def prediction_loop(r, s, tacs, graph1, definitions):
             response.write_packed(s)
         elif msg_type == "initialize":
             return g
+        elif msg_type == "checkAlignment":
+            print(g)
+            alignment = {'unalignedTactics': [ t.ident for t in g.checkAlignment.tactics],
+                         'unalignedDefinitions': list(g.checkAlignment.definitions)}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+            response.write_packed(s)
         else:
             print("Capnp protocol error")
             raise Exception
@@ -82,7 +86,7 @@ def initialize_loop(r, s, textmode):
     g = next(r)
     msg_type = g.which()
     if msg_type == "initialize":
-        while True:
+        while g:
             print('---------------- New prediction context -----------------')
             if not textmode:
                 gv.visualize_defs(g.initialize.graph, g.initialize.definitions)
@@ -101,6 +105,13 @@ def initialize_loop(r, s, textmode):
         print(g)
         response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
         print(response)
+        response.write_packed(s)
+        initialize_loop(r, s, textmode)
+    elif msg_type == "checkAlignment":
+        print(g)
+        alignment = {'unalignedTactics': [ t.ident for t in g.checkAlignment.tactics],
+                     'unalignedDefinitions': list(g.checkAlignment.definitions)}
+        response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
         response.write_packed(s)
         initialize_loop(r, s, textmode)
     else:

@@ -1,4 +1,4 @@
-@0xabf0c7f4c484205b; # v9
+@0xe2c2d9fe7d7017d7; # v10
 
 ######################################################################################################
 #
@@ -251,7 +251,7 @@ struct Definition {
 
   previous @2 :NodeIndex;
   # The previous definition within the global context of the current file.
-  # For the first definition, the previous node is the node itself, so beware of loops.
+  # For the first definition this field is set to `len(graph.nodes)`.
   # Attempts are made to make the ordering of the global context consistent with the ordering of definitions
   # in the source document. However, when closing modules and sections this ordering is not guaranteed to be
   # maintained.
@@ -437,6 +437,13 @@ struct PredictionProtocol {
       synchronize @5 :UInt64;
       # Coq uses this message to synchronize the state of the protocol when exceptions have occurred.
       # The contract is that the given integer needs to be echo'd back verbatim.
+      checkAlignment :group {
+        # Request for the server to align the given tactics and definition to it's internal knowledge
+        # and report back any tactics and definitions that were not found
+        tactics @6 :List(AbstractTactic);
+        graph @7 :Graph;
+        definitions @8 :List(NodeIndex);
+      }
     }
   }
   struct Prediction {
@@ -457,6 +464,10 @@ struct PredictionProtocol {
       # Output is a list of predictions with a confidence. The list is expected to be
       # sorted by decreasing confidence.
       synchronized @3 :UInt64;
+      alignment :group {
+        unalignedTactics @4 :List(TacticId);
+        unalignedDefinitions @5 :List(NodeIndex);
+      }
     }
   }
 }

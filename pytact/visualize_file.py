@@ -17,7 +17,7 @@ def absolute_deps(root, deps):
 
 def get_graph(dep):
     f = open(dep)
-    g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
+    g = graph_api_capnp.Dataset.read(f, traversal_limit_in_words=2**64-1)
     # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
     g.total_size
     return g.graph
@@ -25,7 +25,7 @@ def get_graph(dep):
 def main():
     file = os.path.abspath(sys.argv[1])
     f = open(file)
-    g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
+    g = graph_api_capnp.Dataset.read(f, traversal_limit_in_words=2**64-1)
     # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
     g.total_size
     root = file.removesuffix(g.dependencies[0])
@@ -38,10 +38,6 @@ def main():
     graphs = [g.graph] + [get_graph(dep) for dep in dependencies[1:]]
 
     context_file = gv.visualize_global_context(root, alt, graphs, g.definitions, g.representative, dependencies)
-
-    for definition in g.definitions:
-        print(g.graph.nodes[definition].label.definition.name)
-        gv.visualize_definition(root, alt, graphs, definition, dependencies)
 
     for definition in g.definitions:
         print(g.graph.nodes[definition].label.definition.name)
@@ -63,7 +59,7 @@ def generate_index():
         alt = rootdir
     for f in [f for f in rootdir.glob('**/*.bin') if f.is_file()]:
         with open(f) as f:
-            g = graph_api_capnp.Dataset.read_packed(f, traversal_limit_in_words=2**64-1)
+            g = graph_api_capnp.Dataset.read(f, traversal_limit_in_words=2**64-1)
             deps[g.dependencies[0]] = list(g.dependencies)[1:]
             # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
             g.total_size

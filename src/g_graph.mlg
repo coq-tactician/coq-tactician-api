@@ -24,3 +24,6 @@ VERNAC COMMAND EXTEND Reinforce CLASSIFIED AS QUERY
 | [ "Reinforce" string(ip_addr) int(port) ] -> { Reinforce.reinforce_tcp ip_addr port }
 END
 
+VERNAC COMMAND EXTEND CheckNeuralAlignment CLASSIFIED AS QUERY
+| [ "Check" "Neural" "Alignment" ] -> { Neural_learner.check_neural_alignment () }
+END

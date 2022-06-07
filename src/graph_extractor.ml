@@ -52,8 +52,8 @@ module type CICGraphMonadType = sig
 
   (** Graph drawing primitives *)
   val mk_node : node_label -> children -> node t
-  val with_delayed_node : (node -> ('a * node_label * children) t) -> 'a t
-  val with_delayed_nodes : int -> (node list -> ('a * (node_label * children) list) t) -> 'a t
+  val with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t
+  val with_delayed_nodes : ?definition:bool ->int -> (node list -> ('a * (node_label * children) list) t) -> 'a t
 
   (** Registering and lookup of definitions *)
   type status =
@@ -163,17 +163,17 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
 
   (** Lifting of basic drawing primitives *)
   let mk_node nl ch = M.lift @@ mk_node nl ch
-  let with_delayed_node f = unrun @@ fun c s ->
-    with_delayed_node (fun n ->
+  let with_delayed_node ?definition f = unrun @@ fun c s ->
+    with_delayed_node ?definition (fun n ->
         G.map (fun (s, (a, nl, ch)) -> (s, a), nl, ch) (run (f n) c s))
 
   (* This is a typical function that would benefit greatly from having sized vectors! *)
-  let with_delayed_nodes i f =
+  let with_delayed_nodes ?definition i f =
     let rec aux i nodes =
       if i = 0 then
         f nodes
       else
-        with_delayed_node @@ fun n ->
+        with_delayed_node ?definition @@ fun n ->
           let+ a, chs = aux (i - 1) (n::nodes) in
           match chs with
           | [] -> CErrors.anomaly Pp.(str "with_delayed_nodes received to few children nodes")
@@ -609,7 +609,6 @@ end = struct
       let* env = lookup_env in
       let { const_body; const_type; _ } = Environ.lookup_constant c env in
       let* children = if_not_truncate (return []) @@
-        let* typ = gen_constr const_type in
         let bt, b = match const_body with
           | Undef _ -> ConstUndef, mk_node ConstEmpty []
           | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
@@ -617,7 +616,8 @@ end = struct
             let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
             ConstOpaqueDef, gen_constr c
           | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
-        let+ b = b in
+        let+ b = b
+        and+ typ = gen_constr const_type in
         [ ConstType, typ; bt, b ] in
       let+ (n, _) = mk_definition d p (fun d -> mk_node d children) in
       n
@@ -667,7 +667,7 @@ end = struct
       let ({ mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
         Environ.lookup_mind m env in
       let inds = OList.mapi (fun i ind -> i, ind) (Array.to_list mind_packets) in
-      with_delayed_nodes (OList.length inds) @@ fun indsn ->
+      with_delayed_nodes ~definition:true (OList.length inds) @@ fun indsn ->
       let inds = OList.combine inds indsn in
       let indsn = OList.rev indsn in (* Backwards ordering w.r.t. Fun *)
       let+ inds = List.map (fun ((i, ({ mind_user_lc; mind_consnames; _ } as ib)), n) ->
@@ -690,7 +690,7 @@ end = struct
             let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
             let+ n = gen_constr typ in
             (IndType, n)::cstrs in
-          let+ n, def = mk_definition (Ind (m, i)) (GlobRef.IndRef (m, i)) (fun d -> return n) in
+          let+ _, def = mk_definition (Ind (m, i)) (GlobRef.IndRef (m, i)) (fun d -> return n) in
           def, children
         ) inds in
       (), inds
