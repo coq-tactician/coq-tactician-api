@@ -382,7 +382,10 @@ end = struct
     | Nil -> Singleton x
     | _ -> Append (ls, Singleton x)
   let singleton x = Singleton x
-  let of_list ls = List.fold_left (fun ls' x -> cons x ls') Nil ls
+  let of_list ls =
+    match ls with
+    | [] -> Nil
+    | x::ls -> List.fold_left (fun ls' x -> rcons ls' x) (Singleton x) ls
   let to_list ls =
     let rec aux acc ls =
       match ls with
@@ -401,6 +404,7 @@ end
 
 (* TODO: See if this can be merged with SimpleGraph *)
 type edge_label = edge_type
+type edge_range = { start : int; size : int }
 module GlobalGraph(S : Set.S) : sig
   type node' = S.elt * (bool * int)
   type builder =
@@ -408,8 +412,9 @@ module GlobalGraph(S : Set.S) : sig
     ; def_count : int
     ; node_count : int
     ; edge_count : int
-    ; defs : (node' node_type * (edge_label * node') list) AList.t
-    ; nodes : (node' node_type * (edge_label * node') list) AList.t }
+    ; defs : (node' node_type * edge_range) AList.t
+    ; nodes : (node' node_type * edge_range) AList.t
+    ; edges : (edge_label * node') AList.t }
   val builder_nil : builder
   include GraphMonadType
   with type node_label = node' node_type
@@ -424,32 +429,35 @@ end = struct
     ; def_count : int
     ; node_count : int
     ; edge_count : int
-    ; defs : (node' node_type * (edge_label * node') list) AList.t
-    ; nodes : (node' node_type * (edge_label * node') list) AList.t }
+    ; defs : (node' node_type * edge_range) AList.t
+    ; nodes : (node' node_type * edge_range) AList.t
+    ; edges : (edge_label * node') AList.t }
   let builder_nil = { paths = S.empty; def_count = 0; node_count = 0; edge_count = 0
-                    ; defs = AList.nil; nodes = AList.nil }
+                    ; defs = AList.nil; nodes = AList.nil; edges = AList.nil }
   type edge_label = edge_type
   type node_label = node node_type
   type children = (edge_label * node) list
   type state =
     { def_count : int
-    ; node_count : int }
-  type writer =
-    { defs : (node_label * children) AList.t
-    ; nodes : (node_label * children) AList.t
-    ; paths : S.t
+    ; node_count : int
     ; edge_count : int }
+  type writer =
+    { defs : (node_label * edge_range) AList.t
+    ; nodes : (node_label * edge_range) AList.t
+    ; edges : (edge_label * node') AList.t
+    ; paths : S.t }
   module M = Monad_util.ReaderStateWriterMonad
       (struct type r = S.elt end)
       (struct type s = state end)
       (struct type w = writer
-        let id = { defs = AList.nil; nodes = AList.nil; paths = S.empty; edge_count = 0 }
+        let id = { defs = AList.nil; nodes = AList.nil; edges = AList.nil; paths = S.empty }
         let comb = fun
-          { defs = d1; nodes = f1; paths = p1; edge_count = ec1 }
-          { defs = d2; nodes = f2; paths = p2; edge_count = ec2 } ->
+          { defs = d1; nodes = f1; edges = e1; paths = p1 }
+          { defs = d2; nodes = f2; edges = e2; paths = p2 } ->
           { defs = AList.append d1 d2
           ; nodes = AList.append f1 f2
-          ; paths = S.union p1 p2; edge_count = ec1 + ec2 }
+          ; edges = AList.append e1 e2
+          ; paths = S.union p1 p2 }
       end)
   include M
   type nonrec 'a repr_t = builder -> S.elt -> 'a * builder
@@ -460,50 +468,52 @@ end = struct
   let children_paths ch ps =
     List.fold_left (fun ps (_, (p, _)) -> S.add p ps) ps ch
   let mk_node nl ch =
-    let* { def_count; node_count } = get in
+    let* { def_count; node_count; edge_count } = get in
+    let edge_count' = List.length ch in
     let* defs, nodes, i =
       match nl with
       | Definition _ ->
-        let+ () = put { def_count = def_count + 1; node_count } in
-        AList.singleton (nl, ch), AList.nil, (true, def_count)
+        let+ () = put { def_count = def_count + 1; node_count; edge_count = edge_count + edge_count' } in
+        AList.singleton (nl, { start = edge_count; size = edge_count' }), AList.nil, (true, def_count)
       | _ ->
-        let+ () = put { def_count; node_count = node_count + 1 } in
-        AList.nil, AList.singleton (nl, ch), (false, node_count)
+        let+ () = put { def_count; node_count = node_count + 1; edge_count = edge_count + edge_count' } in
+        AList.nil, AList.singleton (nl, { start = edge_count; size = edge_count' }), (false, node_count)
     in
-    let* () = tell { defs; nodes; paths = children_paths ch S.empty
-                   ; edge_count = List.length ch } in
+    let* () = tell { defs; nodes; edges = AList.of_list ch; paths = children_paths ch S.empty } in
     index_to_node i
   let with_delayed_node ?(definition=false) f =
-    let* { def_count; node_count } = get in
+    let* { def_count; node_count; edge_count } = get in
     let* i =
       match definition with
       | true ->
-        let+ () = put { def_count = def_count + 1; node_count } in
+        let+ () = put { def_count = def_count + 1; node_count; edge_count } in
         true, def_count
       | false ->
-        let+ () = put { def_count; node_count = node_count + 1 } in
+        let+ () = put { def_count; node_count = node_count + 1; edge_count } in
         false, node_count
     in
     pass @@
     let* n = index_to_node i in
-    let+ v, nl, ch = f n in
-    v, fun { defs; nodes; paths; edge_count } ->
+    let* v, nl, ch = f n in
+    let* { edge_count; _ } as s = get in
+    let edge_count' = List.length ch in
+    let+ () = put {s with edge_count = edge_count + edge_count' } in
+    v, fun { defs; nodes; edges; paths } ->
       let defs, nodes =
         match definition, nl with
         | true, Definition _ ->
-          AList.rcons defs (nl, ch), nodes
+          AList.cons (nl, { start = edge_count; size = edge_count' }) defs, nodes
         | false, _ ->
-          defs, AList.cons (nl, ch) nodes
+          defs, AList.cons (nl, { start = edge_count; size = edge_count' }) nodes
         | _, _ -> assert false in
-      { defs; nodes
-      ; paths = children_paths ch paths
-      ; edge_count = edge_count + List.length ch }
+      { defs; nodes; edges = AList.append edges (AList.of_list ch)
+      ; paths = children_paths ch paths }
   let register_external (tp, _) =
-    tell { defs = AList.nil; nodes = AList.nil; paths = S.singleton tp; edge_count = 0 }
-  let run m { paths; def_count; node_count; edge_count; defs; nodes } current =
-    let { def_count; node_count }, ({ defs; nodes; paths; edge_count }, result) =
-      let m = tell { defs = defs; nodes; paths; edge_count } >> m in
-      run m current { def_count; node_count } in
+    tell { defs = AList.nil; nodes = AList.nil; edges = AList.nil; paths = S.singleton tp }
+  let run m { paths; def_count; node_count; edge_count; defs; nodes; edges } current =
+    let { def_count; node_count; edge_count }, ({ defs; nodes; edges; paths }, result) =
+      let m = tell { defs; nodes; edges; paths } >> m in
+      run m current { def_count; node_count; edge_count } in
     result, { paths; def_count; node_count; edge_count
-            ; defs; nodes }
+            ; defs; nodes; edges }
 end

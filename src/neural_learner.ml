@@ -218,7 +218,7 @@ let init_predict_text rc wc =
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
 let populate_global_context_info tacs env ctacs cgraph cdefinitions =
-  let builder, state =
+  let G.{ paths=_; def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
     let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
@@ -259,9 +259,9 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
     (TacticMap.bindings tacs);
 
   let node_index_transform (def, i) =
-    if def then i else builder.def_count + i in
+    if def then i else def_count + i in
   CapnpGraphWriter.write_graph cgraph (fun _ -> 0) node_index_transform
-    (builder.def_count + builder.node_count) builder.edge_count (AList.append builder.defs builder.nodes);
+    (def_count + node_count) edge_count (AList.append defs nodes) edges;
 
   let definitions =
     let f (_, (_, (_, (def, n)))) = assert def; Stdint.Uint32.of_int n in
@@ -397,7 +397,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let open Monad_util.WithMonadNotations(CICGraph) in
       let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
-    let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs; nodes } =
+    let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
       CICGraph.run ~state updater G.builder_nil Local in
     let node_index_transform (def, i) =
       if def then i else def_count + i in
@@ -407,7 +407,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
     CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) node_index_transform
-      (def_count + node_count) edge_count (AList.append defs nodes);
+      (def_count + node_count) edge_count (AList.append defs nodes) edges;
     let state = Request.Predict.state_init predict in
     ProofState.root_set_int_exn state @@ node_index_transform root;
     let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in

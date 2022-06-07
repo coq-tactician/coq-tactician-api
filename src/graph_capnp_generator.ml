@@ -201,26 +201,24 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | EvarSubject -> EvarSubject
 
   let write_graph ?(include_metadata=false) capnp_graph transformer node_index_transform
-      node_count edge_count nodes =
+      node_count edge_count nodes edges =
     let cnodes = K.Builder.Graph.nodes_init capnp_graph node_count in
-    let edges = K.Builder.Graph.edges_init capnp_graph edge_count in
-    let state = { node_index = 0; edge_index = 0 } in
-    let _ = AList.fold (fun { node_index; edge_index } (label, children) ->
+    let cedges = K.Builder.Graph.edges_init capnp_graph edge_count in
+    let _ = AList.fold (fun node_index (label, Graph_def.{ start; size }) ->
         let node = Capnp.Array.get cnodes node_index in
         nt2nt ~include_metadata node_count transformer node_index_transform label @@
         K.Builder.Graph.Node.label_init node;
-        let cc = List.length children in
-        K.Builder.Graph.Node.children_count_set_exn node cc;
-        K.Builder.Graph.Node.children_index_set_int_exn node (if cc = 0 then 0 else edge_index);
-        let edge_index = List.fold_left (fun ei (label, (tp, ti)) ->
-            let et = Capnp.Array.get edges ei in
-            K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
-            let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
-            K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
-            K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ node_index_transform ti;
-            ei + 1
-          ) edge_index children in
-        { node_index = node_index + 1; edge_index })
-        nodes state in
+        K.Builder.Graph.Node.children_count_set_exn node size;
+        K.Builder.Graph.Node.children_index_set_int_exn node (if size = 0 then 0 else start);
+        node_index + 1)
+        nodes 0 in
+    let _ = AList.fold (fun ei (label, (tp, ti)) ->
+        let et = Capnp.Array.get cedges ei in
+        K.Builder.Graph.EdgeTarget.label_set et @@ et2et label;
+        let ctarget = K.Builder.Graph.EdgeTarget.target_init et in
+        K.Builder.Graph.EdgeTarget.Target.dep_index_set_exn ctarget @@ transformer tp;
+        K.Builder.Graph.EdgeTarget.Target.node_index_set_int_exn ctarget @@ node_index_transform ti;
+        ei + 1
+      ) edges 0 in
     ()
 end
