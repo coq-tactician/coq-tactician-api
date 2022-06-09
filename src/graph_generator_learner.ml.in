@@ -345,7 +345,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let _ = K.Builder.Dataset.dependencies_set_list g resolved_dependencies in
     (match representative with
      | None ->
-       K.Builder.Dataset.representative_set_int_exn g node_count
+       K.Builder.Dataset.representative_set_int_exn g (def_count + node_count)
      | Some (rp, (def, representative)) ->
        assert def;
        if not (DirPath.equal rp dirpath) then
