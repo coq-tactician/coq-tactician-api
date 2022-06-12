@@ -8,9 +8,6 @@ open Graph_def
 module OList = CList
 
 let dirpath = Global.current_dirpath ()
-let data_file () = match Tactician_util.base_filename with
-  | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
-  | Some f -> f ^ ".bin"
 
 module G = GlobalGraph(DPset)
 module CICGraph = struct
@@ -306,7 +303,16 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
          if not @@ Mindset.mem (Projection.Repr.mind p) minductives then
            CErrors.user_err (err_msg @@  MutInd.print (Projection.Repr.mind p)))
 
-  let () = Hook.set Stm.document_add_hook (fun _ _ -> update_graph ())
+  let source = ref @@ Tactician_util.try_locate_absolute_library dirpath
+  let data_file () = match !source with
+    | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
+    | Some f -> Filename.remove_extension f ^ ".bin"
+  let () = Hook.set Stm.document_add_hook (fun CAst.{ loc; _ } _ ->
+      (match loc with
+       | None -> ()
+       | Some Loc.{ fname = ToplevelInput; _ } -> source := None
+       | Some Loc.{ fname = InFile f; _ } -> source := Some f);
+      update_graph ())
 
   let resolve_dependencies deps =
     let absolute_deps = List.map (fun p ->
