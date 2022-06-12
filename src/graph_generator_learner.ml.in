@@ -194,7 +194,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     OList.iter (fun x ->
         let base = Label.to_id @@ KerName.label x in
         let candidates = OList.filter (fun x -> Names.Id.equal (Label.to_id @@ KerName.label x) base ) global_context in
-        CErrors.anomaly Pp.(str "Unknown lemma: " ++ KerName.print x ++ str "\nAlternatives:\n" ++
+        Feedback.msg_warning Pp.(str "Unknown lemma: " ++ KerName.print x ++ str "\nAlternatives:\n" ++
                             prlist_with_sep (fun () -> str "\n") KerName.print candidates)) lemmas;
     (* End correctness check *)
 
