@@ -36,7 +36,8 @@ let proof_state_to_string_safe (hyps, concl) env evar_map =
     ) hyps in
   String.concat ", " hyps ^ " |- " ^ goal
 
-type proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
+type single_proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
+type proof_state = Evd.evar_map * unit (* single_proof_state Evar.Map.t *) * single_proof_state
 type outcome = proof_state * Constr.t * proof_state list
 type tactical_proof = (outcome list * glob_tactic_expr option) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
@@ -514,7 +515,7 @@ end = struct
                  ; tactic_hash
                  ; tactic_exact } in
         tactic, args in
-    let gen_outcome ((before_hyps, before_concl, before_evar), term, after) =
+    let gen_outcome (((before_sigma, _, (before_hyps, before_concl, before_evar)), term, after) : outcome) =
       let term_text =
         (* TODO: Some evil hacks to work around the fact that we don't have a sigma here *)
         let beauti_evar c =
@@ -529,7 +530,7 @@ end = struct
                   with_depth (fun () ->
                       Printer.safe_pr_constr_env (Global.env()) Evd.empty (beauti_evar term))) ()) ()
         else "" in
-      let with_proof_state (hyps, concl, evar) m =
+      let with_proof_state evd (hyps, concl, evar) m =
         let* ctx, (subject, map) = with_named_context gen_constr hyps @@
           let* subject = gen_constr concl in
           let+ map = lookup_named_map in
@@ -539,12 +540,12 @@ end = struct
           OList.map Named.Declaration.get_id hyps in
         let+ cont = with_evar evar root arr m in
         (* TODO: Look into what we should give as the evd here *)
-        let ps_string = proof_state_to_string_safe (hyps, concl) env Evd.empty in
+        let ps_string = proof_state_to_string_safe (hyps, concl) env evd in
         let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
         { ps_string; root; context = context_range; evar }, cont in
       let with_after_states after m =
-        OList.fold_left (fun m ((_, _, e) as st) ->
-            let+ ps, (ls, res) = with_proof_state st m in
+        OList.fold_left (fun m (evd, _, st) ->
+            let+ ps, (ls, res) = with_proof_state evd st m in
             ps::ls, res
           ) (let+ m = m in [], m) after in
       let+ (proof_states_after, (proof_state_before, arguments, term)) =
@@ -594,8 +595,7 @@ end = struct
           let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
           subject, arguments, context_range, term in
         let+ root = mk_node ProofState ((ContextSubject, subject)::ctx) in
-        (* TODO: Look into what we should give as the evd here *)
-        let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env Evd.empty in
+        let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
         { ps_string; root; context = context_range; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
     let+ outcomes = List.map gen_outcome outcomes in

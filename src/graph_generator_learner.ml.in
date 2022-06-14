@@ -135,7 +135,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   let proof_state_to_pair ps =
     let concl = proof_state_goal ps in
     let hyps = proof_state_hypotheses ps in
-    List.map (map_named term_repr) hyps, term_repr concl, proof_state_evar ps
+    proof_state_sigma ps, (), (List.map (map_named term_repr) hyps, term_repr concl, proof_state_evar ps)
 
   let grandfathered_constants =
     [ match Coqlib.lib_ref "tactician.private_constant_placeholder" with
