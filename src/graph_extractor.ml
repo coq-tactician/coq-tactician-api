@@ -93,6 +93,7 @@ module type CICGraphMonadType = sig
   val lookup_env          : Environ.env t
   val lookup_env_extra    : env_extra t
   val lookup_include_metadata : bool t
+  val lookup_include_opaque : bool t
 
   val with_relative       : node -> 'a t -> 'a t
   val with_relatives      : node list -> 'a t -> 'a t
@@ -115,10 +116,10 @@ module type CICGraphMonadType = sig
     ; definition_nodes : definitions}
 
   val run :
-    ?include_metadata:bool -> ?def_truncate:bool -> ?def_depth:int -> state:state ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int -> state:state ->
     'a t -> (state * 'a) repr_t
   val run_empty :
-    ?include_metadata:bool -> ?def_truncate:bool -> ?def_depth:int ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int ->
     'a t -> (state * 'a) repr_t
 end
 module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
@@ -147,7 +148,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     ; def_truncate : bool
     ; env          : Environ.env option
     ; env_extra    : env_extra option
-    ; metadata     : bool }
+    ; metadata     : bool
+    ; opaque       : bool }
   type state =
     { previous : node option
     ; external_previous : node list
@@ -298,6 +300,9 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let lookup_include_metadata =
     let+ { metadata; _ } = ask in
     metadata
+  let lookup_include_opaque =
+    let+ { opaque; _ } = ask in
+    opaque
 
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
@@ -319,13 +324,14 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let with_env_extra env_extra =
     local (fun c -> { c with env_extra = Some env_extra })
 
-  let run ?(include_metadata=false) ?(def_truncate=false) ?def_depth ~state m =
+  let run ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth ~state m =
     G.run @@
     let context =
       { relative = []; named = Id.Map.empty; sigma = Evar.Map.empty
-      ; def_depth; def_truncate; env = None; env_extra = None; metadata = include_metadata } in
+      ; def_depth; def_truncate; env = None; env_extra = None; metadata = include_metadata
+      ; opaque = include_opaque } in
     run m context state
-  let run_empty ?(include_metadata=false) ?(def_truncate=false) ?def_depth m =
+  let run_empty ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth m =
     let definition_nodes =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
@@ -336,7 +342,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
       ; external_previous = []
       ; section_nodes = Id.Map.empty
       ; definition_nodes } in
-    run ~include_metadata ~def_truncate ?def_depth ~state m
+    run ~include_metadata ~include_opaque ~def_truncate ?def_depth ~state m
 end
 
 module GraphBuilder
@@ -613,8 +619,14 @@ end = struct
           | Undef _ -> ConstUndef, mk_node ConstEmpty []
           | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
           | OpaqueDef c ->
-            let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
-            ConstOpaqueDef, gen_constr c
+            let c =
+              let* include_opaque = lookup_include_opaque in
+              if include_opaque then
+                let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
+                gen_constr c
+              else
+                mk_node ConstEmpty [] in
+            ConstOpaqueDef, c
           | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
         let+ b = b
         and+ typ = gen_constr const_type in
