@@ -246,6 +246,7 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
 
   let tacs = List.fold_left (fun map tac ->
       let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac in
+      let tac = Tactic_name_remove.tactic_name_remove tac in
       let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
       let base_tactic = Tactic_one_variable.tactic_strip tac in
       TacticMap.add
