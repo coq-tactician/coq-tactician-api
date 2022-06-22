@@ -203,12 +203,19 @@ let get_connection =
       c
     | Some c -> c
 
-let init_predict_text rc wc =
+let log_annotation () =
+  let doc = Stm.get_doc 0 in
+  let unknown = Pp.str "Unknown location" in
+  let loc = Option.cata (fun CAst.{ loc; _ } -> Option.cata Topfmt.pr_loc unknown loc) unknown @@
+    Stm.(get_ast ~doc (get_current_state ~doc)) in
+  Pp.string_of_ppcmds loc
 
+let init_predict_text rc wc =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
-  ignore(Request.initialize_init request);
+  let init = Request.initialize_init request in
+  Request.Initialize.log_annotation_set init @@ log_annotation ();
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -280,6 +287,7 @@ let init_predict rc wc tacs env =
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
   let init = Request.initialize_init request in
+  Request.Initialize.log_annotation_set init @@ log_annotation ();
   let state, tacs = populate_global_context_info tacs env
     (Request.Initialize.tactics_init init)
     (Request.Initialize.graph_init init)
