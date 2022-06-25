@@ -27,7 +27,7 @@ dev-repo: "git+https://github.com/coq-tactician/coq-tactician-reinforce.git"
 pin-depends: [
   [
     "coq-tactician.8.11.dev"
-    "git+https://github.com/coq-tactician/coq-tactician.git#d46eea21558d382888fc5a25e238af3be31c9a00"
+    "git+https://github.com/coq-tactician/coq-tactician.git#c39a4370deac6545c9a42f2918ee6867c653841b"
   ]
 ]
 
