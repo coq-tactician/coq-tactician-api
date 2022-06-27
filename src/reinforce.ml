@@ -19,17 +19,17 @@ exception MismatchedArguments
 exception IllegalArgument
 exception ParseError
 
-let gen_proof_state env (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
+let gen_proof_state env (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) evar =
   let open CICGraph in
   let open Monad_util.WithMonadNotations(CICGraph) in
   let* hyps, (concl, map) = with_named_context env (Id.Map.empty, Cmap.empty) hyps @@
     let* map = lookup_named_map in
     let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
     concl, map in
-  let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
+  let+ root = mk_node (ProofState evar) ((ContextSubject, concl)::hyps) in
   root, map
 
-let write_execution_result env res hyps concl obj =
+let write_execution_result env res hyps concl evar obj =
   let module ExecutionResult = Api.Builder.ExecutionResult in
   let module Graph = Api.Builder.Graph in
   let module ProofState = Api.Builder.ProofState in
@@ -38,7 +38,7 @@ let write_execution_result env res hyps concl obj =
   let updater =
     let open Monad_util.WithMonadNotations(CICGraph) in
     let open Monad.Make(CICGraph) in
-    let+ root, context_map = gen_proof_state env hyps concl in
+    let+ root, context_map = gen_proof_state env hyps concl evar in
     snd root, context_map in
   let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
     CICGraph.run_empty ~def_truncate:true updater G.builder_nil Local in
@@ -73,10 +73,11 @@ let write_execution_result env res obj =
    Goal.enter_one (fun gl ->
        let hyps = Goal.hyps gl in
        let concl = Goal.concl gl in
-       let sigma = Proofview.Goal.sigma gl in
+       let sigma = Goal.sigma gl in
+       let evar = Goal.goal gl in
        let hyps = OList.map (Graph_extractor.map_named (EConstr.to_constr sigma)) hyps in
        let concl = EConstr.to_constr sigma concl in
-       write_execution_result env res hyps concl obj; tclUNIT ()))
+       write_execution_result env res hyps concl evar obj; tclUNIT ()))
 
 let write_execution_result env state res obj =
   ignore (Pfedit.solve Goal_select.SelectAll None (write_execution_result env res obj) state)

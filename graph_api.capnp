@@ -75,7 +75,10 @@ struct Graph {
     # outgoing edges (children).
 
     label :union { # Inlined for efficiency purposes
-      proofState @0 :Void;
+      # Proof state
+      # Hash a unique id (evar) for the proof state that distinquishes proof states with identical
+      # contents but do not point to the same object nonetheless
+      proofState @0 :IntP;
       undefProofState @28 :Void;
 
       # Context
@@ -207,6 +210,9 @@ struct ProofState {
   # IMPORTANT: Two proof states with the same id may still have different contents. This is because proof states
   #            can contain existential variables (represented by the `evar` node) that can be filled as a
   #            side-effect by a tactic running on another proof state.
+  # TODO: This is currently duplicated with the id attached to the `ProofState` node that `root` points to.
+  #       Eventually, this id should be resolved to a NodeIndex that represents the location of this proof state
+  #       in the final proof term that was generated.
 }
 
 struct Outcome {

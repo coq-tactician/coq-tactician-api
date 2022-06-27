@@ -44,6 +44,7 @@ type constructor = Names.constructor [@printer print_constructor] [@@deriving sh
 type constant = Constant.t
                 [@printer fun fmt c -> fprintf fmt "%s" (Label.to_string @@ Constant.label c)][@@deriving show]
 type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@deriving show]
+type evar = Evar.t [@printer fun fmt id -> fprintf fmt "%d" (Evar.repr id)] [@@deriving show]
 
 type 'node proof_state =
   { ps_string : string
@@ -106,7 +107,7 @@ type 'node definition = 'node definition'
                         [@printer fun fmt c -> fprintf fmt "%s" (print_definition c)][@@deriving show]
 
 type 'node node_type =
-  | ProofState
+  | ProofState of evar
   | UndefProofState
 
   (* Context *)

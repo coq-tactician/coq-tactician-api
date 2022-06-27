@@ -10,7 +10,9 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
   let nt2nt ~include_metadata none_index transformer node_index_transform (nt : G.node node_type) cnt =
     let open K.Builder.Graph.Node.Label in
     match nt with
-    | ProofState -> proof_state_set cnt
+    | ProofState evar ->
+      let ps = proof_state_init cnt in
+      K.Builder.IntP.value_set ps @@ Stdint.Uint64.of_int @@ Evar.repr evar
     | UndefProofState -> undef_proof_state_set cnt
     | ContextDef id -> context_def_set cnt (if include_metadata then Id.to_string id else "")
     | ContextAssum id -> context_assum_set cnt (if include_metadata then Id.to_string id else "")

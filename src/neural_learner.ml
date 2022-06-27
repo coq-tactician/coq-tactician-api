@@ -350,6 +350,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let open GB in
     let hyps = proof_state_hypotheses ps in
     let concl = proof_state_goal ps in
+    let evar = proof_state_evar ps in
     let hyps = List.map (map_named term_repr) hyps in
     let concl = term_repr concl in
     let open CICGraph in
@@ -358,7 +359,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let* map = lookup_named_map in
       let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
       concl, map in
-    let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
+    let+ root = mk_node (ProofState evar) ((ContextSubject, concl)::hyps) in
     root, map
 
   let predict_text rc wc env ps =
@@ -508,4 +509,4 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
 end
 
-let () = register_online_learner "Neural Learner" (module NeuralLearner)
+(* let () = register_online_learner "Neural Learner" (module NeuralLearner) *)
