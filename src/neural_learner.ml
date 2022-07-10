@@ -145,7 +145,7 @@ let connect_socket my_socket =
 
 let connect_stdin () =
   Feedback.msg_notice Pp.(str "starting proving server with connection through their stdin");
-  let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let my_socket, other_socket = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   let mode = if textmode_option () then "text" else "graph" in
   Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
   let pid =
