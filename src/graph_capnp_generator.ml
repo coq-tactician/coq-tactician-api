@@ -13,7 +13,6 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | ProofState evar ->
       let ps = proof_state_init cnt in
       K.Builder.IntP.value_set ps @@ Stdint.Uint64.of_int @@ Evar.repr evar
-    | UndefProofState -> undef_proof_state_set cnt
     | ContextDef id -> context_def_set cnt (if include_metadata then Id.to_string id else "")
     | ContextAssum id -> context_assum_set cnt (if include_metadata then Id.to_string id else "")
     | Definition { previous; external_previous; def_type; path; status; type_text; term_text } ->

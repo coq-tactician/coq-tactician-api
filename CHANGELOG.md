@@ -3,6 +3,9 @@
 Changes to the Capn'proto format:
 - The `proofState` node now had a unique identifier to distinquish existential variables that have the same
   proof state but not the same identity.
+- All `evar` nodes are now properly resolved towards a `proofState` node, even when that proof state is
+  never solved using a tactic but rather through unification. This changes makes the `undefProofState` node
+  redundant, and as such it has been removed.
 
 # stdlib-lgraph-intermediate-v11-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v11-global.squ

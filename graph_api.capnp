@@ -79,7 +79,6 @@ struct Graph {
       # Hash a unique id (evar) for the proof state that distinquishes proof states with identical
       # contents but do not point to the same object nonetheless
       proofState @0 :IntP;
-      undefProofState @28 :Void;
 
       # Context
       contextDef @1 :Text;
@@ -119,8 +118,8 @@ struct Graph {
       primitive @27 :Text;
     }
 
-    childrenIndex @29 :UInt32;
-    childrenCount @30 :UInt16;
+    childrenIndex @28 :UInt32;
+    childrenCount @29 :UInt16;
     # The children of a node are encoded as a range withing the `edge`-list of the graph.
   }
 

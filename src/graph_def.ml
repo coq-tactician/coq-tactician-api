@@ -108,7 +108,6 @@ type 'node definition = 'node definition'
 
 type 'node node_type =
   | ProofState of evar
-  | UndefProofState
 
   (* Context *)
   | ContextDef of id

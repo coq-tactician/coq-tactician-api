@@ -21,7 +21,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   module LH = Learner_helper.L(TS)
   open TS
 
-  type model = (((proof_state * term * proof_state list) list * tactic option) list * data_status * KerName.t) list
+  type model = (((proof_state * tactic_result) list * tactic option) list * data_status * KerName.t) list
 
   let last_model = Summary.ref ~name:"dataset-generator-learner-lastmodel" []
 
@@ -42,7 +42,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     match cache_type kn, status with
     | `File, (QedTime | Discharged _ | Substituted _)  ->
       let proof_states = List.map (fun x ->
-          x.before, tactic_result_term x.result, List.rev @@ tactic_result_states x.result) outcomes in
+          x.before, x.result) outcomes in
       let db = match db with
         | (ls, pstatus, pkn)::data when KerName.equal kn pkn ->
           ((proof_states, tac)::ls, pstatus, pkn)::data
@@ -133,10 +133,23 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
   open GB
 
-  let proof_state_to_pair ps =
+  let mk_single_proof_state ps : Graph_extractor.single_proof_state =
     let concl = proof_state_goal ps in
     let hyps = proof_state_hypotheses ps in
-    proof_state_sigma ps, (), (List.map (map_named term_repr) hyps, term_repr concl, proof_state_evar ps)
+    let evar = proof_state_evar ps in
+    List.map (map_named term_repr) hyps, term_repr concl, evar
+  let mk_proof_state ps : Graph_extractor.proof_state =
+    let sigma = proof_state_sigma ps in
+    let f e =
+      let d = proof_state_dependent ps e in
+      mk_single_proof_state d in
+    sigma, f, mk_single_proof_state ps
+  let mk_outcome before result =
+    let f e =
+      let d = tactic_result_dependent result e in
+      mk_single_proof_state d in
+    mk_proof_state before, term_repr @@ tactic_result_term result, f,
+    List.map mk_proof_state @@ tactic_result_states result
 
   let grandfathered_constants =
     [ match Coqlib.lib_ref "tactician.private_constant_placeholder" with
@@ -202,8 +215,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         let proof = OList.find_opt (fun (p, _, path2) -> KerName.equal path path2) proof_states in
         let proof = Option.map (fun (p, _, _) -> p) proof in
         let proof = Option.map (OList.map (fun (pss, tac) ->
-            OList.map (fun (b, term, ass) ->
-                proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
+            OList.map (fun (before, result) -> mk_outcome before result) pss,
             Option.map tactic_repr tac)) proof in
         Option.fold_left (fun m proof -> Cmap.add c proof m) m proof
       ) constants Cmap.empty in
@@ -211,8 +223,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         let proof = OList.find_opt (fun (_, _, path) -> Id.equal id @@ Label.to_id @@ KerName.label path) proof_states in
         let proof = Option.map (fun (p, _, _) -> p) proof in
         let proof = Option.map (OList.map (fun (pss, tac) ->
-            OList.map (fun (b, term, ass) ->
-                proof_state_to_pair b, term_repr term, OList.map proof_state_to_pair ass) pss,
+            OList.map (fun (before, result) -> mk_outcome before result) pss,
             Option.map tactic_repr tac)) proof in
         Option.fold_left (fun m proof -> Id.Map.add id proof m) m proof
       ) section_vars Id.Map.empty in
