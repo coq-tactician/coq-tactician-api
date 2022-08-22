@@ -145,7 +145,7 @@ let connect_socket my_socket =
 
 let connect_stdin () =
   Feedback.msg_notice Pp.(str "starting proving server with connection through their stdin");
-  let my_socket, other_socket = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let my_socket, other_socket = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   let mode = if textmode_option () then "text" else "graph" in
   Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
   let pid =
@@ -203,12 +203,19 @@ let get_connection =
       c
     | Some c -> c
 
-let init_predict_text rc wc =
+let log_annotation () =
+  let doc = Stm.get_doc 0 in
+  let unknown = Pp.str "Unknown location" in
+  let loc = Option.cata (fun CAst.{ loc; _ } -> Option.cata Topfmt.pr_loc unknown loc) unknown @@
+    Stm.(get_ast ~doc (get_current_state ~doc)) in
+  Pp.string_of_ppcmds loc
 
+let init_predict_text rc wc =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
-  ignore(Request.initialize_init request);
+  let init = Request.initialize_init request in
+  Request.Initialize.log_annotation_set init @@ log_annotation ();
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -241,11 +248,12 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraph.run_empty ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
+      CICGraph.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
     builder, state in
 
   let tacs = List.fold_left (fun map tac ->
       let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac in
+      let tac = Tactic_name_remove.tactic_name_remove tac in
       let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
       let base_tactic = Tactic_one_variable.tactic_strip tac in
       TacticMap.add
@@ -279,6 +287,7 @@ let init_predict rc wc tacs env =
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
   let init = Request.initialize_init request in
+  Request.Initialize.log_annotation_set init @@ log_annotation ();
   let state, tacs = populate_global_context_info tacs env
     (Request.Initialize.tactics_init init)
     (Request.Initialize.graph_init init)
@@ -398,7 +407,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let+ root, context_map = gen_proof_state env ps in
       snd root, context_map in
     let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
-      CICGraph.run ~state updater G.builder_nil Local in
+      CICGraph.run ~include_opaque:false ~state updater G.builder_nil Local in
     let node_index_transform (def, i) =
       if def then i else def_count + i in
     let context_map = Id.Map.map (fun (p, n) -> p, node_index_transform n) context_map in

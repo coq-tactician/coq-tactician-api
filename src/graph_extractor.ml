@@ -36,7 +36,8 @@ let proof_state_to_string_safe (hyps, concl) env evar_map =
     ) hyps in
   String.concat ", " hyps ^ " |- " ^ goal
 
-type proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
+type single_proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
+type proof_state = Evd.evar_map * unit (* single_proof_state Evar.Map.t *) * single_proof_state
 type outcome = proof_state * Constr.t * proof_state list
 type tactical_proof = (outcome list * glob_tactic_expr option) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
@@ -92,6 +93,7 @@ module type CICGraphMonadType = sig
   val lookup_env          : Environ.env t
   val lookup_env_extra    : env_extra t
   val lookup_include_metadata : bool t
+  val lookup_include_opaque : bool t
 
   val with_relative       : node -> 'a t -> 'a t
   val with_relatives      : node list -> 'a t -> 'a t
@@ -114,10 +116,10 @@ module type CICGraphMonadType = sig
     ; definition_nodes : definitions}
 
   val run :
-    ?include_metadata:bool -> ?def_truncate:bool -> ?def_depth:int -> state:state ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int -> state:state ->
     'a t -> (state * 'a) repr_t
   val run_empty :
-    ?include_metadata:bool -> ?def_truncate:bool -> ?def_depth:int ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int ->
     'a t -> (state * 'a) repr_t
 end
 module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
@@ -146,7 +148,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     ; def_truncate : bool
     ; env          : Environ.env option
     ; env_extra    : env_extra option
-    ; metadata     : bool }
+    ; metadata     : bool
+    ; opaque       : bool }
   type state =
     { previous : node option
     ; external_previous : node list
@@ -297,6 +300,9 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let lookup_include_metadata =
     let+ { metadata; _ } = ask in
     metadata
+  let lookup_include_opaque =
+    let+ { opaque; _ } = ask in
+    opaque
 
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
@@ -318,13 +324,14 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let with_env_extra env_extra =
     local (fun c -> { c with env_extra = Some env_extra })
 
-  let run ?(include_metadata=false) ?(def_truncate=false) ?def_depth ~state m =
+  let run ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth ~state m =
     G.run @@
     let context =
       { relative = []; named = Id.Map.empty; sigma = Evar.Map.empty
-      ; def_depth; def_truncate; env = None; env_extra = None; metadata = include_metadata } in
+      ; def_depth; def_truncate; env = None; env_extra = None; metadata = include_metadata
+      ; opaque = include_opaque } in
     run m context state
-  let run_empty ?(include_metadata=false) ?(def_truncate=false) ?def_depth m =
+  let run_empty ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth m =
     let definition_nodes =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
@@ -335,7 +342,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
       ; external_previous = []
       ; section_nodes = Id.Map.empty
       ; definition_nodes } in
-    run ~include_metadata ~def_truncate ?def_depth ~state m
+    run ~include_metadata ~include_opaque ~def_truncate ?def_depth ~state m
 end
 
 module GraphBuilder
@@ -514,7 +521,7 @@ end = struct
                  ; tactic_hash
                  ; tactic_exact } in
         tactic, args in
-    let gen_outcome ((before_hyps, before_concl, before_evar), term, after) =
+    let gen_outcome (((before_sigma, _, (before_hyps, before_concl, before_evar)), term, after) : outcome) =
       let term_text =
         (* TODO: Some evil hacks to work around the fact that we don't have a sigma here *)
         let beauti_evar c =
@@ -529,7 +536,7 @@ end = struct
                   with_depth (fun () ->
                       Printer.safe_pr_constr_env (Global.env()) Evd.empty (beauti_evar term))) ()) ()
         else "" in
-      let with_proof_state (hyps, concl, evar) m =
+      let with_proof_state evd (hyps, concl, evar) m =
         let* ctx, (subject, map) = with_named_context gen_constr hyps @@
           let* subject = gen_constr concl in
           let+ map = lookup_named_map in
@@ -539,12 +546,12 @@ end = struct
           OList.map Named.Declaration.get_id hyps in
         let+ cont = with_evar evar root arr m in
         (* TODO: Look into what we should give as the evd here *)
-        let ps_string = proof_state_to_string_safe (hyps, concl) env Evd.empty in
+        let ps_string = proof_state_to_string_safe (hyps, concl) env evd in
         let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
         { ps_string; root; context = context_range; evar }, cont in
       let with_after_states after m =
-        OList.fold_left (fun m ((_, _, e) as st) ->
-            let+ ps, (ls, res) = with_proof_state st m in
+        OList.fold_left (fun m (evd, _, st) ->
+            let+ ps, (ls, res) = with_proof_state evd st m in
             ps::ls, res
           ) (let+ m = m in [], m) after in
       let+ (proof_states_after, (proof_state_before, arguments, term)) =
@@ -594,8 +601,7 @@ end = struct
           let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
           subject, arguments, context_range, term in
         let+ root = mk_node ProofState ((ContextSubject, subject)::ctx) in
-        (* TODO: Look into what we should give as the evd here *)
-        let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env Evd.empty in
+        let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
         { ps_string; root; context = context_range; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
     let+ outcomes = List.map gen_outcome outcomes in
@@ -613,8 +619,14 @@ end = struct
           | Undef _ -> ConstUndef, mk_node ConstEmpty []
           | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
           | OpaqueDef c ->
-            let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
-            ConstOpaqueDef, gen_constr c
+            let c =
+              let* include_opaque = lookup_include_opaque in
+              if include_opaque then
+                let c, _ = Opaqueproof.force_proof Library.indirect_accessor (Environ.opaque_tables env) c in
+                gen_constr c
+              else
+                mk_node ConstEmpty [] in
+            ConstOpaqueDef, c
           | Primitive p -> ConstPrimitive, mk_node (Primitive p) [] in
         let+ b = b
         and+ typ = gen_constr const_type in

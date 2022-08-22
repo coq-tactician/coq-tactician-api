@@ -88,6 +88,7 @@ def initialize_loop(r, s, textmode):
     if msg_type == "initialize":
         while g:
             print('---------------- New prediction context -----------------')
+            print(g.initialize.logAnnotation)
             if not textmode:
                 gv.visualize_defs(g.initialize.graph, g.initialize.definitions)
                 print(g.initialize.tactics)
