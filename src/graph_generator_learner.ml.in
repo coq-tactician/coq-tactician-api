@@ -308,10 +308,13 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
     | Some f -> Filename.remove_extension f ^ ".bin"
   let () = Hook.set Stm.document_add_hook (fun CAst.{ loc; _ } _ ->
-      (match loc with
-       | None -> ()
-       | Some Loc.{ fname = ToplevelInput; _ } -> source := None
-       | Some Loc.{ fname = InFile f; _ } -> source := Some f);
+      (* TODO: This does not work because of the '-load-vernac' flag; commands from a loaded file
+         will have their original location attached, which is wrong for our purposes. This manifests
+         itself when compiling an empty file. *)
+      (* (match loc with *)
+      (*  | None -> () *)
+      (*  | Some Loc.{ fname = ToplevelInput; _ } -> source := None *)
+      (*  | Some Loc.{ fname = InFile f; _ } -> source := Some f); *)
       update_graph ())
 
   let resolve_dependencies deps =
