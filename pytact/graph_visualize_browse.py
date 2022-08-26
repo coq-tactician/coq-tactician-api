@@ -1,6 +1,9 @@
 import os
 from tqdm import tqdm
 import graphviz
+import mmap
+from contextlib import contextmanager
+from contextlib import ExitStack
 
 import capnp
 capnp.remove_import_hook()
@@ -18,54 +21,46 @@ def local_paths_to_bin_files(global_path, local_path = None):
     elif os.path.isfile(global_path) and global_path.endswith(".bin"):
         yield local_path
 
-class CapnpFileReader:
-    def __init__(self, fname, graph_api_capnp):
-        self.fname = fname
-        self.graph_api_capnp = graph_api_capnp
-    def __enter__(self):
-        self.f = open(self.fname)
-        self.g = self.graph_api_capnp.Dataset.read(self.f, traversal_limit_in_words=2**64-1)
-        return self.g
-    def __exit__(self, *exception_data):
-        self.g.total_size
-        self.f.close()
+@contextmanager
+def fileDatasetView(fname, graph_api_capnp):
+    def create_mmap(fname):
+        # No need to keep the file open, at least on linux
+        # Closing this prevents file descriptor limits from being exceeded
+        with open(fname, 'rb') as f:
+            return mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ)
+    with create_mmap(fname) as mm:
+        with memoryview(mm) as mv: # Not entirely clear if we need this, but it also couldn't hurt
+            with graph_api_capnp.Dataset.from_bytes(mm, traversal_limit_in_words=2**64-1) as g:
+                yield g
+
+@contextmanager
+def graphVisualisationBrowser(dataset_path, url_prefix):
+    fnames = local_paths_to_bin_files(dataset_path)
+    api = capnp.load(graph_api_capnp())
+    with ExitStack() as stack:
+        dataset = [(fname, stack.enter_context(fileDatasetView(os.path.join(dataset_path, fname), api)))
+                   for fname in fnames]
+        yield GraphVisualisationBrowser(dataset, url_prefix)
 
 class GraphVisualisationBrowser:
-    def __init__(self, dataset_path, url_prefix):
-        self.dataset_path = os.path.abspath(dataset_path)
+    def __init__(self, dataset, url_prefix):
         self.url_prefix = url_prefix
 
-        self.graph_api_capnp = capnp.load(graph_api_capnp())
-
-        #fnames = [f for f in Path(dataset_path).glob('**/*.bin') if f.is_file()]
-        self.fnames = list(local_paths_to_bin_files(dataset_path))
-        self.fnames_set = set(self.fnames)
         self.graphs = {}
         self.deps = {}
         self.definitions = {}
         self.representative = {}
 
-        print("Preload graphs and dependencies")
-        #for fname in tqdm(self.fnames):
-        for fname in self.fnames:
-            with self.open_data(fname) as g:
-                assert fname == g.dependencies[0], (fname, g.dependencies[0])
-                self.deps[fname] = list(g.dependencies)
-                self.graphs[fname] = g.graph
-                self.definitions[fname] = g.definitions
-                self.representative[fname] = g.representative
-                g.total_size
+        for fname, g in dataset:
+            assert fname == g.dependencies[0], (fname, g.dependencies[0])
+            self.deps[fname] = list(g.dependencies)
+            self.graphs[fname] = g.graph
+            self.definitions[fname] = g.definitions
+            self.representative[fname] = g.representative
 
         for fname, deps in self.deps.items():
             for dep in deps:
                 assert dep in self.deps, (fname, dep)
-
-    def open_data(self, fname):
-        assert fname in self.fnames_set # security :-)
-        return CapnpFileReader(
-            os.path.join(self.dataset_path, fname),
-            self.graph_api_capnp
-        )
 
     def get_url(self, bin_fname, svg_fname):
         base = os.path.splitext(bin_fname)[0]
@@ -88,7 +83,7 @@ class GraphVisualisationBrowser:
 
     def node_id(self, depindex, nodeindex):
         return str(depindex) + "-" + str(nodeindex)
-    
+
     def render_node(self, dot, node, depindex, nodeindex, dependencies, representative, prefix=None):
         id = self.node_id(depindex, nodeindex)
         if node.label.which() == 'definition':
@@ -109,7 +104,7 @@ class GraphVisualisationBrowser:
         node_id = f"file-{i}"
         dot.node(node_id, label, URL = self.global_context_url(deps[i]))
         return node_id
-    
+
     def global_context(self, fname):
         dependencies = self.deps[fname]
         graphs = [self.graphs[dep] for dep in dependencies]
