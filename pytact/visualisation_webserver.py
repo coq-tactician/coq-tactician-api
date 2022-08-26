@@ -94,7 +94,7 @@ def main():
             "http://{}:{}/".format(args.hostname, args.port)) as gv:
         def handler(*args):
             VisualisationServer(gv, *args)
-        webServer = HTTPServer(('127.0.0.1', args.port), handler)
+        webServer = HTTPServer(('0.0.0.0', args.port), handler)
         print(f"Server started {gv.root_file_url()}")
 
         try:
