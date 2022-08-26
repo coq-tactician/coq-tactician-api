@@ -35,11 +35,11 @@ setuptools.setup(
                                'tests/TestReinforceStdin.v',
                                'tests/TestReinforceTcp.v',
                                'tests/prop4.txt']},
-    install_requires=['pycapnp', 'graphviz', 'ptpython'],
+    install_requires=['pycapnp', 'graphviz', 'ptpython', 'tqdm'],
     entry_points={'console_scripts': [
                                       'pytact-server=pytact.fake_python_server:main',
                                       'pytact-check=pytact.graph_sanity_check:main',
-                                      'pytact-visualize=pytact.visualize_file:main',
+                                      'pytact-visualize=pytact.visualisation_webserver:main',
                                       'pytact-generate-index=pytact.visualize_file:generate_index',
                                       'pytact-prover=pytact.prover:main'
                                       ]

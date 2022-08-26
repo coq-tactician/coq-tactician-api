@@ -5,7 +5,7 @@ import time
 import sys
 import os
 
-from graph_visualize_browse import GraphVisualisationBrowser
+from pytact.graph_visualize_browse import GraphVisualisationBrowser
 
 #hostNameExternal = "64.71.146.87"
 #hostName = "10.64.66.7"
@@ -73,9 +73,8 @@ class VisualisationServer(BaseHTTPRequestHandler):
         self.wfile.write(bytes("<body>", "utf-8"))
         self.wfile.write(bytes("<p>Unexpected path</p>", "utf-8"))
         self.wfile.write(bytes("</body></html>", "utf-8"))
-            
-            
-if __name__ == "__main__":
+
+def main():
     webServer = HTTPServer((hostName, serverPort), VisualisationServer)
     print(f"Server started {gv.root_file_url()}")
 
@@ -86,3 +85,6 @@ if __name__ == "__main__":
 
     webServer.server_close()
     print("Server stopped.")
+
+if __name__ == "__main__":
+    main()
