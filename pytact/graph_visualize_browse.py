@@ -30,7 +30,7 @@ def fileDatasetView(fname, graph_api_capnp):
             return mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ)
     with create_mmap(fname) as mm:
         with memoryview(mm) as mv: # Not entirely clear if we need this, but it also couldn't hurt
-            with graph_api_capnp.Dataset.from_bytes(mm, traversal_limit_in_words=2**64-1) as g:
+            with graph_api_capnp.Dataset.from_bytes(mv, traversal_limit_in_words=2**64-1) as g:
                 yield g
 
 @contextmanager
