@@ -24,7 +24,10 @@ class VisualisationServer(BaseHTTPRequestHandler):
         dirname, basename = os.path.split(self.path)
         dirname = dirname.removeprefix('/')
         if basename == "file_deps.svg":
-            self.send_svg(self.gv.file_deps(dirname.split('/')))
+            expand_path = dirname.split('/')
+            if expand_path == ['']:
+                expand_path = []
+            self.send_svg(self.gv.file_deps(expand_path))
             return
         fname = dirname+".bin"
         print("fname:", fname)
