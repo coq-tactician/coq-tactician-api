@@ -271,11 +271,6 @@ class GraphVisualisationBrowser:
 
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
-        label = graphs[0].nodes[definition].label.definition.name
-        dot.attr('graph', label=f"Definition {label} from {fname}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.global_context_url(fname))
 
         self.visualize_term(dot, graphs, definition, dependencies,
                        depth=depth, prefix=None, maxNodes=maxNodes, showLabel=showLabel, seen=set())
@@ -290,6 +285,11 @@ class GraphVisualisationBrowser:
                      URL = self.proof_url(fname, definition),
                      fontsize="40pt")
 
+        label = graphs[0].nodes[definition].label.definition.name
+        dot.attr('graph', label=f"Definition {label} from {fname}")
+        dot.attr('graph', fontsize="40pt")
+        dot.attr('graph', labelloc="t")
+        dot.attr('graph', URL=self.global_context_url(fname))
         return dot.pipe()
 
     def proof(self, fname, definition):
@@ -303,61 +303,47 @@ class GraphVisualisationBrowser:
 
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
-        label = graphs[0].nodes[definition].label.definition.name
-        dot.attr('graph', label=f"Proof of {label} from {dependencies[0]}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.definition_url(fname, definition))
-        surrogates = {}
-        step_before_ids = {}
-        has_after = {}
+        surrogates = set()
+        outcome_to_id = {}
         for i, step in enumerate(proof):
             for j, outcome in enumerate(step.outcomes):
                 id = str(outcome.before.id)
-                while id in step_before_ids:
+                while id in surrogates:
                     id = id + '-s'
-                step_before_ids[id] = (i, j)
-                for after in outcome.after:
-                    has_after[after.id] = True
+                surrogates.add(id)
+                outcome_to_id[(i, j)] = id
         for i, step in enumerate(proof):
             with dot.subgraph(name='cluster_' + str(i)) as dot2:
+                dot2.attr('graph', labelloc="b")
                 if step.tactic.which() == 'known':
                     tactic_text = step.tactic.known.text
                 else:
                     tactic_text = 'unknown'
                 dot2.attr(label=tactic_text)
                 for j, outcome in enumerate(step.outcomes):
-                    if outcome.before.id not in has_after:
-                        #dot.node(str(outcome.before.id), label='⬤', shape='doublecircle',
-                        #       URL = self.proof_outcome_url(fname, definition, i, j))
-                        dot.node(str(outcome.before.id), label='⬤', shape='doublecircle',
-                                 style="filled", fillcolor="white",
-                                 URL = self.proof_outcome_url(fname, definition, i, j))
-
+                    before_id = outcome_to_id[(i, j)]
+                    dot2.node(before_id, label='⬤', shape='circle',
+                              fontsize="10pt", fixedsize="true", width="0.3pt",
+                              style="filled", fillcolor="white",
+                              URL = self.proof_outcome_url(fname, definition, i, j))
                     for after in outcome.after:
                         if outcome.before.id == after.id:
-                            before_id = surrogates.get(str(outcome.before.id), str(outcome.before.id))
                             after_id = before_id + '-s'
-                            (stepi, outcomei) = step_before_ids[after_id]
-                            dot2.node(after_id, label='⬤', shape='doublecircle',
-                                      style="filled", fillcolor="white",
-                                      URL = self.proof_outcome_url(fname, definition, stepi, outcomei))
-                            dot.edge(before_id, after_id, style='dashed')
-                            surrogates[str(after.id)] = after_id
+                            style = 'dashed'
                         else:
-                            before_id = surrogates.get(str(outcome.before.id), str(outcome.before.id))
-                            after_id = surrogates.get(str(after.id), str(after.id))
-                            (stepi, outcomei) = step_before_ids[after_id]
-                            dot2.node(after_id, label='⬤', shape='doublecircle',
-                                      style="filled", fillcolor="white",
-                                      URL = self.proof_outcome_url(fname, definition, stepi, outcomei))
-                            dot.edge(before_id, after_id)
+                            after_id = str(after.id)
+                            style = 'solid'
+                        dot.edge(before_id, after_id, style=style)
                     if not outcome.after:
                         qedid = str('qed-'+str(i)+'-'+str(j))
-                        before_id = surrogates.get(str(outcome.before.id), str(outcome.before.id))
                         dot2.node(qedid, label='', shape='point')
-                        dot.edge(str(before_id), str(qedid))
+                        dot.edge(before_id, qedid)
 
+        label = graphs[0].nodes[definition].label.definition.name
+        dot.attr('graph', label=f"Proof of {label} from {dependencies[0]}")
+        dot.attr('graph', fontsize="40pt")
+        dot.attr('graph', labelloc="t")
+        dot.attr('graph', URL=self.definition_url(fname, definition))
         #print(dot.source)
         return dot.pipe()
 
