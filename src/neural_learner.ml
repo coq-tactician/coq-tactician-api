@@ -144,10 +144,10 @@ let connect_socket my_socket =
   Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
 
 let connect_stdin () =
-  Feedback.msg_notice Pp.(str "starting proving server with connection through their stdin");
+  Feedback.msg_debug Pp.(str "starting proving server with connection through their stdin");
   let my_socket, other_socket = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   let mode = if textmode_option () then "text" else "graph" in
-  Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
+  Feedback.msg_debug Pp.(str "using textmode option" ++ str mode);
   let pid =
     if CString.is_empty @@ executable_option () then
       Unix.create_process
@@ -167,24 +167,34 @@ let connect_stdin () =
   Unix.close other_socket;
   connection
 
-let connect_tcpip ip_addr port =
-  Feedback.msg_notice Pp.(str "connecting to proving server on" ++ ws 1 ++ str ip_addr ++ ws 1 ++ int port);
-  Feedback.msg_notice Pp.(str "tcp option " ++ str (tcp_option ()));
-  let my_socket =  Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-  let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
-  (try
-     Unix.connect my_socket server_addr;
-     Feedback.msg_notice Pp.(str "connected to python server");
-   with
-   | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> CErrors.user_err Pp.(str "connection to proving server refused")
-   | ex ->
-     Unix.close my_socket;
-     CErrors.user_err Pp.(str "exception caught, closing connection to prover")
-  );
-  let (read_context, write_context) as connection = connect_socket my_socket in
+let pp_addr Unix.{ ai_addr; ai_canonname; _ } =
+  let open Pp in
+  (match ai_addr with
+   | Unix.ADDR_INET (addr, port) -> str (Unix.string_of_inet_addr addr) ++ str ":" ++ int port
+   | Unix.ADDR_UNIX s -> str "Unix domain " ++ str s) ++ str " " ++
+  str "(canonical: " ++ str ai_canonname ++ str ")"
+
+let connect_tcpip host port =
+  Feedback.msg_debug Pp.(str "connecting to proving server on" ++ ws 1 ++ str host ++ str ":" ++ str port);
+  let addrs = Unix.(getaddrinfo host port [AI_SOCKTYPE SOCK_STREAM; AI_CANONNAME]) in
+  if addrs = [] then
+    CErrors.user_err Pp.(str "Could not resolve address" ++ ws 1 ++ str host ++ str ":" ++ str port);
+  let rec connect = function
+    | [] -> CErrors.user_err Pp.(str "Connection to proving server refused at addresses" ++ fnl () ++
+                                 prlist_with_sep fnl pp_addr addrs)
+    | addr::addrs ->
+      let my_socket =  Unix.(socket addr.ai_family addr.ai_socktype addr.ai_protocol) in
+      (try
+         Feedback.msg_debug Pp.(str "Attempting to connect to" ++ ws 1 ++ pp_addr addr);
+         Unix.(connect my_socket addr.ai_addr);
+         Feedback.msg_debug Pp.(str "connected to python server");
+         my_socket
+       with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
+  let socket = connect addrs in
+  let (read_context, write_context) as connection = connect_socket socket in
   Declaremods.append_end_library_hook (fun () ->
       drain read_context write_context;
-      Unix.close my_socket;
+      Unix.close socket;
     );
   connection
 
@@ -198,7 +208,7 @@ let get_connection =
           connect_stdin ()
         else
           let addr = Str.split (Str.regexp ":") (tcp_option()) in
-          connect_tcpip (List.nth addr 0) (int_of_string (List.nth addr 1)) in
+          connect_tcpip (List.nth addr 0) (List.nth addr 1) in
       connection := Some c;
       c
     | Some c -> c
