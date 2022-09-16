@@ -214,10 +214,14 @@ async def runTactic(obj, tactic, vis=None):
     vis: pytact.graph_visualize.Visualizer
     """
     logger.info("awaiting tactic %s", repr(tactic))
-    resp = await obj.runTactic(*tactic).a_wait()
+    if isinstance(tactic, str):
+        resp = await obj.runTextTactic(tactic).a_wait()
+    else:
+        resp = await obj.runTactic(*tactic).a_wait()
     result = resp.result
     logger.info('received result of type %s', result.which())
     if result.which() == 'newState':
+        logger.info('new proof state: %s', result.newState.state.text)
         root = result.newState.state.root
         context = list(result.newState.state.context)
         logger.debug('with root: %d', root)

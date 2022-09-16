@@ -382,6 +382,7 @@ struct ExecutionResult {
 interface ProofObject {
   # Represents a particular proof state.
   runTactic @0 (tactic: Tactic, arguments: List(Argument)) -> (result: ExecutionResult);
+  runTextTactic @1 (tactic :Text) -> (result: ExecutionResult);
   # Run a tactic on the proof state. This function can be called repeatedly, and the given tactic will always be
   # executed on the same proof state.
 }

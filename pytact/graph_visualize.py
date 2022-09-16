@@ -494,7 +494,6 @@ class Visualizer:
         self.count = count
         self.show_labels = show_labels
         self.cleanup = cleanup
-        logger.error("with self.count %d", self.count)
     def _visualize(self, filename, result):
         if result.which() == 'newState':
             visualize(result.newState.graph, result.newState.state,

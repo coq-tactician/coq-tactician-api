@@ -68,8 +68,10 @@ pip install git+ssh://git@github.com/coq-tactician/coq-tactician-reinforce.git
 
 To see how it works, run
 ```
-pytact-test
+pytact-prover --pdfsequence --pdfname test
 ```
+This will execute a dummy proof through the reinforcement learning interface. Visualizations of each proof state
+are available in `test<n>.pdf`.
 optionally `--file` option to point to a source Coq `.v` file.
 Also with `--interactive` option the innteractive shell appears where you can
 manually interact with the environment. Whenever a tactic is executed,

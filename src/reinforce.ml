@@ -29,7 +29,7 @@ let gen_proof_state env (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : 
   let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
   root, map
 
-let write_execution_result env res hyps concl obj =
+let write_execution_result env sigma res hyps concl obj =
   let module ExecutionResult = Api.Builder.ExecutionResult in
   let module Graph = Api.Builder.Graph in
   let module ProofState = Api.Builder.ProofState in
@@ -57,6 +57,7 @@ let write_execution_result env res hyps concl obj =
   let state = ExecutionResult.NewState.state_init new_state in
   ProofState.root_set_int_exn state @@ node_index_transform root;
   let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
+  ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env sigma;
   let capability = obj context_map_inv in
   ExecutionResult.NewState.obj_set new_state (Some capability);
   Capability.dec_ref capability
@@ -76,7 +77,7 @@ let write_execution_result env res obj =
        let sigma = Proofview.Goal.sigma gl in
        let hyps = OList.map (Graph_extractor.map_named (EConstr.to_constr sigma)) hyps in
        let concl = EConstr.to_constr sigma concl in
-       write_execution_result env res hyps concl obj; tclUNIT ()))
+       write_execution_result env sigma res hyps concl obj; tclUNIT ()))
 
 let write_execution_result env state res obj =
   ignore (Pfedit.solve Goal_select.SelectAll None (write_execution_result env res obj) state)
@@ -129,6 +130,37 @@ let rec proof_object env state tacs context_map =
           Feedback.msg_notice @@ Pp.(str "run tactic " ++ prtac);
 
           let tac = Ltacrecord.parse_tac tac in
+          let nosuchgoal = Proofview.tclZERO (Proof_bullet.SuggestNoSuchGoals (1, state)) in
+          let tac = Proofview.tclFOCUS ~nosuchgoal 1 1 tac in
+          try
+            let state', _safe = Pfedit.solve Goal_select.SelectAll None tac state in
+            write_execution_result env state' res (proof_object env state' tacs)
+          with Logic_monad.TacticFailure e ->
+            ExecutionResult.failure_set res
+        with
+        | NoSuchTactic ->
+          let exc = ExecutionResult.protocol_error_init res in
+          Exception.no_such_tactic_set exc
+        | MismatchedArguments ->
+          let exc = ExecutionResult.protocol_error_init res in
+          Exception.mismatched_arguments_set exc
+        | IllegalArgument ->
+          let exc = ExecutionResult.protocol_error_init res in
+          Exception.illegal_argument_set exc
+      end;
+      Service.return response
+    method run_text_tactic_impl params release_param_caps =
+      release_param_caps ();
+      let open ProofObject.RunTextTactic in
+      let response, results = Service.Response.create Results.init_pointer in
+      let res = Results.result_init results in
+      let tac = Params.tactic_get params in
+      begin
+        try
+          let tac = try
+            Tacinterp.interp @@ Pcoq.parse_string Pltac.tactic_eoi tac
+          with e when CErrors.noncritical e ->
+            raise NoSuchTactic in
           let nosuchgoal = Proofview.tclZERO (Proof_bullet.SuggestNoSuchGoals (1, state)) in
           let tac = Proofview.tclFOCUS ~nosuchgoal 1 1 tac in
           try
