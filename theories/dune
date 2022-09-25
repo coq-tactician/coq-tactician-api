@@ -1,5 +1,5 @@
 (coq.theory
- (name Tactician)
+ (name TacticianReinforce)
  (package coq-tactician-reinforce)
  (flags -q -noinit)
  (modules )

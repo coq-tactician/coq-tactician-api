@@ -357,7 +357,7 @@ module GraphBuilder
   type 'a with_envs = Environ.env -> env_extra -> 'a
   val gen_const               : (constant -> node t) with_envs
   val gen_mutinductive_helper : (mutind -> unit t) with_envs
-  val gen_inductive           : (inductive -> node' t) with_envs
+  val gen_inductive           : (inductive -> node t) with_envs
   val gen_constructor         : (constructor -> node t) with_envs
   val gen_projection          : (Projection.t -> node t) with_envs
   val gen_constr              : (Constr.t -> node t) with_envs
@@ -773,10 +773,11 @@ end = struct
       CErrors.anomaly (Pp.str "Unexpected meta")
     | Evar (ev, substs) ->
       let* subject = lookup_evar ev in
+      let ev = Evar.repr ev in
       (match subject with
        | None -> (* TODO: This should be properly resolved at some point *)
          let* undef = mk_node UndefProofState [] in
-         mk_node Evar [ EvarSubject, undef ]
+         mk_node (Evar ev) [ EvarSubject, undef ]
        | Some (n, ctx) ->
          if not (Array.length ctx = Array.length substs) then
            CErrors.anomaly Pp.(str "Array length difference " ++
@@ -787,7 +788,7 @@ end = struct
              let* c = gen_constr c in
              map (fun n -> EvarSubstPointer, n) @@
              mk_node EvarSubst [EvarSubstTerm, c; EvarSubstTarget, t]) substs in
-         mk_node Evar ((EvarSubject, n)::substs))
+         mk_node (Evar ev) ((EvarSubject, n)::substs))
     | Sort s ->
       mk_node (match s with
           | Sorts.SProp -> SortSProp

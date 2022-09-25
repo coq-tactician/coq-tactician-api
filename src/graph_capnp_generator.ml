@@ -128,7 +128,7 @@ module CapnpGraphWriter(P : sig type path end)(G : GraphMonadType with type node
     | SortSet -> sort_set_set cnt
     | SortType -> sort_type_set cnt
     | Rel -> rel_set cnt
-    | Evar -> evar_set cnt
+    | Evar _ -> evar_set cnt
     | EvarSubst -> evar_subst_set cnt
     | Cast -> cast_set cnt
     | Prod _ -> prod_set cnt
