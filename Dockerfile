@@ -2,6 +2,9 @@ FROM pestun/coq_python_reinforce_deps
 
 MAINTAINER Vasily Pestun "pestun@ihes.fr"
 
+RUN sudo apt-get update
+RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev
+
 COPY --chown=coq:coq . coq-tactician-reinforce
 
 WORKDIR coq-tactician-reinforce
