@@ -143,8 +143,9 @@ class GraphVisualisationBrowser:
                                             target.depIndex, target.nodeIndex, dependencies, representative)
                         dot2.edge(id, id2,
                                  arrowtail="odot", dir="both", constraint="false", style="dashed")
-            dot.edge(id, self.node_id(0, value.label.definition.previous),
-                     arrowtail="dot", dir="both", constraint="true")
+            if value.label.definition.previous != len(nodes):
+                dot.edge(id, self.node_id(0, value.label.definition.previous),
+                         arrowtail="dot", dir="both", constraint="true")
             for fi in value.label.definition.externalPrevious:
                 fid = self.render_file_node(dot, dependencies, fi)
                 dot.edge(id, fid,
