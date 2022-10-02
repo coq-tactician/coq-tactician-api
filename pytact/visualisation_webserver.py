@@ -4,14 +4,9 @@ from pathlib import Path
 import time
 import sys
 import os
+import argparse
 
 from pytact.graph_visualize_browse import graphVisualisationBrowser
-
-#hostNameExternal = "64.71.146.87"
-#hostName = "10.64.66.7"
-hostName = "localhost"
-hostNameExternal = hostName
-serverPort = 8080
 
 class VisualisationServer(BaseHTTPRequestHandler):
     def __init__(self, gv, *args):
@@ -75,12 +70,31 @@ class VisualisationServer(BaseHTTPRequestHandler):
         self.wfile.write(bytes("</body></html>", "utf-8"))
 
 def main():
+
+    parser = argparse.ArgumentParser(
+        description = 'Dataset visualization webserver',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument('dir',
+                        type=str,
+                        help='the directory of the dataset')
+    parser.add_argument('--port',
+                        type=int,
+                        default=8080,
+                        help='the port where the webserver should listen')
+    parser.add_argument('--hostname',
+                       type=str,
+                       default='localhost',
+                       help='the ip or domain of the hosting machine')
+
+    args = parser.parse_args()
+
     with graphVisualisationBrowser(
-            sys.argv[1],
-            "http://{}:{}/".format(hostNameExternal, serverPort)) as gv:
+            args.dir,
+            "http://{}:{}/".format(args.hostname, args.port)) as gv:
         def handler(*args):
             VisualisationServer(gv, *args)
-        webServer = HTTPServer((hostName, serverPort), handler)
+        webServer = HTTPServer(('0.0.0.0', args.port), handler)
         print(f"Server started {gv.root_file_url()}")
 
         try:
