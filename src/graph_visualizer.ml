@@ -139,7 +139,7 @@ module rec SimpleHashedCICGraph : sig
   type result = (final * (edge_type * int) list) DList.t
   val final_to_string : final -> string
   include GraphMonadType
-    with type node_label = SimpleHashedCICGraph.node node_type
+    with type node_label = node' node_type
      and type edge_label = edge_type
      and type 'a repr_t =
            'a *
@@ -153,7 +153,7 @@ end = struct
   let final_to_string x = Graph_def.show_node_type (fun _ _ -> ()) @@ fst x
   include GraphHasher
       (struct
-        type node_label = SimpleHashedCICGraph.node node_type
+        type node_label = node' node_type
         type edge_label = edge_type
       end)
       (CICHasher(XXHasher))

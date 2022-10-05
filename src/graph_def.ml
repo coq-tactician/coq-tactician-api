@@ -402,40 +402,40 @@ end = struct
     aux init ls
 end
 
-(* TODO: See if this can be merged with SimpleGraph *)
 type edge_label = edge_type
 type edge_range = { start : int; size : int }
-module GlobalGraph(S : Set.S) : sig
+type ('p, 'nl, 'el, 'n) builder =
+  { paths : 'p
+  ; def_count : int
+  ; node_count : int
+  ; edge_count : int
+  ; defs : ('nl * edge_range) AList.t
+  ; nodes : ('nl * edge_range) AList.t
+  ; edges : ('el * 'n) AList.t }
+(* TODO: See if this can be merged with SimpleGraph *)
+module GlobalGraph(S : Set.S)
+    (D : sig
+       type node_label
+       type edge_label
+       val is_definition : node_label -> bool
+     end)
+  : sig
   type node' = S.elt * (bool * int)
-  type builder =
-    { paths : S.t
-    ; def_count : int
-    ; node_count : int
-    ; edge_count : int
-    ; defs : (node' node_type * edge_range) AList.t
-    ; nodes : (node' node_type * edge_range) AList.t
-    ; edges : (edge_label * node') AList.t }
+  type nonrec builder = (S.t, D.node_label, D.edge_label, node') builder
   val builder_nil : builder
   include GraphMonadType
-  with type node_label = node' node_type
-   and type edge_label = edge_label
+  with type node_label = D.node_label
+   and type edge_label = D.edge_label
    and type node = node'
    and type 'a repr_t = builder -> S.elt -> 'a * builder
 end = struct
   type node' = S.elt * (bool * int)
   type node = node'
-  type builder =
-    { paths : S.t
-    ; def_count : int
-    ; node_count : int
-    ; edge_count : int
-    ; defs : (node' node_type * edge_range) AList.t
-    ; nodes : (node' node_type * edge_range) AList.t
-    ; edges : (edge_label * node') AList.t }
+  type nonrec builder = (S.t, D.node_label, D.edge_label, node') builder
   let builder_nil = { paths = S.empty; def_count = 0; node_count = 0; edge_count = 0
                     ; defs = AList.nil; nodes = AList.nil; edges = AList.nil }
-  type edge_label = edge_type
-  type node_label = node node_type
+  type edge_label = D.edge_label
+  type node_label = D.node_label
   type children = (edge_label * node) list
   type state =
     { def_count : int
@@ -471,11 +471,11 @@ end = struct
     let* { def_count; node_count; edge_count } = get in
     let edge_count' = List.length ch in
     let* defs, nodes, i =
-      match nl with
-      | Definition _ ->
+      match D.is_definition nl with
+      | true ->
         let+ () = put { def_count = def_count + 1; node_count; edge_count = edge_count + edge_count' } in
         AList.singleton (nl, { start = edge_count; size = edge_count' }), AList.nil, (true, def_count)
-      | _ ->
+      | false ->
         let+ () = put { def_count; node_count = node_count + 1; edge_count = edge_count + edge_count' } in
         AList.nil, AList.singleton (nl, { start = edge_count; size = edge_count' }), (false, node_count)
     in
@@ -500,10 +500,10 @@ end = struct
     let+ () = put {s with edge_count = edge_count + edge_count' } in
     v, fun { defs; nodes; edges; paths } ->
       let defs, nodes =
-        match definition, nl with
-        | true, Definition _ ->
+        match definition, D.is_definition nl with
+        | true, true ->
           AList.cons (nl, { start = edge_count; size = edge_count' }) defs, nodes
-        | false, _ ->
+        | false, false ->
           defs, AList.cons (nl, { start = edge_count; size = edge_count' }) nodes
         | _, _ -> assert false in
       { defs; nodes; edges = AList.append edges (AList.of_list ch)
@@ -706,39 +706,38 @@ module GraphHasher
       with type node_label = D.node_label
        and type edge_label = D.edge_label
        and type 'a repr_t = 'a G.repr_t
-    val reduce : node -> G.node
+    val lower : node -> G.node * H.t
+    val lift : G.node * H.t -> node
   end
 = struct
   type node_label = D.node_label
   type edge_label = D.edge_label
-  type node' =
+  type binder_info =
+    { is_definition : bool option
+    ; final : bool
+    ; seen : bool }
+  type node_info =
+    { label : node_label
+    ; children : (edge_label * node) list
+    ; hash : H.t
+    ; size : int
+    ; id : int
+    ; depth : int }
+  and node' =
+    | Normal of node_info
+    | BinderPlaceholder of { depth : int }
+    | Binder of node_info * binder_info
     | Written of G.node * H.t
-    | Normal of
-        { label : node_label
-        ; hash : H.t
-        ; children : (edge_label * node) list
-        ; size : int }
-    | BinderPlaceholder
-    | Binder of
-        { label : node_label
-        ; hash : H.t
-        ; children : (edge_label * node) list
-        ; is_definition : bool option
-        ; size : int
-        ; final : bool
-        ; seen : bool
-        }
-  and node = { id : int
-             ; depth : int
-             ; mutable contents : node' }
-  let gen_node =
+  and node = node' ref
+  let gen_id =
     let id = ref 0 in
-    fun depth contents ->
+    fun () ->
       id := !id + 1;
-      { id = !id; depth; contents }
-  let reduce { contents; _ } = match contents with
-    | Written (n, _) -> n
+      !id
+  let lower n = match !n with
+    | Written (n, h) -> n, h
     | _ -> assert false
+  let lift (g, h) = ref @@ Written (g, h)
   type children = (edge_label * node) list
   type 'a repr_t = 'a G.repr_t
 
@@ -747,7 +746,7 @@ module GraphHasher
   module M = Monad_util.ReaderStateMonadT
       (G)
       (struct type r = int end)
-      (struct type s = G.node HashMap.t end)
+      (struct type s = G.node HashMap.t end) (* TODO: Consider replacing this with a mutable hashmap for speed *)
 
   module OList = List
   open M
@@ -757,16 +756,16 @@ module GraphHasher
   let calc_hash curr_depth nl ch =
     (* Technically speaking, we should sort the hashes to make the final hash invariant w.r.t. child ordering.
        However, because the ordering is deterministic in practice, we don't need to do that. *)
-    let hashes state = OList.fold_left (fun state (el, { depth; contents; _ }) ->
-        let n = match contents with
+    let hashes state = OList.fold_left (fun state (el, n) ->
+        let n = match !n with
           | Written (_, hash) -> hash
+          | BinderPlaceholder { depth } -> H.with_state @@ H.update_int (curr_depth - depth)
           | Normal { hash; _ } -> hash
-          | Binder { seen = false; hash; _ } -> hash
-          | Binder { seen = true; final = false; _ } ->
-            Feedback.msg_notice Pp.(str "binder at depth " ++ int depth ++ str " current depth " ++ int curr_depth ++ str " de Bruijn: " ++ int (curr_depth - depth));
-            H.with_state @@ H.update_int (curr_depth - depth)
-          | Binder { seen = true; final = true; hash; _ } -> hash
-          | BinderPlaceholder -> H.with_state @@ H.update_int (curr_depth - depth)
+          | Binder ({ hash; _ }, { seen = false; _ }) -> hash
+          | Binder ({ depth; _ }, { seen = true; final = false; _ }) ->
+              Feedback.msg_notice Pp.(str "binder at depth " ++ int depth ++ str " current depth " ++ int curr_depth ++ str " de Bruijn: " ++ int (curr_depth - depth));
+              H.with_state @@ H.update_int (curr_depth - depth)
+          | Binder ({ hash; _ }, { seen = true; final = true; _ }) -> hash
         in
         H.update n @@ H.update_edge_label el state
       ) state ch in
@@ -778,8 +777,8 @@ module GraphHasher
       of n we have `node_size n > node_size n'`.
       The constant function satisfies those requirements but would make this algorithm O(n^2).
   *)
-  let node_size { contents; _ } =
-    match contents with
+  let node_size n =
+    match !n with
     | Written (_, hash) ->
       (* Any positive value such that written nodes that are equal have the same value works here.
          A constant 0 would be sufficient. But this would make the algorithm less efficient.
@@ -787,9 +786,9 @@ module GraphHasher
          the hash to 32 bits. *)
       (abs @@ H.to_int hash) mod 4294967296
     | Normal { size; _ } -> size
-    | Binder { seen = true; _ } -> 0
-    | Binder { seen = false; size; _ } -> size
-    | BinderPlaceholder -> 0
+    | Binder (_, { seen = true; _ }) -> 0
+    | Binder ({ size; _ }, { seen = false; _ }) -> size
+    | BinderPlaceholder _ -> 0
   let calc_size ch =
     let size = OList.map (fun (el, n) -> node_size n) ch in
     let rews = OList.fold_left (+) 1 size in
@@ -803,94 +802,100 @@ module GraphHasher
     if converged then begin
       let* map = get in
       match HashMap.find_opt hash map with
-      | Some node -> return @@ gen_node depth @@ Written (node, hash)
+      | Some node -> return @@ ref @@ Written (node, hash)
       | None ->
         let ch = OList.map (function | (el, { contents = Written (n, _); _ }) -> el, n | _ -> assert false) ch in
         let* node = lift @@ G.mk_node (nl, hash) ch in
         let+ () = put (HashMap.add hash node map) in
         Feedback.msg_notice Pp.(str "Add node with hash: " ++ int (H.to_int hash));
-        gen_node depth @@ Written (node, hash)
+        ref @@ Written (node, hash)
     end else begin
       let size = calc_size ch in
-      return @@ gen_node depth @@ Normal
+      return @@ ref @@ Normal
         { label = nl
         ; children = ch
         ; size
-        ; hash }
+        ; hash
+        ; id = gen_id ()
+        ; depth }
   end
 
-  let rec recalc_hash ({ depth; contents; _ } as n) =
+  let rec recalc_hash n =
     Feedback.msg_notice Pp.(str "recalc hash");
-    match contents with
+    match !n with
     | Written _ ->
       Feedback.msg_notice Pp.(str "recalc hash : written")
-    | Binder { seen = true; _ } ->
+    | Binder (_, { seen = true; _ }) ->
       Feedback.msg_notice Pp.(str "recalc hash : binder seen")
-    | Binder { seen = false; final = true; _ } -> assert false
-    | Binder ({ seen = false; label; children; _ } as n') ->
+    | Binder (_, { seen = false; final = true; _ }) -> assert false
+    | Binder (({ label; children; depth; _ } as i), ({ seen = false; _ } as bi)) ->
       Feedback.msg_notice Pp.(str "recalc hash : binder unseen");
-      n.contents <- Binder { n' with seen = true };
+      n.contents <- Binder (i, { bi with seen = true });
       OList.iter recalc_hash @@ OList.map snd children;
       let hash = calc_hash depth label children in
-      n.contents <- Binder { n' with hash }
-    | Normal ({ label; children; _ } as n') ->
+      n.contents <- Binder ({ i with hash }, bi)
+    | Normal ({ label; children; depth; _ } as i) ->
       Feedback.msg_notice Pp.(str "recalc hash : normal");
       OList.iter recalc_hash @@ OList.map snd children;
       let hash = calc_hash depth label children in
-      n.contents <- Normal { n' with hash }
-    | _ -> assert false
+      n.contents <- Normal { i with hash }
+    | BinderPlaceholder _ -> assert false
 
-  let rec write_node_and_children ({ contents; _ } as n) =
+  let rec write_node_and_children n =
     Feedback.msg_notice Pp.(str "write node and children");
-    match contents with
+    match !n with
     | Written (n, _) ->
       Feedback.msg_notice Pp.(str "write node and children : written");
       return n
-    | Normal { hash; label; children; _ } ->
-      Feedback.msg_notice Pp.(str "write node and children : normal");
-      let* ch = List.map (fun (el, n) -> let+ n = write_node_and_children n in el, n) children in
-      let* map = get in
-      (match HashMap.find_opt hash map with
-       | Some node -> n.contents <- Written (node, hash); return node
-       | None ->
-         let* node = lift @@ G.mk_node (label, hash) ch in
-         let+ () = put (HashMap.add hash node map) in
-         n.contents <- Written (node, hash);
-         node)
-    | Binder { hash; final = true; label; children; is_definition; _ } ->
-      Feedback.msg_notice Pp.(str "write node and children : binder");
-      let* map = get in
-      (match HashMap.find_opt hash map with
-       | Some node ->
-         n.contents <- Written (node, hash);
-         let+ _ = List.map (fun (el, n) -> let+ n = write_node_and_children n in el, n) children in
-         node
-       | None ->
-         let* depth = ask in
-         let* map, node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
-           let computation =
-             let* () = put (HashMap.add hash node map) in
-             n.contents <- Written (node, hash);
-             let+ ch = List.map (fun (el, n) -> let+ n = write_node_and_children n in el, n) children in
-             node, (label, hash), ch in
-           G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@ run computation depth (* depth really doesn't matter*) map in
-         let+ () = put map in
-         node
-      )
-    | _ -> assert false
+    | Normal { label; children; hash; _ } ->
+        Feedback.msg_notice Pp.(str "write node and children : normal");
+        let* ch = List.map (fun (el, n) -> let+ n = write_node_and_children n in el, n) children in
+        let* map = get in
+        (match HashMap.find_opt hash map with
+         | Some node -> n.contents <- Written (node, hash); return node
+         | None ->
+           let* node = lift @@ G.mk_node (label, hash) ch in
+           let+ () = put (HashMap.add hash node map) in
+           n.contents <- Written (node, hash);
+           node)
+      | Binder ({ label; children; hash; _ }, { final = true; is_definition; _ }) ->
+        Feedback.msg_notice Pp.(str "write node and children : binder");
+        let* map = get in
+        (match HashMap.find_opt hash map with
+         | Some node ->
+           n.contents <- Written (node, hash);
+           let+ _ = List.map (fun (el, n) -> let+ n = write_node_and_children n in el, n) children in
+           node
+         | None ->
+           let* depth = ask in
+           let* map, node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
+             let computation =
+               let* () = put (HashMap.add hash node map) in
+               n.contents <- Written (node, hash);
+               let+ ch = List.map (fun (el, n) -> let+ n = write_node_and_children n in el, n) children in
+               node, (label, hash), ch in
+             G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@ run computation depth (* depth really doesn't matter*) map in
+           let+ () = put map in
+           node
+        )
+      | Binder (_, { final = false; _ }) | BinderPlaceholder _ -> assert false
 
   module NodeSet = Set.Make(
     struct
       type t = node
       let compare n1 n2 =
         let cmp = Int.compare (node_size n1) (node_size n2) in
-        if cmp = 0 then Int.compare n1.id n2.id else cmp
+        if cmp != 0 then cmp else
+          match !n1, !n2 with
+          | (Normal { id = id1; _ } | Binder ({ id = id1; _ }, _)),
+            (Normal { id = id2; _ } | Binder ({ id = id2; _ }, _)) -> Int.compare id1 id2
+          | _ -> assert false
     end)
   let with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t =
     fun ?definition f ->
     local (fun d -> d + 1) @@
     let* depth = ask in
-    let node = gen_node depth @@ BinderPlaceholder in
+    let node = ref @@ BinderPlaceholder { depth } in
     let* v, nl, ch = f node in
     let converged = CList.for_all (function (_, { contents = Written _; _ }) -> true | _ -> false) ch in
     let hash = calc_hash depth nl ch in
@@ -910,18 +915,20 @@ module GraphHasher
       let size = calc_size ch in
       Feedback.msg_notice @@ Pp.(str "binder created at depth " ++ int depth);
       node.contents <- Binder
-          { label = nl
-          ; hash
-          ; children = ch
-          ; is_definition = definition
-          ; size
-          ; final = false
-          ; seen = false };
+          ({ label = nl
+           ; hash
+           ; children = ch
+           ; size
+           ; depth
+           ; id = gen_id () },
+           { is_definition = definition
+           ; final = false
+           ; seen = false });
       if depth = 1 then begin
         Feedback.msg_notice Pp.(str "starting binder resolution");
         let add_filtered_children ch rem = OList.fold_left
-            (fun rem (_, ch) -> match ch.contents with
-               | Binder { seen = true; _ } | Written _ -> rem
+            (fun rem (_, ch) -> match !ch with
+               | Binder (_, { seen = true; _ }) | Written _ -> rem
                | _ -> NodeSet.add ch rem) rem ch in
         let decompose_node n rem =
           Feedback.msg_notice Pp.(str "decompose node");
@@ -929,19 +936,19 @@ module GraphHasher
           | Written (_, _) ->
             Feedback.msg_notice Pp.(str "decompose node written");
             rem
-          | Binder { seen = true; _ } -> assert false
+          | Binder (_, { seen = true; _ }) -> assert false
           | Normal { children; _ } ->
             Feedback.msg_notice Pp.(str "decompose node normal");
             add_filtered_children children rem
-          | Binder ({ label; children; seen = false; _ } as d) ->
+          | Binder (({ label; children; _ } as i), ({ seen = false; _ } as bi)) ->
             Feedback.msg_notice Pp.(str "decompose node binder");
-            n.contents <- Binder { d with final = true; seen = true };
+            n.contents <- Binder (i, { bi with final = true; seen = true });
             add_filtered_children children rem
-          | BinderPlaceholder -> assert false in
+          | BinderPlaceholder _ -> assert false in
         let rec decompose_queue q =
           Feedback.msg_notice Pp.(str "decompose queue");
           NodeSet.iter (fun n ->
-              Feedback.msg_notice Pp.(str "node size in list: " ++ int (node_size n) ++ str " id: " ++ int n.id)) q;
+              Feedback.msg_notice Pp.(str "node size in list: " ++ int (node_size n))) q;
           match NodeSet.max_elt_opt q with
           | None -> return ()
           | Some max ->
@@ -971,7 +978,7 @@ module GraphHasher
       end
     end
   let register_external : node -> unit t = fun n ->
-    match n.contents with
+    match !n with
     | Written (n, _) -> lift @@ G.register_external n
     | _ ->
       (* TODO: We know that nothing needs to be done here, because the node is not really external.

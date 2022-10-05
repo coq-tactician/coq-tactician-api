@@ -2,20 +2,65 @@ open Tactician_ltac1_record_plugin
 open Tactic_learner
 open Names
 open Graph_extractor
-open Graph_capnp_generator
 open Graph_def
 
 module OList = CList
 
 let dirpath = Global.current_dirpath ()
 
-module G = GlobalGraph(DPset)
-module CICGraph = struct
-  type node' = DirPath.t * (bool * int)
-  include CICGraphMonad(G)
+module GlobalCICGraph(S : Set.S) = struct
+  include GlobalGraph(S)(
+    struct
+      type edge_label = edge_type
+      type node_label = (S.elt * (bool * int)) node_type
+      let is_definition = function
+        | Definition _ -> true
+        | _ -> false
+    end)
+  let lower n = n, Int64.of_int 0
+  let lift (n, _) = n
+  let transform_node_type n = n, Int64.of_int 0
 end
-module GB = GraphBuilder(CICGraph)
-module CapnpGraphWriter = CapnpGraphWriter(struct type path = DirPath.t end)(G)
+
+module rec GlobalHashedCICGraph : functor (S : Set.S) -> sig
+  type node' = GlobalHashedCICGraph(S).node
+  type nonrec builder = (S.t, node' node_type * int64, edge_type, S.elt * (bool * inv_rel_key)) builder
+  include GraphMonadType
+    with type node_label = node' node_type
+     and type edge_label = edge_type
+     and type 'a repr_t = builder -> S.elt -> 'a * builder
+  val lower : node -> (S.elt * (bool * int)) * int64
+  val lift : (S.elt * (bool * int)) * int64 -> node
+  val builder_nil : builder
+  val transform_node_type : 'a -> 'a
+end = functor (S : Set.S) -> struct
+  type node' = GlobalHashedCICGraph(S).node
+  module GG = GlobalGraph(S)(
+    struct
+      type edge_label = edge_type
+      type node_label = node' node_type * int64
+      let is_definition (d, _) = match d with
+        | Definition _ -> true
+        | _ -> false
+    end)
+  type builder = GG.builder
+  let builder_nil = GG.builder_nil
+  include GraphHasher
+      (struct
+        type node_label = GlobalHashedCICGraph(S).node node_type
+        type edge_label = edge_type
+      end)
+      (CICHasher(XXHasher))(GG)
+  let transform_node_type n = n
+end
+
+(* module G = GlobalCICGraph(DPset) *)
+module G = GlobalHashedCICGraph(DPset)
+module CICGraphMonad = struct
+  include CICGraphMonad(G)
+  type node' = node
+end
+module GB = GraphBuilder(CICGraphMonad)
 
 module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
@@ -58,11 +103,11 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     | GConstructor of constructor
     | GProjection of Projection.Repr.t
 
-  open CICGraph
+  open CICGraphMonad
 
   (* Global state of the graph generator *)
   let graph_builder = ref G.builder_nil
-  let original_definitions = ref Int.Set.empty
+  let definition_nodes = ref Int.Set.empty
   let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
   let section_nodes = Summary.ref ~name:"TacticianGraphSectionNodes" Id.Map.empty
   let global_nodes = Summary.ref ~name:"TacticianGraphGlobalNodes"
@@ -117,17 +162,21 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                  ~cache:(fun (_, prev) ->
                      match prev with
                      | None -> ()
-                     | Some (d, n) when not @@ DirPath.equal d dirpath ->
-                       external_previous_definitions := DPmap.add d n !external_previous_definitions
-                     | Some _ -> previous_definition := prev)
+                     | Some prev ->
+                       let ((d, n), _) = G.lower prev in
+                       if DirPath.equal d dirpath then
+                         previous_definition := Some prev
+                       else
+                         external_previous_definitions := DPmap.add d prev !external_previous_definitions)
                  ~subst:(Some (fun (_, _) -> None)))
   let in_known_external_previous_definition : node option -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHKNOWNEXTERNAL"
                  ~cache:(fun (_, prev) ->
                      match prev with
                      | None -> ()
-                     | Some (d, n) ->
-                       known_external_previous_definitions := DPmap.add d n !known_external_previous_definitions)
+                     | Some prev ->
+                       let ((d, n), _) = G.lower prev in
+                       known_external_previous_definitions := DPmap.add d prev !known_external_previous_definitions)
                  ~subst:(Some (fun (_, _) -> None)))
 
   open GB
@@ -173,8 +222,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
         if not @@ DirPath.equal dirpath @@ ModPath.dp @@ MutInd.modpath c then
           CErrors.user_err (err_msg (MutInd.print c));
         Mindset.add c m) minductives Mindset.empty in
-    let open Monad_util.WithMonadNotations(CICGraph) in
-    let open Monad.Make(CICGraph) in
+    let open Monad_util.WithMonadNotations(CICGraphMonad) in
+    let open Monad.Make(CICGraphMonad) in
 
     let proof_states = OList.map (fun (prf, status, c) -> OList.rev prf, status, c) @@ OList.rev !last_model in
 
@@ -227,43 +276,50 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
           | Definition_order.TVar id -> map (fun _ -> ()) @@ gen_section_var env env_extra id) defs
     in
     let known = DPmap.domain !known_external_previous_definitions in
-    let external_previous = DPmap.bindings @@
+    let external_previous = OList.map snd @@ DPmap.bindings @@
       DPmap.filter (fun p _ -> not @@ DPset.mem p known) !external_previous_definitions in
     let (new_state, ()), builder =
-      CICGraph.run ~include_metadata:true ~state:{ previous = !previous_definition
+      CICGraphMonad.run ~include_metadata:true ~state:{ previous = !previous_definition
                           ; external_previous
                           ; section_nodes = !section_nodes
                           ; definition_nodes = !global_nodes }
         updater !graph_builder (Global.current_dirpath ()) in
     graph_builder := builder;
     section_nodes := new_state.section_nodes;
-    original_definitions := Id.Map.fold (fun _ (path, (def, n)) s ->
+    definition_nodes := Id.Map.fold (fun _ n s ->
+        let ((path, (def, n)), _) = G.lower n in
         if not @@ DirPath.equal path dirpath then CErrors.anomaly Pp.(str "Local node expected");
         assert def;
-        Int.Set.add n s) new_state.section_nodes !original_definitions;
-    original_definitions := Cmap.fold (fun _ (status, (path, (def, n))) s ->
+        Int.Set.add n s) new_state.section_nodes !definition_nodes;
+    definition_nodes := Cmap.fold (fun _  (_status, n) s ->
+        let ((path, (def, n)), _) = G.lower n in
         assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
-        new_state.definition_nodes.constants !original_definitions;
-    original_definitions := Indmap.fold (fun _ (status, (path, (def, n))) s ->
+        new_state.definition_nodes.constants !definition_nodes;
+    definition_nodes := Indmap.fold (fun _ (_status, n) s ->
+        let ((path, (def, n)), _) = G.lower n in
         assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
-        new_state.definition_nodes.inductives !original_definitions;
-    original_definitions := Constrmap.fold (fun _ (status, (path, (def, n))) s ->
+        new_state.definition_nodes.inductives !definition_nodes;
+    definition_nodes := Constrmap.fold (fun _ (_status, n) s ->
+        let ((path, (def, n)), _) = G.lower n in
         assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
-        new_state.definition_nodes.constructors !original_definitions;
-    original_definitions := ProjMap.fold (fun _ (status, (path, (def, n))) s ->
+        new_state.definition_nodes.constructors !definition_nodes;
+    definition_nodes := ProjMap.fold (fun _ (_status, n) s ->
+        let ((path, (def, n)), _) = G.lower n in
         assert def;
         if DirPath.equal path dirpath then Int.Set.add n s else s)
-        new_state.definition_nodes.projections !original_definitions;
+        new_state.definition_nodes.projections !definition_nodes;
 
     let new_known = DPmap.filter
         (fun p _ ->
            (not @@ DPset.mem p known) &&
-           (not @@ OList.exists (fun (p', _) -> DirPath.equal p p') new_state.external_previous))
+           (not @@ OList.exists (fun n ->
+                let ((p', _), _) = G.lower n in
+                DirPath.equal p p') new_state.external_previous))
         !external_previous_definitions in
-    DPmap.iter (fun d n -> Lib.add_anonymous_leaf @@ in_known_external_previous_definition (Some (d, n))) new_known;
+    DPmap.iter (fun _ n -> Lib.add_anonymous_leaf @@ in_known_external_previous_definition (Some n)) new_known;
 
     Lib.add_anonymous_leaf @@ in_previous_definition new_state.previous;
 
@@ -345,8 +401,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     relative_deps
 
   module K = Graph_api.Make(Capnp.BytesMessage)
-  let write_graph G.{ paths; def_count; node_count; edge_count; defs; nodes; edges }
-      original_definitions representative =
+  let write_graph { paths; def_count; node_count; edge_count; defs; nodes; edges }
+      definition_nodes representative =
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
     let resolved_dependencies = resolve_dependencies depslist in
@@ -355,20 +411,25 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     (match representative with
      | None ->
        K.Builder.Dataset.representative_set_int_exn g (def_count + node_count)
-     | Some (rp, (def, representative)) ->
+     | Some representative ->
+       let ((rp, (def, representative)), _) = G.lower representative in
        assert def;
        if not (DirPath.equal rp dirpath) then
          CErrors.anomaly Pp.(str "Representative is not from the current file: " ++ DirPath.print rp);
        K.Builder.Dataset.representative_set_int_exn g representative);
     let _ = K.Builder.Dataset.definitions_set_list g @@
-      List.map (fun n -> Stdint.Uint32.of_int @@ n) @@ Int.Set.elements original_definitions in
-    let path_transform tp =
-      DPmap.find tp path_index in
-    let node_index_transform (def, i) =
+      List.map (fun n -> Stdint.Uint32.of_int @@ n) @@ Int.Set.elements definition_nodes in
+    let path_transform (p, _) =
+      DPmap.find p path_index in
+    let node_local_index (_, (def, i)) =
       if def then i else def_count + i in
+    let node_hash n = snd n in
+    let node_label n = fst @@ G.transform_node_type n in
     let capnp_graph = K.Builder.Dataset.graph_init g in
-    CapnpGraphWriter.write_graph ~include_metadata:true capnp_graph path_transform node_index_transform
-      (def_count + node_count) edge_count (AList.append defs nodes) edges;
+    Graph_capnp_generator.write_graph ~include_metadata:true
+      ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
+      ~node_dep_index:path_transform ~node_local_index
+      ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges capnp_graph;
     Capnp_unix.IO.write_message_to_file ~compression:`None (K.Builder.Dataset.to_message g) (data_file ())
 
   let () = Declaremods.append_end_library_hook @@ fun () ->
@@ -382,7 +443,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let graph_builder = { graph_builder with paths = DPset.union graph_builder.paths non_trans_deps } in
 
     Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()), DPmap.domain !dependencies);
-    write_graph graph_builder !original_definitions !previous_definition
+    write_graph graph_builder !definition_nodes !previous_definition
 
 end
 

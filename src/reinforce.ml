@@ -1,6 +1,7 @@
 open Tactician_ltac1_record_plugin
 open Names
 open Ltac_plugin
+open Graph_def
 
 module OList = CList
 
@@ -8,7 +9,7 @@ module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 open Capnp_rpc_lwt
 
 module G = Neural_learner.G
-module CICGraph = Neural_learner.CICGraph
+module CICGraph = Neural_learner.CICGraphMonad
 open Neural_learner.GB
 
 module TacticMap = Int.Map
@@ -35,16 +36,14 @@ let write_execution_result env sigma res hyps concl obj =
   let module ProofState = Api.Builder.ProofState in
 
   (* Obtain the graph *)
-  let updater =
-    let open Monad_util.WithMonadNotations(CICGraph) in
-    let open Monad.Make(CICGraph) in
-    let+ root, context_map = gen_proof_state env hyps concl in
-    snd root, context_map in
-  let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
+  let updater = gen_proof_state env hyps concl in
+  let (_, (root, context_map)), { paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
     CICGraph.run_empty ~def_truncate:true updater G.builder_nil Local in
-  let node_index_transform (def, i) =
+  let node_local_index (_, (def, i)) =
     if def then i else def_count + i in
-  let context_map = Id.Map.map (fun (p, n) -> p, node_index_transform n) context_map in
+  let context_map = Id.Map.map (fun n ->
+      let (p, n), _ = G.lower n in
+      p, node_local_index (p, n)) context_map in
   let context = Id.Map.bindings context_map in
   let context_range = OList.map (fun (_, (_, n)) -> n) context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
@@ -52,10 +51,14 @@ let write_execution_result env sigma res hyps concl obj =
   (* Write graph to capnp structure *)
   let new_state = ExecutionResult.new_state_init res in
   let capnp_graph = ExecutionResult.NewState.graph_init new_state in
-  Neural_learner.CapnpGraphWriter.write_graph capnp_graph (fun _ -> 0) node_index_transform
-    (def_count + node_count) edge_count (Graph_def.AList.append defs nodes) edges;
+  let node_hash n = snd n in
+  let node_label n = fst @@ G.transform_node_type n in
+  Graph_capnp_generator.write_graph
+    ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
+    ~node_dep_index:(fun _ -> 0) ~node_local_index
+    ~node_count:(def_count + node_count) ~edge_count (Graph_def.AList.append defs nodes) edges capnp_graph;
   let state = ExecutionResult.NewState.state_init new_state in
-  ProofState.root_set_int_exn state @@ node_index_transform root;
+  ProofState.root_set_int_exn state @@ node_local_index @@ fst @@ G.lower root;
   let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
   ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env sigma;
   let capability = obj context_map_inv in
