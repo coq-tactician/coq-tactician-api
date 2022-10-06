@@ -5,6 +5,10 @@ Changes to the Capn'proto format:
 - Added the field `Graph.Node.identity`, which represents an identity of of any node in the graph
 - Removed the field `Definition.hash`, which is now superseded by `Graph.Node.identity`.
 
+Changes to the graph:
+- A bug was fixed that caused fixpoints that had additional binders in scope to resolve de Bruijn
+  indices wrong.
+
 Memory layout changes:
 - With the help of `Graph.Node.identity`, nodes with the same identity are now shared in the dataset.
 

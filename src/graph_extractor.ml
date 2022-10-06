@@ -307,9 +307,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
   let with_relatives ns =
-    local (fun ({ relative; _ } as c) ->
-        let relative = OList.fold_left (fun ctx n -> n::ctx) ns relative in (* Funs are added backwards *)
-        { c with relative })
+    local (fun ({ relative; _ } as c) -> { c with relative = ns@relative })
   let with_named id n =
     local (fun ({ named; _ } as c) -> { c with named = Id.Map.update id (update_error n) named })
   let with_evar e n ns =
@@ -840,7 +838,8 @@ end = struct
       mk_node Case ([CaseInd, ind; CaseReturn, ret; CaseTerm, term]@branches)
     | Fix ((offset, ret), (ids, typs, terms)) ->
       let* funs = with_delayed_nodes (Array.length ids) @@ fun funs ->
-        let combined = OList.combine funs @@ OList.combine (Array.to_list ids) @@ OList.combine (Array.to_list typs) (Array.to_list terms) in
+        let combined = OList.combine funs @@ OList.combine (Array.to_list ids) @@
+          OList.combine (Array.to_list typs) (Array.to_list terms) in
         let+ children = List.map (fun (fn, (id, (typ, term))) ->
             let* typ = gen_constr typ in
             let+ term = with_relatives (OList.rev funs) @@ gen_constr term in
@@ -850,7 +849,8 @@ end = struct
       mk_node Fix @@ (FixReturn, (OList.nth funs ret))::(OList.map (fun f -> FixMutual, f) funs)
     | CoFix (ret, (ids, typs, terms)) ->
       let* funs = with_delayed_nodes (Array.length ids) @@ fun funs ->
-        let combined = OList.combine funs @@ OList.combine (Array.to_list ids) @@ OList.combine (Array.to_list typs) (Array.to_list terms) in
+        let combined = OList.combine funs @@ OList.combine (Array.to_list ids) @@
+          OList.combine (Array.to_list typs) (Array.to_list terms) in
         let+ children = List.map (fun (fn, (id, (typ, term))) ->
             let* typ = gen_constr typ in
             let+ term = with_relatives (OList.rev funs) @@ gen_constr term in
