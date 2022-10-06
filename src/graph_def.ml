@@ -722,7 +722,8 @@ module GraphHasher
     ; hash : H.t
     ; size : int
     ; id : int
-    ; depth : int }
+    ; depth : int
+    ; min_binder_referenced : int }
   and node' =
     | Normal of node_info
     | BinderPlaceholder of { depth : int }
@@ -745,7 +746,7 @@ module GraphHasher
 
   module M = Monad_util.ReaderStateMonadT
       (G)
-      (struct type r = int end)
+      (struct type r = int end) (* Current binder depth *)
       (struct type s = G.node HashMap.t end) (* TODO: Consider replacing this with a mutable hashmap for speed *)
 
   module OList = List
@@ -759,18 +760,29 @@ module GraphHasher
     let hashes state = OList.fold_left (fun state (el, n) ->
         let n = match !n with
           | Written (_, hash) -> hash
-          | BinderPlaceholder { depth } -> H.with_state @@ H.update_int (curr_depth - depth)
+          | BinderPlaceholder _ -> H.with_state @@ fun x -> x
           | Normal { hash; _ } -> hash
           | Binder ({ hash; _ }, { seen = false; _ }) -> hash
-          | Binder ({ depth; _ }, { seen = true; final = false; _ }) ->
+          | Binder ({ depth; label; _ }, { seen = true; final = false; _ }) ->
               Feedback.msg_notice Pp.(str "binder at depth " ++ int depth ++ str " current depth " ++ int curr_depth ++ str " de Bruijn: " ++ int (curr_depth - depth));
-              H.with_state @@ H.update_int (curr_depth - depth)
+              H.with_state @@ fun state ->
+              (* Careful to include the label of the binder as well as its de Bruijn index *)
+              H.update_node_label label @@ H.update_int (curr_depth - depth) state
           | Binder ({ hash; _ }, { seen = true; final = true; _ }) -> hash
         in
         H.update n @@ H.update_edge_label el state
       ) state ch in
     H.with_state @@ fun state ->
     H.update_node_label nl @@ hashes state
+
+  let calc_min_binder_referenced ch =
+    OList.fold_left (fun acc (_, n) -> match !n with
+        | BinderPlaceholder { depth } ->
+          Feedback.msg_notice Pp.(str "placeholder at depth " ++ int depth ++ str " for min binder calculation");
+          min acc depth
+        | Normal { min_binder_referenced; _ } | Binder ({ min_binder_referenced; _}, _) ->
+          min acc min_binder_referenced
+        | Written _ -> acc) max_int ch
 
   (** `node_size n` is not really the size of the forward closure, but rather a metric such that
       `node_size n != node_size m` implies that n and m are not bisimilar and for any subterm n'
@@ -795,31 +807,6 @@ module GraphHasher
     Feedback.msg_notice Pp.(str "calculating size " ++ int rews);
     rews
 
-  let mk_node : node_label -> children -> node t = fun nl ch ->
-    let* depth = ask in
-    let hash = calc_hash depth nl ch in
-    let converged = CList.for_all (function (_, { contents = Written _; _ }) -> true | _ -> false) ch in
-    if converged then begin
-      let* map = get in
-      match HashMap.find_opt hash map with
-      | Some node -> return @@ ref @@ Written (node, hash)
-      | None ->
-        let ch = OList.map (function | (el, { contents = Written (n, _); _ }) -> el, n | _ -> assert false) ch in
-        let* node = lift @@ G.mk_node (nl, hash) ch in
-        let+ () = put (HashMap.add hash node map) in
-        Feedback.msg_notice Pp.(str "Add node with hash: " ++ int (H.to_int hash));
-        ref @@ Written (node, hash)
-    end else begin
-      let size = calc_size ch in
-      return @@ ref @@ Normal
-        { label = nl
-        ; children = ch
-        ; size
-        ; hash
-        ; id = gen_id ()
-        ; depth }
-  end
-
   let rec recalc_hash n =
     Feedback.msg_notice Pp.(str "recalc hash");
     match !n with
@@ -833,11 +820,13 @@ module GraphHasher
       n.contents <- Binder (i, { bi with seen = true });
       OList.iter recalc_hash @@ OList.map snd children;
       let hash = calc_hash depth label children in
+      Feedback.msg_notice Pp.(str "new binder hash : " ++ int (H.to_int hash));
       n.contents <- Binder ({ i with hash }, bi)
     | Normal ({ label; children; depth; _ } as i) ->
       Feedback.msg_notice Pp.(str "recalc hash : normal");
       OList.iter recalc_hash @@ OList.map snd children;
       let hash = calc_hash depth label children in
+      Feedback.msg_notice Pp.(str "new normal hash : " ++ int (H.to_int hash));
       n.contents <- Normal { i with hash }
     | BinderPlaceholder _ -> assert false
 
@@ -871,10 +860,12 @@ module GraphHasher
            let* map, node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
              let computation =
                let* () = put (HashMap.add hash node map) in
+               Feedback.msg_notice Pp.(str "writing binder");
                n.contents <- Written (node, hash);
                let+ ch = List.map (fun (el, n) -> let+ n = write_node_and_children n in el, n) children in
                node, (label, hash), ch in
-             G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@ run computation depth (* depth really doesn't matter*) map in
+             G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@
+             run computation depth (* depth really doesn't matter*) map in
            let+ () = put map in
            node
         )
@@ -891,28 +882,118 @@ module GraphHasher
             (Normal { id = id2; _ } | Binder ({ id = id2; _ }, _)) -> Int.compare id1 id2
           | _ -> assert false
     end)
+
+  let converge_hashes node =
+    Feedback.msg_notice Pp.(str "starting binder resolution");
+    (* Note: We have to completely recalculate the hashes of the entire tree at least once.
+             The reason is that `BinderPlaceholder` does not yet hold any hash information.
+             We could include the depth in `BinderPlaceholder` so that the de Bruijn index
+             can be incorporated into the hash. But this is still not enough, because the
+             hash of the node-label of the binder also has to be included. And this
+             information is not yet available at the previous stage. *)
+    recalc_hash node;
+
+    let add_filtered_children ch rem = OList.fold_left
+        (fun rem (_, ch) -> match !ch with
+           | Binder (_, { seen = true; _ }) | Written _ -> rem
+           | _ -> NodeSet.add ch rem) rem ch in
+    let decompose_node n rem =
+      Feedback.msg_notice Pp.(str "decompose node");
+      match n.contents with
+      | Written (_, _) ->
+        Feedback.msg_notice Pp.(str "decompose node written");
+        rem
+      | Binder (_, { seen = true; _ }) -> assert false
+      | Normal { children; _ } ->
+        Feedback.msg_notice Pp.(str "decompose node normal");
+        add_filtered_children children rem
+      | Binder (({ label; children; _ } as i), ({ seen = false; _ } as bi)) ->
+        Feedback.msg_notice Pp.(str "decompose node binder");
+        n.contents <- Binder (i, { bi with final = true; seen = true });
+        add_filtered_children children rem
+      | BinderPlaceholder _ -> assert false in
+    let rec decompose_queue q =
+      Feedback.msg_notice Pp.(str "decompose queue");
+      NodeSet.iter (fun n ->
+          Feedback.msg_notice Pp.(str "node size in list: " ++ int (node_size n))) q;
+      match NodeSet.max_elt_opt q with
+      | None -> return ()
+      | Some max ->
+        let nz = node_size max in
+        let minmax = NodeSet.find_first (fun n -> node_size n = nz) q in
+        Feedback.msg_notice Pp.(str "node size: " ++ int nz);
+        let rem, b, equal = NodeSet.split minmax q in
+        assert b;
+        Feedback.msg_notice Pp.(str "equal list size: " ++ int (NodeSet.cardinal equal));
+        (* Here is the crux of our algorithm: A naive algorithm, would always run `recalc_hash` on all
+           nodes in order to make sure that every node receives a correct hash. This would lead to a
+           O(n^2) runtime. To speed that up, we recognize that two nodes can only be equal if their size
+           is equal. Hence, if only one node of a certain size exists, it does not need to be rehashed.
+           This reduces our complexity to O(n log n). *)
+        if not @@ NodeSet.is_empty equal then begin
+          NodeSet.iter recalc_hash equal;
+          recalc_hash minmax
+        end;
+        decompose_queue @@ NodeSet.fold decompose_node equal (decompose_node minmax rem)
+    in
+    let* () = decompose_queue @@ NodeSet.singleton node in
+    Feedback.msg_notice Pp.(str "pre write node");
+    write_node_and_children node
+
+  let children_converged =
+    CList.fold_left (fun ch -> function
+        | el, { contents = Written (n, _); _ } -> Option.map (fun ls -> (el, n)::ls) ch
+        | _ -> None) (Some [])
+
+  let mk_node : node_label -> children -> node t = fun nl ch ->
+    let* depth = ask in
+    let hash = calc_hash depth nl ch in
+    match children_converged ch with
+    | Some ch ->
+      let* map = get in
+      (match HashMap.find_opt hash map with
+       | Some node -> return @@ ref @@ Written (node, hash)
+       | None ->
+         let* node = lift @@ G.mk_node (nl, hash) ch in
+         let+ () = put (HashMap.add hash node map) in
+         Feedback.msg_notice Pp.(str "Add node with hash: " ++ int (H.to_int hash));
+         ref @@ Written (node, hash))
+    | None ->
+      let size = calc_size ch in
+      let min_binder_referenced = calc_min_binder_referenced ch in
+      Feedback.msg_notice Pp.(str "not converged. min binder referenced: " ++ int min_binder_referenced);
+      let node = ref @@ Normal
+        { label = nl
+        ; children = ch
+        ; size
+        ; hash
+        ; id = gen_id ()
+        ; depth
+        ; min_binder_referenced } in
+      return node
+
   let with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t =
     fun ?definition f ->
     local (fun d -> d + 1) @@
     let* depth = ask in
     let node = ref @@ BinderPlaceholder { depth } in
     let* v, nl, ch = f node in
-    let converged = CList.for_all (function (_, { contents = Written _; _ }) -> true | _ -> false) ch in
     let hash = calc_hash depth nl ch in
-    if converged then begin
+    match children_converged ch with
+    | Some ch ->
       let* map = get in
-      match HashMap.find_opt hash map with
-      | Some node' ->
-        node.contents <- Written (node', hash);
-        return v
-      | None ->
-        let ch = OList.map (function | (x, { contents = Written (n, _); _ }) -> x, n | _ -> assert false) ch in
-        let* node' = lift @@ G.mk_node (nl, hash) ch in
-        let+ () = put (HashMap.add hash node' map) in
-        node.contents <- Written (node', hash);
-        v
-    end else begin
+      (match HashMap.find_opt hash map with
+       | Some node' ->
+         node.contents <- Written (node', hash);
+         return v
+       | None ->
+         let* node' = lift @@ G.mk_node (nl, hash) ch in
+         let+ () = put (HashMap.add hash node' map) in
+         node.contents <- Written (node', hash);
+         v)
+    | None ->
       let size = calc_size ch in
+      let min_binder_referenced = calc_min_binder_referenced ch in
       Feedback.msg_notice @@ Pp.(str "binder created at depth " ++ int depth);
       node.contents <- Binder
           ({ label = nl
@@ -920,63 +1001,19 @@ module GraphHasher
            ; children = ch
            ; size
            ; depth
+           ; min_binder_referenced
            ; id = gen_id () },
            { is_definition = definition
            ; final = false
            ; seen = false });
-      if depth = 1 then begin
-        Feedback.msg_notice Pp.(str "starting binder resolution");
-        let add_filtered_children ch rem = OList.fold_left
-            (fun rem (_, ch) -> match !ch with
-               | Binder (_, { seen = true; _ }) | Written _ -> rem
-               | _ -> NodeSet.add ch rem) rem ch in
-        let decompose_node n rem =
-          Feedback.msg_notice Pp.(str "decompose node");
-          match n.contents with
-          | Written (_, _) ->
-            Feedback.msg_notice Pp.(str "decompose node written");
-            rem
-          | Binder (_, { seen = true; _ }) -> assert false
-          | Normal { children; _ } ->
-            Feedback.msg_notice Pp.(str "decompose node normal");
-            add_filtered_children children rem
-          | Binder (({ label; children; _ } as i), ({ seen = false; _ } as bi)) ->
-            Feedback.msg_notice Pp.(str "decompose node binder");
-            n.contents <- Binder (i, { bi with final = true; seen = true });
-            add_filtered_children children rem
-          | BinderPlaceholder _ -> assert false in
-        let rec decompose_queue q =
-          Feedback.msg_notice Pp.(str "decompose queue");
-          NodeSet.iter (fun n ->
-              Feedback.msg_notice Pp.(str "node size in list: " ++ int (node_size n))) q;
-          match NodeSet.max_elt_opt q with
-          | None -> return ()
-          | Some max ->
-            let nz = node_size max in
-            let minmax = NodeSet.find_first (fun n -> node_size n = nz) q in
-            Feedback.msg_notice Pp.(str "node size: " ++ int nz);
-            let rem, b, equal = NodeSet.split minmax q in
-            assert b;
-            Feedback.msg_notice Pp.(str "equal list size: " ++ int (NodeSet.cardinal equal));
-            (* Here is the crux of our algorithm: A naive algorithm, would always run `recalc_hash` on all
-               nodes in order to make sure that every node receives a correct hash. This would lead to a
-               O(n^2) runtime. To speed that up, we recognize that two nodes can only be equal if their size
-               is equal. Hence, if only one node of a certain size exists, it does not need to be rehashed.
-               This reduces our complexity to O(n log n). *)
-            if not @@ NodeSet.is_empty equal then begin
-              NodeSet.iter recalc_hash equal;
-              recalc_hash minmax
-            end;
-            decompose_queue @@ NodeSet.fold decompose_node equal (decompose_node minmax rem)
-        in
-        let* () = decompose_queue @@ NodeSet.singleton node in
-        Feedback.msg_notice Pp.(str "pre write node");
-        let+ _ = write_node_and_children node in
-        v
-      end else begin
-        return v
-      end
-    end
+      let+ () =
+        Feedback.msg_notice Pp.(str "depth: " ++ int depth ++ str " min binder referenced: " ++
+                                int min_binder_referenced);
+        if depth <= min_binder_referenced then
+          map (fun _ -> ()) @@ converge_hashes node
+        else return () in
+      v
+
   let register_external : node -> unit t = fun n ->
     match !n with
     | Written (n, _) -> lift @@ G.register_external n

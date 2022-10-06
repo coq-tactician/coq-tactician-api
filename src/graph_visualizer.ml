@@ -11,6 +11,11 @@ let label_option = Goptions.declare_bool_option_and_ref
     ~key:["Tactician"; "Neural"; "Visualize"; "Labels"]
     ~value:false
 
+let hash_option = Goptions.declare_bool_option_and_ref
+    ~depr:false ~name:"order graph nodes"
+    ~key:["Tactician"; "Neural"; "Visualize"; "Hashes"]
+    ~value:false
+
 type vertex = { tag : int; label : string }
 module G = Graph.Persistent.Digraph.ConcreteLabeled(
   struct
@@ -150,7 +155,9 @@ end = struct
   type final = SimpleHashedCICGraph.node node_type * int64
   type node' = SimpleHashedCICGraph.node
   type result = (final * (edge_type * int) list) DList.t
-  let final_to_string x = Graph_def.show_node_type (fun _ _ -> ()) @@ fst x
+  let final_to_string (nl, h) =
+    let hash = if hash_option () then " : " ^ Int64.to_string h else "" in
+    Graph_def.show_node_type (fun _ _ -> ()) nl ^ hash
   include GraphHasher
       (struct
         type node_label = node' node_type
