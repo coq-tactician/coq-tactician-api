@@ -1,6 +1,9 @@
 import os
-from tqdm import tqdm
 import graphviz
+import mmap
+from contextlib import contextmanager
+from contextlib import ExitStack
+from collections import defaultdict
 
 import capnp
 capnp.remove_import_hook()
@@ -18,54 +21,46 @@ def local_paths_to_bin_files(global_path, local_path = None):
     elif os.path.isfile(global_path) and global_path.endswith(".bin"):
         yield local_path
 
-class CapnpFileReader:
-    def __init__(self, fname, graph_api_capnp):
-        self.fname = fname
-        self.graph_api_capnp = graph_api_capnp
-    def __enter__(self):
-        self.f = open(self.fname)
-        self.g = self.graph_api_capnp.Dataset.read(self.f, traversal_limit_in_words=2**64-1)
-        return self.g
-    def __exit__(self, *exception_data):
-        self.g.total_size
-        self.f.close()
+@contextmanager
+def fileDatasetView(fname, graph_api_capnp):
+    def create_mmap(fname):
+        # No need to keep the file open, at least on linux
+        # Closing this prevents file descriptor limits from being exceeded
+        with open(fname, 'rb') as f:
+            return mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ)
+    with create_mmap(fname) as mm:
+        with memoryview(mm) as mv: # Not entirely clear if we need this, but it also couldn't hurt
+            with graph_api_capnp.Dataset.from_bytes(mv, traversal_limit_in_words=2**64-1) as g:
+                yield g
+
+@contextmanager
+def graphVisualisationBrowser(dataset_path, url_prefix):
+    fnames = local_paths_to_bin_files(dataset_path)
+    api = capnp.load(graph_api_capnp())
+    with ExitStack() as stack:
+        dataset = [(fname, stack.enter_context(fileDatasetView(os.path.join(dataset_path, fname), api)))
+                   for fname in fnames]
+        yield GraphVisualisationBrowser(dataset, url_prefix)
 
 class GraphVisualisationBrowser:
-    def __init__(self, dataset_path, url_prefix):
-        self.dataset_path = os.path.abspath(dataset_path)
+    def __init__(self, dataset, url_prefix):
         self.url_prefix = url_prefix
 
-        self.graph_api_capnp = capnp.load(graph_api_capnp())
-
-        #fnames = [f for f in Path(dataset_path).glob('**/*.bin') if f.is_file()]
-        self.fnames = list(local_paths_to_bin_files(dataset_path))
-        self.fnames_set = set(self.fnames)
         self.graphs = {}
         self.deps = {}
         self.definitions = {}
         self.representative = {}
 
-        print("Preload graphs and dependencies")
-        #for fname in tqdm(self.fnames):
-        for fname in self.fnames:
-            with self.open_data(fname) as g:
-                assert fname == g.dependencies[0], (fname, g.dependencies[0])
-                self.deps[fname] = list(g.dependencies)
-                self.graphs[fname] = g.graph
-                self.definitions[fname] = g.definitions
-                self.representative[fname] = g.representative
-                g.total_size
+        for fname, g in dataset:
+            assert fname == g.dependencies[0], (fname, g.dependencies[0])
+            self.deps[fname] = list(g.dependencies)
+            self.graphs[fname] = g.graph
+            self.definitions[fname] = g.definitions
+            self.representative[fname] = g.representative
 
         for fname, deps in self.deps.items():
             for dep in deps:
                 assert dep in self.deps, (fname, dep)
-
-    def open_data(self, fname):
-        assert fname in self.fnames_set # security :-)
-        return CapnpFileReader(
-            os.path.join(self.dataset_path, fname),
-            self.graph_api_capnp
-        )
 
     def get_url(self, bin_fname, svg_fname):
         base = os.path.splitext(bin_fname)[0]
@@ -88,7 +83,7 @@ class GraphVisualisationBrowser:
 
     def node_id(self, depindex, nodeindex):
         return str(depindex) + "-" + str(nodeindex)
-    
+
     def render_node(self, dot, node, depindex, nodeindex, dependencies, representative, prefix=None):
         id = self.node_id(depindex, nodeindex)
         if node.label.which() == 'definition':
@@ -109,19 +104,18 @@ class GraphVisualisationBrowser:
         node_id = f"file-{i}"
         dot.node(node_id, label, URL = self.global_context_url(deps[i]))
         return node_id
-    
+
     def global_context(self, fname):
         dependencies = self.deps[fname]
         graphs = [self.graphs[dep] for dep in dependencies]
         nodes = graphs[0].nodes
-        edges = list(graphs[0].edges)
 
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
         dot.attr('graph', label=f"Global context for {fname}")
         dot.attr('graph', fontsize="40pt")
         dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.root_file_url())
+        dot.attr('graph', URL=self.directory_url('/'.join(fname.split('/')[:-1])))
         dot.node('dependency_graph_reference', "Dependencies between definitions",
                  URL = self.definitions_dependencies_url(fname),
                  fontsize="40pt")
@@ -148,8 +142,9 @@ class GraphVisualisationBrowser:
                                             target.depIndex, target.nodeIndex, dependencies, representative)
                         dot2.edge(id, id2,
                                  arrowtail="odot", dir="both", constraint="false", style="dashed")
-            dot.edge(id, self.node_id(0, value.label.definition.previous),
-                     arrowtail="dot", dir="both", constraint="true")
+            if value.label.definition.previous != len(nodes):
+                dot.edge(id, self.node_id(0, value.label.definition.previous),
+                         arrowtail="dot", dir="both", constraint="true")
             for fi in value.label.definition.externalPrevious:
                 fid = self.render_file_node(dot, dependencies, fi)
                 dot.edge(id, fid,
@@ -161,7 +156,7 @@ class GraphVisualisationBrowser:
         dependencies = self.deps[fname]
         graphs = [self.graphs[dep] for dep in dependencies]
         nodes = graphs[0].nodes
-        edges = list(graphs[0].edges)
+        edges = graphs[0].edges
         representative = self.representative[fname]
 
         dot = graphviz.Digraph(format='svg')
@@ -271,11 +266,6 @@ class GraphVisualisationBrowser:
 
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
-        label = graphs[0].nodes[definition].label.definition.name
-        dot.attr('graph', label=f"Definition {label} from {fname}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.global_context_url(fname))
 
         self.visualize_term(dot, graphs, definition, dependencies,
                        depth=depth, prefix=None, maxNodes=maxNodes, showLabel=showLabel, seen=set())
@@ -290,6 +280,11 @@ class GraphVisualisationBrowser:
                      URL = self.proof_url(fname, definition),
                      fontsize="40pt")
 
+        label = graphs[0].nodes[definition].label.definition.name
+        dot.attr('graph', label=f"Definition {label} from {fname}")
+        dot.attr('graph', fontsize="40pt")
+        dot.attr('graph', labelloc="t")
+        dot.attr('graph', URL=self.global_context_url(fname))
         return dot.pipe()
 
     def proof(self, fname, definition):
@@ -303,61 +298,47 @@ class GraphVisualisationBrowser:
 
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
-        label = graphs[0].nodes[definition].label.definition.name
-        dot.attr('graph', label=f"Proof of {label} from {dependencies[0]}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.definition_url(fname, definition))
-        surrogates = {}
-        step_before_ids = {}
-        has_after = {}
+        surrogates = set()
+        outcome_to_id = {}
         for i, step in enumerate(proof):
             for j, outcome in enumerate(step.outcomes):
                 id = str(outcome.before.id)
-                while id in step_before_ids:
+                while id in surrogates:
                     id = id + '-s'
-                step_before_ids[id] = (i, j)
-                for after in outcome.after:
-                    has_after[after.id] = True
+                surrogates.add(id)
+                outcome_to_id[(i, j)] = id
         for i, step in enumerate(proof):
             with dot.subgraph(name='cluster_' + str(i)) as dot2:
+                dot2.attr('graph', labelloc="b")
                 if step.tactic.which() == 'known':
                     tactic_text = step.tactic.known.text
                 else:
                     tactic_text = 'unknown'
                 dot2.attr(label=tactic_text)
                 for j, outcome in enumerate(step.outcomes):
-                    if outcome.before.id not in has_after:
-                        #dot.node(str(outcome.before.id), label='⬤', shape='doublecircle',
-                        #       URL = self.proof_outcome_url(fname, definition, i, j))
-                        dot.node(str(outcome.before.id), label='⬤', shape='doublecircle',
-                                 style="filled", fillcolor="white",
-                                 URL = self.proof_outcome_url(fname, definition, i, j))
-
+                    before_id = outcome_to_id[(i, j)]
+                    dot2.node(before_id, label='⬤', shape='circle',
+                              fontsize="10pt", fixedsize="true", width="0.3pt",
+                              style="filled", fillcolor="white",
+                              URL = self.proof_outcome_url(fname, definition, i, j))
                     for after in outcome.after:
                         if outcome.before.id == after.id:
-                            before_id = surrogates.get(str(outcome.before.id), str(outcome.before.id))
                             after_id = before_id + '-s'
-                            (stepi, outcomei) = step_before_ids[after_id]
-                            dot2.node(after_id, label='⬤', shape='doublecircle',
-                                      style="filled", fillcolor="white",
-                                      URL = self.proof_outcome_url(fname, definition, stepi, outcomei))
-                            dot.edge(before_id, after_id, style='dashed')
-                            surrogates[str(after.id)] = after_id
+                            style = 'dashed'
                         else:
-                            before_id = surrogates.get(str(outcome.before.id), str(outcome.before.id))
-                            after_id = surrogates.get(str(after.id), str(after.id))
-                            (stepi, outcomei) = step_before_ids[after_id]
-                            dot2.node(after_id, label='⬤', shape='doublecircle',
-                                      style="filled", fillcolor="white",
-                                      URL = self.proof_outcome_url(fname, definition, stepi, outcomei))
-                            dot.edge(before_id, after_id)
+                            after_id = str(after.id)
+                            style = 'solid'
+                        dot.edge(before_id, after_id, style=style)
                     if not outcome.after:
                         qedid = str('qed-'+str(i)+'-'+str(j))
-                        before_id = surrogates.get(str(outcome.before.id), str(outcome.before.id))
                         dot2.node(qedid, label='', shape='point')
-                        dot.edge(str(before_id), str(qedid))
+                        dot.edge(before_id, qedid)
 
+        label = graphs[0].nodes[definition].label.definition.name
+        dot.attr('graph', label=f"Proof of {label} from {dependencies[0]}")
+        dot.attr('graph', fontsize="40pt")
+        dot.attr('graph', labelloc="t")
+        dot.attr('graph', URL=self.definition_url(fname, definition))
         #print(dot.source)
         return dot.pipe()
 
@@ -417,119 +398,110 @@ class GraphVisualisationBrowser:
 
     def file_deps(self, expand_path):
 
-        trans_deps = {}
-        sparse_deps = {}
-
-        def calc_trans_deps(f):
-            if f in trans_deps:
-                return
-            for d in self.deps[f][1:]:
-                calc_trans_deps(d)
-            agg = [trans_deps[d] for d in self.deps[f][1:]]
-            trans_deps[f] = set().union(*agg).union(set(self.deps[f][1:]))
-        for f in self.deps:
-            calc_trans_deps(f)
-        def calc_sparse_deps(f):
-            res = []
-            for d in self.deps[f][1:]:
-                found = False
-                for d2 in self.deps[f][1:]:
-                    if d in trans_deps[d2]:
-                        found = True
-                if not found:
-                    res.append(d)
-            sparse_deps[f] = res
-        for f in self.deps:
-            calc_sparse_deps(f)
-
         dot = graphviz.Digraph(engine='dot', format='svg')
         dot.attr('graph', ordering="out")
-        dot.attr('graph', nodesep="1")
-        dot.attr('graph', ranksep="2")
-        dot.attr(compound='true')
 
         hierarchy = {'files': [], 'subdirs': {}}
-        for f in sparse_deps:
+        for f in self.deps:
             dirs = f.split('/')[:-1]
             leaf = hierarchy
             for d in dirs:
                 leaf['subdirs'].setdefault(d, {'files': [], 'subdirs': {}})
                 leaf = leaf['subdirs'][d]
             leaf['files'].append(f)
-        def show_hierarchy(dot, h, path, depth):
-            for f in h['files']:
-                dot.node(f, f, URL = self.global_context_url(f))
+        def common_length(p1, p2):
+            return len(os.path.commonprefix([p1, p2]))
+        def retrieve_edges(rel, h, depth):
+            for n in h['files']:
+                deps = {'/'.join(d.split('/')[:depth+1]) for d in self.deps[n]
+                        if common_length(d.split('/'), expand_path) == depth}
+                rel['/'.join(n.split('/')[:depth+1])] |= deps
             for d in h['subdirs']:
-                cluster_name = 'cluster_' + path + '_' + d
-                with dot.subgraph(name=cluster_name) as dot2:
-                    dot2.attr('graph', label=d)
-                    show_hierarchy(dot2, h['subdirs'][d], path + '_' + d, depth + 1)
-        def flat_hierarchy():
-            for f in self.deps:
-                dot.node(f, f, URL = self.global_context_url(f))
+                retrieve_edges(rel, h['subdirs'][d], depth)
+            return rel
         def tunnel_hierarchy(dot, h, depth):
-            print(expand_path)
-            for f in h['files']:
-                dot.node(f, f, URL = self.global_context_url(f))
-                if depth == len(expand_path): tunnel_nodes.append(f)
-            for d in h['subdirs']:
-                cur_path = expand_path[:depth]+[d]
-                node_path = '_'.join(cur_path)
-                file_path = '/'.join(cur_path)
-                if depth < len(expand_path) and d == expand_path[depth]:
-                    cluster_name = 'cluster_' + node_path
-                    with dot.subgraph(name=cluster_name) as dot2:
-                        dot2.attr('graph', label=d)
-                        tunnel_hierarchy(dot2, h['subdirs'][d], depth+1)
-                else:
-                    dot.node(file_path, file_path, shape = "box", URL = self.directory_url(file_path))
-                    if depth == len(expand_path): tunnel_nodes.append(node_path)
+            if depth == len(expand_path):
+                rel = retrieve_edges(defaultdict(set), h, depth)
+                (rel, repr) = transitive_reduction(rel)
+                def get_url(r):
+                    if r in self.deps:
+                        return self.global_context_url(r)
+                    else:
+                        return self.directory_url(r)
+                for n in rel:
+                    if len(repr[n]) == 1:
+                        label = n.split("/")[-1]
+                        url = get_url(n)
+                        shape = 'box'
+                    else:
+                        label = '<<table border="0" cellborder="1" cellpadding="7">'
+                        for r in repr[n]:
+                            label += f'<tr><td href="{get_url(r)}">{r.split("/")[-1]}</td></tr>'
+                        label += "</table>>"
+                        url = None
+                        shape = 'plaintext'
+                    dot.node(n, label, URL = url, shape = shape, margin="0,0")
+                for n, deps in rel.items():
+                    for d in deps:
+                        dot.edge(n, d)
+            else:
+                for d in h['subdirs']:
+                    cur_path = expand_path[:depth]+[d]
+                    file_path = '/'.join(cur_path)
+                    if depth < len(expand_path) and d == expand_path[depth]:
+                        cluster_name = 'cluster_' + file_path
+                        with dot.subgraph(name=cluster_name) as dot2:
+                            dot2.attr('graph', style="filled", fillcolor="white", label=d,
+                                      URL = self.directory_url('/'.join(expand_path[:depth+1])))
+                            tunnel_hierarchy(dot2, h['subdirs'][d], depth+1)
 
-        def tunnel_simplification(path):
-            dirs = path.split('/')
-            i = 0
-            while i < len(dirs) and i < len(expand_path) and dirs[i] == expand_path[i]:
-                i += 1
-            res = '/'.join(dirs[:i+1])
-            return res
-
-        #flat_hierarchy()
-        use_tunnel = True
-        if use_tunnel:
-            tunnel_nodes = []
-            tunnel_hierarchy(dot, hierarchy, 0)
-        else:
-            show_hierarchy(dot, hierarchy, 'root', 0)
-
-        used_edges = set()
-        if use_tunnel:
-            for f, deps in sparse_deps.items():
-                f = tunnel_simplification(f)
-                for d in deps:
-                    d = tunnel_simplification(d)
-                    if f == d: continue
-                    edge = f,d
-                    if edge in used_edges: continue
-                    used_edges.add(edge)
-                    dot.edge(f,d)
-        else:
-            for f, deps in sparse_deps.items():
-                dirs_f = f.split('/')
-                for d in deps:
-                    dirs_d = d.split('/')
-                    i = 0
-                    while i < len(dirs_f) and i < len(dirs_d) and dirs_f[i] == dirs_d[i]:
-                        i += 1
-                    i += 1
-
-                    ltail = "cluster_root_"+'_'.join(dirs_f[:i])
-                    lhead = "cluster_root_"+'_'.join(dirs_d[:i])
-                    edge = (ltail, lhead)
-                    if edge in used_edges: continue
-                    used_edges.add(edge)
-                    if i >= len(dirs_f): ltail = None
-                    if i >= len(dirs_d): lhead = None
-                    dot.edge(f, d, lhead = lhead, ltail = ltail)
+        with dot.subgraph(name='cluster_root') as dot2:
+            dot2.attr('graph', style="filled", fillcolor="white", label='dataset',
+                      URL = self.directory_url(''))
+            tunnel_hierarchy(dot2, hierarchy, 0)
 
         #print(dot)
         return dot.pipe()
+
+def transitive_reduction(rel):
+    """This is not a real transitive reduction (NP-hard when it needs to be a subgraph).
+    This is an approximation where all strongly connected components are smashed together
+    in one node.
+    """
+    trans_deps = defaultdict(set)
+    def calc_trans_deps(a, n):
+        for d in rel[n]:
+            if d not in trans_deps[a]:
+                trans_deps[a].add(d)
+                calc_trans_deps(a, d)
+    for n in list(rel.keys()):
+        calc_trans_deps(n, n)
+    repr_items = defaultdict(set)
+    representative = {}
+    def calc_components(n):
+        if n in representative:
+            return
+        repr_items[n].add(n)
+        for d in trans_deps[n]:
+            if n in trans_deps[d]:
+                repr_items[n].add(d)
+                representative[d] = n
+    for n in (list(rel.keys())):
+        calc_components(n)
+    repr_trans_rel = defaultdict(set)
+    def calc_new_trans_deps(n):
+        for d in trans_deps[n]:
+            if n not in trans_deps[d]:
+                repr_trans_rel[n].add(representative[d])
+    for n in (list(rel.keys())):
+        calc_new_trans_deps(n)
+    def calc_sparse_deps(n):
+        res = set()
+        for d in repr_trans_rel[n]:
+            k = [d2 for d2 in repr_trans_rel[n]
+                 if d != d2 and d in trans_deps[d2]]
+            if not k:
+                res.add(d)
+        return res
+    k = {n: calc_sparse_deps(n) for n in repr_items}
+    return (k, repr_items)
