@@ -445,7 +445,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let graph_builder = { graph_builder with paths = DPset.union graph_builder.paths non_trans_deps } in
 
     Lib.add_anonymous_leaf @@
-    in_dependencies (dirpath, (data_file ()), graph_builder.node_count, DPmap.domain !dependencies);
+    in_dependencies (dirpath, (data_file ()), graph_builder.def_count, DPmap.domain !dependencies);
     write_graph graph_builder !definition_nodes !previous_definition
 
 end
