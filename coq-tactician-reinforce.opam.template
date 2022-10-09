@@ -34,4 +34,5 @@ depends: [
 ]
 substs: [
   "src/graph_generator_learner.ml"
+  "theories/injection-flags-loader"
 ]

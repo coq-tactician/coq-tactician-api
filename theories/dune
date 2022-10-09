@@ -16,10 +16,18 @@
               %{deps} %{targets})))
 
 (rule
+ (targets injection-flags-loader)
+ ; When installed through opam, we perform substitutions through the 'substs' directive in the opam file.
+ ; It also works using this rule, but running opam during an installation can be risky due to sandboxing issues.
+ (mode fallback)
+ (deps injection-flags-loader.in)
+ (action (run opam config subst %{targets})))
+
+(rule
  (target injection-flags)
  (deps injection-flags-dirs injection-flags-loader)
  (action (with-stdout-to %{target}
-           (run cat injection-flags-dirs injection-flags-loader))))
+          (run cat injection-flags-dirs injection-flags-loader))))
 
 (install
  (package coq-tactician-reinforce)
