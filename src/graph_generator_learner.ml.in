@@ -153,9 +153,10 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                      | GProjection p -> GProjection (Mod_subst.subst_proj_repr o p)
                    ))
                  ~discharge:(fun (_, ((_, n), gr)) -> Some ((NDischarged, n), gr)))
-  let in_dependencies : (DirPath.t * string * DPset.t) -> Libobject.obj =
+  let in_dependencies : (DirPath.t * string * int * DPset.t) -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHDEPS"
-        ~cache:(fun (_, (path, bin, deps)) -> dependencies := DPmap.add path (bin, deps) !dependencies)
+        ~cache:(fun (_, (path, bin, def_count, deps)) ->
+                 dependencies := DPmap.add path (bin, def_count, deps) !dependencies)
         ~subst:None)
   let in_previous_definition : node option -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHPREVIOUS"
@@ -377,7 +378,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let absolute_deps = List.map (fun p ->
         match DPmap.find_opt p !dependencies with
         | None -> CErrors.anomaly (Pp.str ("Dependency was not resolvable: " ^ DirPath.to_string p))
-        | Some (f, _) -> f
+        | Some (f, _, _) -> f
       ) deps in
     let pwd = Sys.getcwd () in
     (match Sys.getenv_opt "OPAM_PACKAGE_NAME" with
@@ -406,6 +407,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
     let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
     let resolved_dependencies = resolve_dependencies depslist in
+    let path_def_count = DPmap.map (fun (_, c, _) -> c) !dependencies in
     let g = K.Builder.Dataset.init_root () in
     let _ = K.Builder.Dataset.dependencies_set_list g resolved_dependencies in
     (match representative with
@@ -421,8 +423,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       List.map (fun n -> Stdint.Uint32.of_int @@ n) @@ Int.Set.elements definition_nodes in
     let path_transform (p, _) =
       DPmap.find p path_index in
-    let node_local_index (_, (def, i)) =
-      if def then i else def_count + i in
+    let node_local_index (p, (def, i)) =
+      if def then i else DPmap.find p path_def_count + i in
     let node_hash n = snd n in
     let node_label n = fst @@ G.transform_node_type n in
     let capnp_graph = K.Builder.Dataset.graph_init g in
@@ -437,12 +439,13 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     update_graph ();
 
     (* We want the dependencies of the graph to contain any non-transitive imports *)
-    let second_level_deps = DPmap.fold (fun _ (_, s') s -> DPset.union s s') !dependencies DPset.empty in
+    let second_level_deps = DPmap.fold (fun _ (_, _, s') s -> DPset.union s s') !dependencies DPset.empty in
     let non_trans_deps = DPset.filter (fun d -> not @@ DPset.mem d second_level_deps) @@ DPmap.domain !dependencies in
     let graph_builder = !graph_builder in
     let graph_builder = { graph_builder with paths = DPset.union graph_builder.paths non_trans_deps } in
 
-    Lib.add_anonymous_leaf @@ in_dependencies (dirpath, (data_file ()), DPmap.domain !dependencies);
+    Lib.add_anonymous_leaf @@
+    in_dependencies (dirpath, (data_file ()), graph_builder.node_count, DPmap.domain !dependencies);
     write_graph graph_builder !definition_nodes !previous_definition
 
 end
