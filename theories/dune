@@ -23,8 +23,8 @@
 
 (install
  (package coq-tactician-reinforce)
- (files (NNLearner.v as coq/user-contrib/Tactician/NNLearner.v)
-        (TacticianReinforceDepLoader.v as coq/user-contrib/Tactician/TacticianReinforceDepLoader.v))
+ (files (NNLearner.v as coq/user-contrib/TacticianReinforce/NNLearner.v)
+        (TacticianReinforceDepLoader.v as coq/user-contrib/TacticianReinforce/TacticianReinforceDepLoader.v))
  (section lib_root)
 )
 
