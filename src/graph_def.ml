@@ -764,7 +764,6 @@ module GraphHasher
           | Normal { hash; _ } -> hash
           | Binder ({ hash; _ }, { seen = false; _ }) -> hash
           | Binder ({ depth; label; _ }, { seen = true; final = false; _ }) ->
-              Feedback.msg_notice Pp.(str "binder at depth " ++ int depth ++ str " current depth " ++ int curr_depth ++ str " de Bruijn: " ++ int (curr_depth - depth));
               H.with_state @@ fun state ->
               (* Careful to include the label of the binder as well as its de Bruijn index *)
               H.update_node_label label @@ H.update_int (curr_depth - depth) state
@@ -777,9 +776,7 @@ module GraphHasher
 
   let calc_min_binder_referenced ch =
     OList.fold_left (fun acc (_, n) -> match !n with
-        | BinderPlaceholder { depth } ->
-          Feedback.msg_notice Pp.(str "placeholder at depth " ++ int depth ++ str " for min binder calculation");
-          min acc depth
+        | BinderPlaceholder { depth } -> min acc depth
         | Normal { min_binder_referenced; _ } | Binder ({ min_binder_referenced; _}, _) ->
           min acc min_binder_referenced
         | Written _ -> acc) max_int ch
@@ -802,45 +799,30 @@ module GraphHasher
     | BinderPlaceholder _ -> 0
   let calc_size ch =
     let size = OList.map (fun (el, n) -> node_size n) ch in
-    let rews = OList.fold_left (+) 1 size in
-    Feedback.msg_notice Pp.(str "calculating size " ++ int rews);
-    rews
+    OList.fold_left (+) 1 size
 
   let rec recalc_hash n =
-    Feedback.msg_notice Pp.(str "recalc hash");
     match !n with
-    | Written _ ->
-      Feedback.msg_notice Pp.(str "recalc hash : written")
-    | Binder (_, { seen = true; _ }) ->
-      Feedback.msg_notice Pp.(str "recalc hash : binder seen")
+    | Written _ | Binder (_, { seen = true; _ }) -> ()
     | Binder (_, { seen = false; final = true; _ }) -> assert false
     | Binder (({ label; children; depth; _ } as i), ({ seen = false; _ } as bi)) ->
-      Feedback.msg_notice Pp.(str "recalc hash : binder unseen");
       n.contents <- Binder (i, { bi with seen = true });
       OList.iter recalc_hash @@ OList.map snd children;
       let hash = calc_hash depth label children in
-      Feedback.msg_notice Pp.(str "new binder hash : " ++ int (H.to_int hash));
       n.contents <- Binder ({ i with hash }, bi)
     | Normal ({ label; children; depth; _ } as i) ->
-      Feedback.msg_notice Pp.(str "recalc hash : normal");
       OList.iter recalc_hash @@ OList.map snd children;
       let hash = calc_hash depth label children in
-      Feedback.msg_notice Pp.(str "new normal hash : " ++ int (H.to_int hash));
       n.contents <- Normal { i with hash }
     | BinderPlaceholder _ -> assert false
 
   let write_node_and_children connected_component_hash n =
-    Feedback.msg_notice Pp.(str "write node and children");
     let tag_connected_component hash = H.with_state @@ fun state ->
       H.update connected_component_hash @@ H.update hash state in
     let rec aux n =
-      Feedback.msg_notice Pp.(str "aux");
       match !n with
-      | Written (n, _) ->
-        Feedback.msg_notice Pp.(str "write node and children : written");
-        return n
+      | Written (n, _) -> return n
       | Normal { label; children; hash; _ } ->
-        Feedback.msg_notice Pp.(str "write node and children : normal");
         let hash = tag_connected_component hash in
         let* ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
         let* map = get in
@@ -852,24 +834,18 @@ module GraphHasher
            n.contents <- Written (node, hash);
            node)
       | Binder ({ label; children; hash; _ }, { final = true; is_definition; _ }) ->
-        Feedback.msg_notice Pp.(str "write node and children : binder");
         let hash = tag_connected_component hash in
-        Feedback.msg_notice Pp.(str "after tag connected_component_hash");
         let* map = get in
-        Feedback.msg_notice Pp.(str "after map get");
         (match HashMap.find_opt hash map with
          | Some node ->
-           Feedback.msg_notice Pp.(str "binder found");
            n.contents <- Written (node, hash);
            let+ _ = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
            node
          | None ->
            let* depth = ask in
-           Feedback.msg_notice Pp.(str "binder not found");
            let* map, node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
              let computation =
                let* () = put (HashMap.add hash node map) in
-               Feedback.msg_notice Pp.(str "writing binder");
                n.contents <- Written (node, hash);
                let+ ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
                node, (label, hash), ch in
@@ -897,7 +873,6 @@ module GraphHasher
      - [node] is a binder that closes the subterm below it
      - Any subterm of [node] that is closed is already written to the underlying graph *)
   let converge_hashes node =
-    Feedback.msg_notice Pp.(str "starting binder resolution");
     let connected_component_hash = match !node with
       | Binder ({ hash; _}, _) -> hash
       | _ -> assert false in
@@ -906,29 +881,20 @@ module GraphHasher
            | Binder (_, { seen = true; _ }) | Written _ -> rem
            | _ -> NodeSet.add ch rem) rem ch in
     let decompose_node n rem =
-      Feedback.msg_notice Pp.(str "decompose node");
       match n.contents with
       | Written (_, _) | Binder (_, { seen = true; _ }) | BinderPlaceholder _ -> assert false
-      | Normal { children; _ } ->
-        Feedback.msg_notice Pp.(str "decompose node normal");
-        add_filtered_children children rem
+      | Normal { children; _ } -> add_filtered_children children rem
       | Binder (({ label; children; _ } as i), ({ seen = false; _ } as bi)) ->
-        Feedback.msg_notice Pp.(str "decompose node binder");
         n.contents <- Binder (i, { bi with final = true; seen = true });
         add_filtered_children children rem in
     let rec decompose_queue q =
-      Feedback.msg_notice Pp.(str "decompose queue");
-      NodeSet.iter (fun n ->
-          Feedback.msg_notice Pp.(str "node size in list: " ++ int (node_size n))) q;
       match NodeSet.max_elt_opt q with
       | None -> return ()
       | Some max ->
         let nz = node_size max in
         let minmax = NodeSet.find_first (fun n -> node_size n = nz) q in
-        Feedback.msg_notice Pp.(str "node size: " ++ int nz);
         let rem, b, equal = NodeSet.split minmax q in
         assert b;
-        Feedback.msg_notice Pp.(str "equal list size: " ++ int (NodeSet.cardinal equal));
         (* Here is the crux of our algorithm: A naive algorithm, would always run `recalc_hash` on all
            nodes in order to make sure that every node receives a correct hash. This would lead to a
            O(n^2) runtime. To speed that up, we recognize that two nodes can only be equal if their size
@@ -959,12 +925,10 @@ module GraphHasher
        | None ->
          let* node = lift @@ G.mk_node (nl, hash) ch in
          let+ () = put (HashMap.add hash node map) in
-         Feedback.msg_notice Pp.(str "Add node with hash: " ++ int (H.to_int hash));
          ref @@ Written (node, hash))
     | None ->
       let size = calc_size ch in
       let min_binder_referenced = calc_min_binder_referenced ch in
-      Feedback.msg_notice Pp.(str "not converged. min binder referenced: " ++ int min_binder_referenced);
       let node = ref @@ Normal
         { label = nl
         ; children = ch
@@ -997,7 +961,6 @@ module GraphHasher
     | None ->
       let size = calc_size ch in
       let min_binder_referenced = calc_min_binder_referenced ch in
-      Feedback.msg_notice @@ Pp.(str "binder created at depth " ++ int depth);
       node.contents <- Binder
           ({ label = nl
            ; hash
@@ -1010,10 +973,8 @@ module GraphHasher
            ; final = false
            ; seen = false });
       let+ () =
-        Feedback.msg_notice Pp.(str "depth: " ++ int depth ++ str " min binder referenced: " ++
-                                int min_binder_referenced);
         (* We could use [dept = min_binder] here, except for mutual fixpoints *)
-        if depth <= min_binder_referenced then (* TODO: Check this again *)
+        if depth <= min_binder_referenced then
           map (fun (_ : G.node) -> ()) @@ converge_hashes node
         else return () in
       v
