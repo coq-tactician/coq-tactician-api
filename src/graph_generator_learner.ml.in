@@ -425,7 +425,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       DPmap.find p path_index in
     let node_local_index (p, (def, i)) =
       if def then i else DPmap.find p path_def_count + i in
-    let node_hash n = snd n in
+    let node_hash n = snd @@ G.transform_node_type n in
     let node_label n = fst @@ G.transform_node_type n in
     let capnp_graph = K.Builder.Dataset.graph_init g in
     Graph_capnp_generator.write_graph ~include_metadata:true
