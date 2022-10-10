@@ -692,7 +692,7 @@ module GraphHasher
     include GraphMonadType
       with type node_label = D.node_label
        and type edge_label = D.edge_label
-       and type 'a repr_t = 'a G.repr_t
+       and type 'a repr_t = G.node Map.Make(H).t -> (G.node Map.Make(H).t * 'a) G.repr_t
     val lower : node -> G.node * H.t
     val lift : G.node * H.t -> node
   end
@@ -727,9 +727,8 @@ module GraphHasher
     | _ -> assert false
   let lift (g, h) = ref @@ Written (g, h)
   type children = (edge_label * node) list
-  type 'a repr_t = 'a G.repr_t
-
   module HashMap = Map.Make(H)
+  type 'a repr_t = G.node HashMap.t -> (G.node HashMap.t * 'a) G.repr_t
 
   module M = Monad_util.ReaderStateMonadT
       (G)
@@ -973,6 +972,6 @@ module GraphHasher
       (* TODO: We know that nothing needs to be done here, because the node is not really external.
                But this is not really a nice API this way... *)
       return ()
-  let run : 'a t -> 'a G.repr_t = fun m ->
-    G.run @@ G.map snd @@ run m 0 HashMap.empty
+  let run : 'a t -> G.node HashMap.t -> (G.node HashMap.t * 'a) G.repr_t = fun m hashed ->
+    G.run @@ run m 0 hashed
 end

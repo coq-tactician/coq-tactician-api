@@ -74,6 +74,8 @@ let make_graph transform graph =
   close_out chan;
   ignore @@ Sys.command "dot -Tpdf graph.dot -o graph.pdf"
 
+module HashMap = Map.Make(CICHasher(XXHasher))
+
 module Viz
     (G : sig
        type node'
@@ -85,7 +87,8 @@ module Viz
           and type edge_label = edge_type
           and type node_label = node' node_type
           and type 'a repr_t =
-                'a *
+                int HashMap.t ->
+                (int HashMap.t * 'a) *
                 ((node_count:int -> edge_count:int -> result) ->
                  (result -> final -> (edge_label * int) list -> result) ->
                  result)
@@ -99,23 +102,25 @@ struct
       try
         Smartlocate.locate_global_with_alias x
       with Not_found -> CErrors.user_err (Pp.str "Invalid ident given") in
-    let (_, _), ns = GM.run_empty ?def_depth @@
-      Builder.gen_globref (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) x in
+    let (_, _), ns = GM.run_empty ?def_depth
+      (Builder.gen_globref (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) x)
+      HashMap.empty in
     make_graph G.final_to_string ns
 
   let make_constr_graph ?def_depth c =
     let env = Global.env () in
     let sigma = Evd.from_env env in
     let evd, c = Constrintern.interp_constr_evars env sigma c in
-    let (_, _), ns = GM.run_empty ?def_depth @@
-      Builder.gen_constr (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) (EConstr.to_constr evd c) in
+    let (_, _), ns = GM.run_empty ?def_depth
+      (Builder.gen_constr (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) (EConstr.to_constr evd c))
+      HashMap.empty in
     make_graph G.final_to_string ns
 
   let make_proof_graph ?def_depth state =
     let _ =
       Pfedit.solve (Goal_select.get_default_goal_selector ()) None
         (Proofview.tclBIND (Builder.gen_proof_state (Names.Id.Map.empty, Names.Cmap.empty)) (fun res ->
-             let (_, _), ns = GM.run_empty ?def_depth res in
+             let (_, _), ns = GM.run_empty ?def_depth res HashMap.empty in
              make_graph G.final_to_string ns;
              Proofview.tclUNIT ()))
         (Proof_global.get_proof state) in ()
@@ -133,6 +138,14 @@ module SimpleCICGraph = struct
       type edge_label = edge_type
       type node_label = final
     end)
+  type 'a repr_t =
+    int HashMap.t ->
+    (int HashMap.t * 'a) *
+    ((node_count:int -> edge_count:int -> result) ->
+     (result -> final -> (edge_label * int) list -> result) ->
+     result)
+  let run m _ =
+    let res, x = run m in (HashMap.empty, res), x
 end
 
 module rec SimpleHashedCICGraph : sig
@@ -144,7 +157,8 @@ module rec SimpleHashedCICGraph : sig
     with type node_label = node' node_type
      and type edge_label = edge_type
      and type 'a repr_t =
-           'a *
+           int HashMap.t ->
+           (int HashMap.t * 'a) *
            ((node_count:int -> edge_count:int -> result) ->
             (result -> final -> (edge_label * int) list -> result) ->
             result)
@@ -165,7 +179,7 @@ end = struct
         struct
           type nonrec result = result
           type edge_label = edge_type
-          type node_label = final 
+          type node_label = final
         end))
 end
 
