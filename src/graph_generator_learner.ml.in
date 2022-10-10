@@ -116,6 +116,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
   (* Global state of the graph generator *)
   let graph_builder = ref G.builder_nil
+  let node_hashes = ref HashMap.empty
   let definition_nodes = ref Int.Set.empty
   let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
   let section_nodes = Summary.ref ~name:"TacticianGraphSectionNodes" Id.Map.empty
@@ -288,13 +289,14 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let known = DPmap.domain !known_external_previous_definitions in
     let external_previous = OList.map snd @@ DPmap.bindings @@
       DPmap.filter (fun p _ -> not @@ DPset.mem p known) !external_previous_definitions in
-    let (_, (new_state, ())), builder =
+    let (new_node_hashes, (new_state, ())), builder =
       CICGraphMonad.run ~include_metadata:true ~state:{ previous = !previous_definition
                           ; external_previous
                           ; section_nodes = !section_nodes
                           ; definition_nodes = !global_nodes }
-        updater HashMap.empty !graph_builder (Global.current_dirpath ()) in
+        updater !node_hashes !graph_builder (Global.current_dirpath ()) in
     graph_builder := builder;
+    node_hashes := new_node_hashes;
     section_nodes := new_state.section_nodes;
     definition_nodes := Id.Map.fold (fun _ n s ->
         let ((path, (def, n)), _) = G.lower n in

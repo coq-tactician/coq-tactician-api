@@ -552,7 +552,13 @@ module CICHasher
        val to_int          : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
      end) = struct
   include H
-      let k = Buffer.contents
+  (* Definitions are never equal to any other definition, even if their names, type and body are equal.
+     The reason is that they are also part of a global context. We don't want the hash of a definition
+     to rely on a particular global context, but at the same time, we can also not merge two nodes with
+     a different global context... *)
+  let never_equal = function
+    | Definition _ -> true
+    | _ -> false
   let update_node_label p =
     let u = update_int in
     match p with
@@ -686,6 +692,7 @@ module GraphHasher
        val update_edge_label : D.edge_label -> state -> state
        val compare         : t -> t -> int
        val to_int          : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
+       val never_equal     : D.node_label -> bool (* Nodes with these labels are never equal to any other node *)
      end)
     (G : GraphMonadType with type node_label = D.node_label * H.t and type edge_label = D.edge_label)
   : sig
@@ -802,6 +809,16 @@ module GraphHasher
       n.contents <- Normal { i with hash }
     | BinderPlaceholder _ -> assert false
 
+  let share_node nl hash conta contb =
+    let add_node node =
+      let* map = get in
+      put (HashMap.add hash node map) in
+    if H.never_equal nl then conta (fun _ -> return ()) else
+      let* map = get in
+      match HashMap.find_opt hash map with
+      | None -> conta add_node
+      | Some node -> contb node
+
   let write_node_and_children connected_component_hash n =
     let tag_connected_component hash = H.with_state @@ fun state ->
       H.update connected_component_hash @@ H.update hash state in
@@ -811,35 +828,33 @@ module GraphHasher
       | Normal { label; children; hash; _ } ->
         let hash = tag_connected_component hash in
         let* ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
-        let* map = get in
-        (match HashMap.find_opt hash map with
-         | Some node -> n.contents <- Written (node, hash); return node
-         | None ->
-           let* node = lift @@ G.mk_node (label, hash) ch in
-           let+ () = put (HashMap.add hash node map) in
-           n.contents <- Written (node, hash);
-           node)
+        share_node label hash
+          (fun add ->
+             let* node = lift @@ G.mk_node (label, hash) ch in
+             let+ () = add node in
+             n.contents <- Written (node, hash);
+             node)
+          (fun node -> n.contents <- Written (node, hash); return node)
       | Binder ({ label; children; hash; _ }, { final = true; is_definition; _ }) ->
         let hash = tag_connected_component hash in
-        let* map = get in
-        (match HashMap.find_opt hash map with
-         | Some node ->
-           n.contents <- Written (node, hash);
-           let+ _ = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
-           node
-         | None ->
-           let* depth = ask in
-           let* map, node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
-             let computation =
-               let* () = put (HashMap.add hash node map) in
-               n.contents <- Written (node, hash);
-               let+ ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
-               node, (label, hash), ch in
-             G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@
-             run computation depth (* depth really doesn't matter*) map in
-           let+ () = put map in
-           node
-        )
+        share_node label hash
+          (fun add ->
+             let* depth = ask in
+             let* map = get in
+             let* map, node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
+               let computation =
+                 let* () = add node in
+                 n.contents <- Written (node, hash);
+                 let+ ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
+                 node, (label, hash), ch in
+               G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@
+               run computation depth (* depth really doesn't matter*) map in
+             let+ () = put map in
+             node)
+          (fun node ->
+             n.contents <- Written (node, hash);
+             let+ _ = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
+             node)
       | Binder (_, { final = false; _ }) | BinderPlaceholder _ -> assert false in
     aux n
 
@@ -905,13 +920,12 @@ module GraphHasher
     let hash = calc_hash depth nl ch in
     match children_converged ch with
     | Some ch ->
-      let* map = get in
-      (match HashMap.find_opt hash map with
-       | Some node -> return @@ ref @@ Written (node, hash)
-       | None ->
+      share_node nl hash
+       (fun add ->
          let* node = lift @@ G.mk_node (nl, hash) ch in
-         let+ () = put (HashMap.add hash node map) in
+         let+ () = add node in
          ref @@ Written (node, hash))
+       (fun node -> return @@ ref @@ Written (node, hash))
     | None ->
       let size = calc_size ch in
       let min_binder_referenced = calc_min_binder_referenced ch in
@@ -934,16 +948,15 @@ module GraphHasher
     let hash = calc_hash depth nl ch in
     match children_converged ch with
     | Some ch ->
-      let* map = get in
-      (match HashMap.find_opt hash map with
-       | Some node' ->
-         node.contents <- Written (node', hash);
-         return v
-       | None ->
+      share_node nl hash
+       (fun add ->
          let* node' = lift @@ G.mk_node (nl, hash) ch in
-         let+ () = put (HashMap.add hash node' map) in
+         let+ () = add node' in
          node.contents <- Written (node', hash);
          v)
+       (fun node' ->
+          node.contents <- Written (node', hash);
+          return v)
     | None ->
       let size = calc_size ch in
       let min_binder_referenced = calc_min_binder_referenced ch in
