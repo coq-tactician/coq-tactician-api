@@ -132,8 +132,6 @@ type 'node node_type =
   | Lambda of name
   | LetIn of name
   | App
-  | AppFun
-  | AppArg
   | Case
   | CaseBranch
   | Fix (* TODO: Recursive var info? *)
@@ -185,11 +183,8 @@ type edge_type =
   | LetInTerm
 
   (* Apps *)
-  | AppFunPointer
-  | AppFunValue
-  | AppArgPointer
-  | AppArgValue
-  | AppArgOrder
+  | AppFun
+  | AppArg
 
   (* Cases *)
   | CaseTerm
@@ -250,11 +245,8 @@ let edge_type_int_mod = function
   | LetInDef -> 0
   | LetInType -> 1
   | LetInTerm -> 2
-  | AppFunPointer -> 0
-  | AppFunValue -> 0
-  | AppArgPointer -> 1
-  | AppArgValue -> 0
-  | AppArgOrder -> 2
+  | AppFun -> 0
+  | AppArg -> 1
   | CaseTerm -> 0
   | CaseReturn -> 1
   | CaseBranchPointer -> 2
@@ -582,17 +574,15 @@ module CICHasher
     | Lambda _ -> u 15
     | LetIn _ -> u 16
     | App -> u 17
-    | AppFun -> u 18
-    | AppArg -> u 19
-    | Case -> u 20
-    | CaseBranch -> u 21
-    | Fix -> u 22
-    | FixFun _ -> u 23
-    | CoFix -> u 24
-    | CoFixFun _ -> u 25
-    | Int i -> fun s -> u 26 @@ update_string (Uint63.to_string i) s (* Not very efficient but who cares *)
-    | Float f -> fun s -> u 27 @@ update_string (Float64.to_string f) s (* Not very efficient but who cares *)
-    | Primitive p -> fun s -> u 28 @@ update_string (CPrimitives.to_string p) s
+    | Case -> u 18
+    | CaseBranch -> u 19
+    | Fix -> u 20
+    | FixFun _ -> u 21
+    | CoFix -> u 22
+    | CoFixFun _ -> u 23
+    | Int i -> fun s -> u 24 @@ update_string (Uint63.to_string i) s (* Not very efficient but who cares *)
+    | Float f -> fun s -> u 25 @@ update_string (Float64.to_string f) s (* Not very efficient but who cares *)
+    | Primitive p -> fun s -> u 26 @@ update_string (CPrimitives.to_string p) s
   let update_edge_label =
     let u = update_int in
     function
@@ -618,30 +608,27 @@ module CICHasher
     | LetInDef -> u 19
     | LetInType -> u 20
     | LetInTerm -> u 21
-    | AppFunPointer -> u 22
-    | AppFunValue -> u 23
-    | AppArgPointer -> u 24
-    | AppArgValue -> u 25
-    | AppArgOrder -> u 26
-    | CaseTerm -> u 27
-    | CaseReturn -> u 28
-    | CaseBranchPointer -> u 29
-    | CaseInd -> u 30
-    | CBConstruct -> u 31
-    | CBTerm -> u 32
-    | FixMutual -> u 33
-    | FixReturn -> u 34
-    | FixFunType -> u 35
-    | FixFunTerm -> u 36
-    | CoFixMutual -> u 37
-    | CoFixReturn -> u 38
-    | CoFixFunType -> u 39
-    | CoFixFunTerm -> u 40
-    | RelPointer -> u 41
-    | EvarSubstPointer -> u 42
-    | EvarSubstTerm -> u 43
-    | EvarSubstTarget -> u 44
-    | EvarSubject -> u 45
+    | AppFun -> u 22
+    | AppArg -> u 23
+    | CaseTerm -> u 24
+    | CaseReturn -> u 25
+    | CaseBranchPointer -> u 26
+    | CaseInd -> u 27
+    | CBConstruct -> u 28
+    | CBTerm -> u 29
+    | FixMutual -> u 30
+    | FixReturn -> u 31
+    | FixFunType -> u 32
+    | FixFunTerm -> u 33
+    | CoFixMutual -> u 34
+    | CoFixReturn -> u 35
+    | CoFixFunType -> u 36
+    | CoFixFunTerm -> u 37
+    | RelPointer -> u 38
+    | EvarSubstPointer -> u 39
+    | EvarSubstTerm -> u 40
+    | EvarSubstTarget -> u 41
+    | EvarSubject -> u 42
 end
 
 (** `GraphHasher` is a module functor that transforms any `GraphMonadType` into another

@@ -112,8 +112,6 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
   | Lambda _ -> lambda_set cnt
   | LetIn _ -> let_in_set cnt
   | App -> app_set cnt
-  | AppFun -> app_fun_set cnt
-  | AppArg -> app_arg_set cnt
   | Case -> case_set cnt
   | CaseBranch -> case_branch_set cnt
   | Fix -> fix_set cnt
@@ -152,11 +150,8 @@ let et2et (et : edge_type) =
   | LetInDef -> LetInDef
   | LetInType -> LetInType
   | LetInTerm -> LetInTerm
-  | AppFunPointer -> AppFunPointer
-  | AppFunValue -> AppFunValue
-  | AppArgPointer -> AppArgPointer
-  | AppArgValue -> AppArgValue
-  | AppArgOrder -> AppArgOrder
+  | AppFun -> AppFun
+  | AppArg -> AppArg
   | CaseTerm -> CaseTerm
   | CaseReturn -> CaseReturn
   | CaseBranchPointer -> CaseBranchPointer

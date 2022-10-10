@@ -43,10 +43,7 @@ module GraphvizGraph = struct
   let edge_attributes e =
     (if label_option () then [ `Label Graph_def.(show_edge_type @@ E.label e) ] else []) @
     [ `Dir `Both
-    ; `Arrowtail (List.nth arrow_heads @@ edge_type_int_mod @@ E.label e)] @
-    (match E.label e with
-    | AppArgOrder -> [`Constraint false]
-    | _ -> [`Constraint true])
+    ; `Arrowtail (List.nth arrow_heads @@ edge_type_int_mod @@ E.label e)]
   let get_subgraph _ = None
 
   let mk_edge g sort ~source ~target = add_edge_e g (E.create source sort target)

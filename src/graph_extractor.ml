@@ -815,13 +815,10 @@ end = struct
       letin, (LetIn id.binder_name), [LetInType, typ; LetInDef, def; LetInTerm, term]
     | App (f, args) ->
       let* f = gen_constr f in
-      let* fn = mk_node AppFun [AppFunValue, f] in
-      let* (_, args) = List.fold_left (fun (prev, acc) arg ->
+      List.fold_left (fun f arg ->
           let* arg = gen_constr arg in
-          let+ arg = mk_node AppArg [AppArgValue, arg; AppArgOrder, prev] in
-          arg, (AppArgPointer, arg)::acc)
-          (fn, [AppFunPointer, fn]) @@ Array.to_list args in
-      mk_node App (OList.rev args)
+          mk_node App [AppFun, f; AppArg, arg])
+          f @@ Array.to_list args
     | Const (c, u) -> gen_const c
     | Ind (i, u) -> gen_inductive i
     | Construct (c, u) -> gen_constructor c
@@ -860,10 +857,8 @@ end = struct
       mk_node CoFix @@ (CoFixReturn, (OList.nth funs ret))::(OList.map (fun f -> CoFixMutual, f) funs)
     | Proj (p, term) ->
       let* fn = gen_projection p in
-      let* fn = mk_node AppFun [AppFunValue, fn] in
       let* term = gen_constr term in
-      let* arg = mk_node AppArg [AppArgValue, term; AppArgOrder, fn] in
-      mk_node App [AppFunPointer, fn; AppArgPointer, arg]
+      mk_node App [AppFun, fn; AppArg, term]
     | Int n ->
       mk_node (Int n) []
     | Float f ->

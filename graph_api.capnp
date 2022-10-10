@@ -78,7 +78,7 @@ struct Graph {
 
     label :union { # Inlined for efficiency purposes
       proofState @0 :Void;
-      undefProofState @28 :Void;
+      undefProofState @29 :Void;
 
       # Context
       contextDef @1 :Text;
@@ -103,26 +103,24 @@ struct Graph {
       lambda @14 :Void;
       letIn @15 :Void;
       app @16 :Void;
-      appFun @17 :Void;
-      appArg @18 :Void;
-      case @19 :Void;
-      caseBranch @20 :Void;
-      fix @21 :Void;
-      fixFun @22 :Void;
-      coFix @23 :Void;
-      coFixFun @24 :Void;
+      case @17 :Void;
+      caseBranch @18 :Void;
+      fix @19 :Void;
+      fixFun @20 :Void;
+      coFix @21 :Void;
+      coFixFun @22 :Void;
 
       # Primitives
-      int @25 :IntP;
-      float @26 :FloatP;
-      primitive @27 :Text;
+      int @23 :IntP;
+      float @24 :FloatP;
+      primitive @25 :Text;
     }
 
-    childrenIndex @29 :UInt32;
-    childrenCount @30 :UInt16;
+    childrenIndex @26 :UInt32;
+    childrenCount @27 :UInt16;
     # The children of a node are encoded as a range withing the `edges`-list of the graph.
 
-    identity @31 :NodeIdentity;
+    identity @28 :NodeIdentity;
     # The identity of a node uniquely determines it. That is, one can consider any to nodes with the same
     # identity to be equal. The notion of equal we use is as follows:
     # 1. Graph perspective: Two nodes have the same identity if and only if they are bisimilar.
@@ -552,46 +550,43 @@ enum EdgeClassification {
   letInTerm @21;
 
   # Apps
-  appFunPointer @22;
-  appFunValue @23;
-  appArgPointer @24;
-  appArgValue @25;
-  appArgOrder @26;
+  appFun @22;
+  appArg @23;
 
   # Cases
-  caseTerm @27;
-  caseReturn @28;
-  caseBranchPointer @29;
-  caseInd @30;
+  caseTerm @24;
+  caseReturn @25;
+  caseBranchPointer @26;
+  caseInd @27;
 
   # CaseBranches
-  cBConstruct @31;
-  cBTerm @32;
+  cBConstruct @28;
+  cBTerm @29;
 
   # Fixes
-  fixMutual @33;
-  fixReturn @34;
+  fixMutual @30;
+  fixReturn @31;
 
   # FixFuns
-  fixFunType @35;
-  fixFunTerm @36;
+  fixFunType @32;
+  fixFunTerm @33;
 
   # CoFixes
-  coFixMutual @37;
-  coFixReturn @38;
+  coFixMutual @34;
+  coFixReturn @35;
 
   # CoFixFuns
-  coFixFunType @39;
-  coFixFunTerm @40;
+  coFixFunType @36;
+  coFixFunTerm @37;
 
   # Back pointers
-  relPointer @41;
+  relPointer @38;
 
   # Evars
-  evarSubstPointer @42;
-  evarSubstTerm @43;
-  evarSubstTarget @44;
-  evarSubject @45;
+  evarSubstPointer @39;
+  evarSubstTerm @40;
+  evarSubstTarget @41;
+  evarSubject @42;
 }
 
 # Struct is needed to work around
@@ -606,11 +601,11 @@ const conflatableEdges :List(ConflatableEdges) =
 ];
 const importantEdges :List(EdgeClassification) =
 [ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
-, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFunPointer, appArgPointer, appArgOrder, relPointer ];
+, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFun, appArg, relPointer ];
 const lessImportantEdges :List(EdgeClassification) =
 [ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
 const leastImportantEdges :List(EdgeClassification) =
-[ constUndef, constPrimitive, projTerm, castTerm, castType, appFunValue, appArgValue, coFixReturn, coFixFunType, coFixFunTerm
+[ constUndef, constPrimitive, projTerm, castTerm, castType, coFixReturn, coFixFunType, coFixFunTerm
 , coFixMutual, evarSubstPointer, evarSubstTerm, evarSubstTarget ];
 
 # WARNING: DO NOT USE
@@ -626,9 +621,7 @@ const groupedEdges :List(ConflatableEdges) =
 , ( conflatable = [prodType, prodTerm] )
 , ( conflatable = [lambdaType, lambdaTerm] )
 , ( conflatable = [letInDef, letInTerm, letInType] )
-, ( conflatable = [appFunPointer, appArgPointer, appArgOrder] )
-, ( conflatable = [appFunValue] )
-, ( conflatable = [appArgValue] )
+, ( conflatable = [appFun, appArg] )
 , ( conflatable = [caseTerm, caseReturn, caseBranchPointer, caseInd] )
 , ( conflatable = [cBConstruct, cBTerm] )
 , ( conflatable = [fixMutual, fixReturn] )

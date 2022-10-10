@@ -6,6 +6,20 @@ Changes to the Capn'proto format:
 - Removed the field `Definition.hash`, which is now superseded by `Graph.Node.identity`.
 
 Changes to the graph:
+- Application nodes are now curried in favor of the previous uncurried approach. This choice was
+  made for multiple reasons:
+  1. Due to the graph sharing in this release, uncurried application nodes can look strange because
+     part of the application structure can be shared between separate applications. Although this is
+     not incorrect, it is certainly somewhat unexpected.
+  2. Because of the ordering edges needed between arguments in the uncurried approach, the graph is
+     a DAG in places where normally a tree (with backedges) would be expected. Particularly, this happens
+     inside strongly connected components. This is problematic for the graph sharing algorithm because
+     unfolding a DAG into a tree leads to exponential blowup. This is a problem in size calculations of
+     terms, causing integer overflows. To avoid an exponential blowup in the uncurried form, the
+     complexity of the sharing algorithm is O(n log n log n) which could otherwise be O(n log n).
+
+  A downside of the curried approach is that the graph has now become deeper. That is, the primary
+  function of an application with many arguments is now fairly deep in the tree.
 - A bug was fixed that caused fixpoints that had additional binders in scope to resolve de Bruijn
   indices wrong.
 
