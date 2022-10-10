@@ -379,26 +379,28 @@ end = struct
 
   let with_named_context gen_constr c (m : 'a t) =
     let* env = lookup_env in
-    Named.fold_inside (fun m d ->
+    snd @@ Named.fold_inside (fun (index, m) d ->
         match d with
         | Named.Declaration.LocalAssum (id, typ) ->
           (try
-             ignore (Environ.lookup_named id.binder_name env); m
+             ignore (Environ.lookup_named id.binder_name env); (index, m)
            with Not_found ->
+             index + 1,
              let* typ = gen_constr typ in
-             let* var = mk_node (ContextAssum id.binder_name) [ContextDefType, typ] in
+             let* var = mk_node (ContextAssum (index, id.binder_name)) [ContextDefType, typ] in
              let+ (ctx, v) = with_named id.binder_name var m in
              ((ContextElem, var)::ctx), v)
         | Named.Declaration.LocalDef (id, term, typ) ->
           (try
-             ignore (Environ.lookup_named id.binder_name env); m
+             ignore (Environ.lookup_named id.binder_name env); (index, m)
            with Not_found ->
+             index + 1,
              let* typ = gen_constr typ in
              let* term = gen_constr term in
-             let* var = mk_node (ContextDef id.binder_name) [ContextDefType, typ; ContextDefTerm, term] in
+             let* var = mk_node (ContextDef (index, id.binder_name)) [ContextDefType, typ; ContextDefTerm, term] in
              let+ (ctx, v) = with_named id.binder_name var m in
              ((ContextElem, var)::ctx), v))
-      c ~init:(let+ m = m in [], m)
+      c ~init:(0, (let+ m = m in [], m))
 
   (* This is used for definition leafs when we don't want to 'follow' definitions *)
   let mk_fake_definition def_type gref =

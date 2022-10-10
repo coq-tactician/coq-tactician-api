@@ -110,8 +110,8 @@ type 'node node_type =
   | UndefProofState
 
   (* Context *)
-  | ContextDef of id
-  | ContextAssum of id
+  | ContextDef of int * id
+  | ContextAssum of int * id
 
   (* Definitions *)
   | Definition of 'node definition
@@ -558,8 +558,8 @@ module CICHasher
     match p with
     | ProofState -> u 0
     | UndefProofState -> u 1
-    | ContextDef id -> fun s -> u 2 @@ update_string (Id.to_string id) s
-    | ContextAssum id -> fun s -> u 3 @@ update_string (Id.to_string id) s
+    | ContextDef (idx, _) -> fun s -> u 2 @@ update_int idx s
+    | ContextAssum (idx, _) -> fun s -> u 3 @@ update_int idx s
     | Definition { path; _ } -> fun s -> u 4 @@ update_string (Libnames.string_of_path path) s
     | ConstEmpty -> u 5
     | SortSProp -> u 6

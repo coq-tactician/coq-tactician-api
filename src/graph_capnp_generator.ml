@@ -10,8 +10,8 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
   match nt with
   | ProofState -> proof_state_set cnt
   | UndefProofState -> undef_proof_state_set cnt
-  | ContextDef id -> context_def_set cnt
-  | ContextAssum id -> context_assum_set cnt
+  | ContextDef _ -> context_def_set cnt
+  | ContextAssum _ -> context_assum_set cnt
   | Definition { previous; external_previous; def_type; path; status; type_text; term_text } ->
     let cdef = definition_init cnt in
     let open K.Builder.Definition in
