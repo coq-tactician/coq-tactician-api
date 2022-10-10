@@ -34,12 +34,13 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
     let write_proof arr proof =
       let write_proof_state capnp_state { root; context; ps_string; evar } =
         K.Builder.ProofState.root_set_int_exn capnp_state @@ node_local_index root;
-        let _ = K.Builder.ProofState.context_set_list capnp_state
-            (List.map (fun (_, n) -> Stdint.Uint32.of_int @@ node_local_index n) context) in
-        let _ = K.Builder.ProofState.context_names_set_list capnp_state
-            (List.map (fun (id, _) -> Id.to_string id) context) in
-        if include_metadata then
-          K.Builder.ProofState.text_set capnp_state ps_string;
+        ignore(K.Builder.ProofState.context_set_list capnp_state
+                 (List.map (fun (_, n) -> Stdint.Uint32.of_int @@ node_local_index n) context));
+        if include_metadata then begin
+          ignore(K.Builder.ProofState.context_names_set_list capnp_state
+                   (List.map (fun (id, _) -> Id.to_string id) context));
+          K.Builder.ProofState.text_set capnp_state ps_string
+        end;
         K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in
       let write_outcome capnp { term; term_text; arguments; proof_state_before; proof_states_after } =
         let capnp_state_before = K.Builder.Outcome.before_init capnp in
