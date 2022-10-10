@@ -545,8 +545,8 @@ end = struct
         let+ cont = with_evar evar root arr m in
         (* TODO: Look into what we should give as the evd here *)
         let ps_string = proof_state_to_string_safe (hyps, concl) env evd in
-        let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
-        { ps_string; root; context = context_range; evar }, cont in
+        let context = Id.Map.bindings map in
+        { ps_string; root; context; evar }, cont in
       let with_after_states after m =
         OList.fold_left (fun m (evd, _, st) ->
             let+ ps, (ls, res) = with_proof_state evd st m in
@@ -554,7 +554,7 @@ end = struct
           ) (let+ m = m in [], m) after in
       let+ (proof_states_after, (proof_state_before, arguments, term)) =
         with_after_states after @@
-        let* ctx, (subject, arguments, context_range, term) = with_named_context gen_constr before_hyps @@
+        let* ctx, (subject, arguments, context, term) = with_named_context gen_constr before_hyps @@
           let* subject = gen_constr before_concl
           and+ term = gen_constr term
           and+ map = lookup_named_map in
@@ -596,11 +596,11 @@ end = struct
                   )
                 | TOther -> return None
               ) args in
-          let context_range = OList.map (fun (_, n) -> n) @@ Id.Map.bindings map in
-          subject, arguments, context_range, term in
+          let context = Id.Map.bindings map in
+          subject, arguments, context, term in
         let+ root = mk_node ProofState ((ContextSubject, subject)::ctx) in
         let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
-        { ps_string; root; context = context_range; evar = before_evar }, arguments, term in
+        { ps_string; root; context; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
     let+ outcomes = List.map gen_outcome outcomes in
     { tactic; outcomes }

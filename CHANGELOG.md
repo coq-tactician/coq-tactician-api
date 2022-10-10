@@ -20,6 +20,9 @@ Changes to the graph:
 
   A downside of the curried approach is that the graph has now become deeper. That is, the primary
   function of an application with many arguments is now fairly deep in the tree.
+- Proof state assumption no longer carry their name, because this clashes with the sharing algorithm,
+  which does not use the name (it uses index instead). Names of assumptions are now encoded in
+  `ProofState.contextNames` struct.
 - A bug was fixed that caused fixpoints that had additional binders in scope to resolve de Bruijn
   indices wrong.
 

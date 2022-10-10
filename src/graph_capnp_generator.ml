@@ -10,8 +10,8 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
   match nt with
   | ProofState -> proof_state_set cnt
   | UndefProofState -> undef_proof_state_set cnt
-  | ContextDef id -> context_def_set cnt (if include_metadata then Id.to_string id else "")
-  | ContextAssum id -> context_assum_set cnt (if include_metadata then Id.to_string id else "")
+  | ContextDef id -> context_def_set cnt
+  | ContextAssum id -> context_assum_set cnt
   | Definition { previous; external_previous; def_type; path; status; type_text; term_text } ->
     let cdef = definition_init cnt in
     let open K.Builder.Definition in
@@ -35,7 +35,9 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
       let write_proof_state capnp_state { root; context; ps_string; evar } =
         K.Builder.ProofState.root_set_int_exn capnp_state @@ node_local_index root;
         let _ = K.Builder.ProofState.context_set_list capnp_state
-            (List.map (fun x -> Stdint.Uint32.of_int @@ node_local_index x) context) in
+            (List.map (fun (_, n) -> Stdint.Uint32.of_int @@ node_local_index n) context) in
+        let _ = K.Builder.ProofState.context_names_set_list capnp_state
+            (List.map (fun (id, _) -> Id.to_string id) context) in
         if include_metadata then
           K.Builder.ProofState.text_set capnp_state ps_string;
         K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in

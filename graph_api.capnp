@@ -81,8 +81,8 @@ struct Graph {
       undefProofState @29 :Void;
 
       # Context
-      contextDef @1 :Text;
-      contextAssum @2 :Text;
+      contextDef @1 :Void;
+      contextAssum @2 :Void;
 
       # Definitions
       definition @3 :Definition;
@@ -218,12 +218,13 @@ struct ProofState {
   context @1 :List(NodeIndex);
   # The local context of the proof state. These nodes are either `contextAssum` or `contextDef`. Note that
   # these nodes are also reachable from the root of the proof state.
+  contextNames @2 :List(Text);
 
-  text @2 :Text;
+  text @3 :Text;
   # A textual representation of the proof state. This field is only populated in the dataset, not while interacting
   # with Coq.
 
-  id @3 :ProofStateId;
+  id @4 :ProofStateId;
   # A unique identifier of the proof state. Any two proof states in a tactical proof that have an equal id
   # can morally be regarded to be 'the same' proof state.
   # IMPORTANT: Two proof states with the same id may still have different contents. This is because proof states

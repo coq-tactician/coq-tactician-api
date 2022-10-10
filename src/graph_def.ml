@@ -46,10 +46,10 @@ type constant = Constant.t
 type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@deriving show]
 
 type 'node proof_state =
-  { ps_string : string
-  ; root      : 'node
-  ; context   : 'node list
-  ; evar      : Evar.t }
+  { ps_string     : string
+  ; root          : 'node
+  ; context       : (Id.t * 'node) list
+  ; evar          : Evar.t }
 
 type 'node outcome =
   { term               : 'node
