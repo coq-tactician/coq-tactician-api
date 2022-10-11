@@ -250,12 +250,8 @@ class GraphVisualisationBrowser:
                                 label = str(edge.label)
                             else:
                                 label = ""
-                            if str(edge.label) in ["appArgOrder"]:
-                                constraint = "false"
-                            else:
-                                constraint = "true"
                             dot.edge(id, cid, label=label,
-                                     arrowtail=edge_arrow_map[edge.label], dir="both", constraint=constraint)
+                                     arrowtail=edge_arrow_map[edge.label], dir="both")
                 return id
         recurse(0, start, depth)
         return seen

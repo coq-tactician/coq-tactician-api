@@ -135,7 +135,7 @@ def process2(rootdir, args, res):
         local_count = nodes_count
         for t in g.graph.edges:
             if not (t.target.depIndex < len(g.dependencies)):
-                print(f"Error: in {fname} x.target.depIndex {x.target.depIndex} "
+                print(f"Error: in {fname} x.target.depIndex {t.target.depIndex} "
                       f"but len(g.dependencies) is {len(g.dependencies)} "
                       f"and g.dependencies = {g.dependencies}")
                 raise Exception
@@ -143,7 +143,7 @@ def process2(rootdir, args, res):
             if _dep in len_nodes.keys():
                 dep_len_nodes = len_nodes[g.dependencies[t.target.depIndex]]
             else:
-                print(f"WARNING: {fname} reference to {g.dependencies[x.target.depIndex]} "
+                print(f"WARNING: {fname} reference to {g.dependencies[t.target.depIndex]} "
                       "is not in the index of bin files in a given dataset, "
                       "following the reference outside ")
                 check_dep(fname, rootdir, _dep)
@@ -154,9 +154,9 @@ def process2(rootdir, args, res):
                     # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
                     g.total_size
             if not t.target.nodeIndex < dep_len_nodes:
-                print(f"in {fname} reference to {g.dependencies[x.target.depIndex]} "
-                      f"with node {x.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
-                      f"is {len_nodes[g.dependencies[x.target.depIndex]]}")
+                print(f"in {fname} reference to {g.dependencies[t.target.depIndex]} "
+                      f"with node {t.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
+                      f"is {len_nodes[g.dependencies[t.target.depIndex]]}")
                 raise Exception
         for node_index in g.definitions:
             node_classification = g.graph.nodes[node_index].label
