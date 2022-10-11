@@ -37,7 +37,7 @@ let write_execution_result env sigma res hyps concl obj =
 
   (* Obtain the graph *)
   let updater = gen_proof_state env hyps concl in
-  let (_, (_, (root, context_map))), { paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
+  let (_, (_, (root, context_map))), { def_count; node_count; edge_count; defs; nodes; edges } =
     CICGraph.run_empty ~def_truncate:true updater
       Graph_generator_learner.HashMap.empty G.builder_nil Local in
   let node_local_index (_, (def, i)) =

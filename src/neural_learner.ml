@@ -243,7 +243,7 @@ let init_predict_text rc wc =
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
 let populate_global_context_info tacs env ctacs cgraph cdefinitions =
-  let { paths=_; def_count; node_count; edge_count; defs; nodes; edges }, state =
+  let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
     let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
@@ -430,7 +430,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let request = Request.init_root () in
     let predict = Request.predict_init request in
     let updater = gen_proof_state env ps in
-    let (_, (_, (root, context_map))), { paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
+    let (_, (_, (root, context_map))), { def_count; node_count; edge_count; defs; nodes; edges } =
       CICGraphMonad.run ~include_opaque:false ~state updater
         Graph_generator_learner.HashMap.empty G.builder_nil Local in
     let node_local_index (_, (def, i)) =

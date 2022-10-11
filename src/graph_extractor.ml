@@ -197,14 +197,6 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     | Some (NActual, _) -> CErrors.anomaly Pp.(str "Map update attempt while key already existed: " ++ p)
     | Some ((NDischarged | NSubstituted), _) -> Some x
 
-  let option_map f o =
-    match o with
-    | None -> return None
-    | Some x -> let+ x = f x in Some x
-  let with_register_external n =
-    let+ () = lift @@ register_external (snd n) in
-    n
-
   let register_constant c n =
     let* ({ definition_nodes = ({ constants; _ } as dn); _ } as s) = get in
     put { s with
@@ -212,8 +204,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
         ; definition_nodes =
             { dn with constants = Cmap.update c (update_error2 (Constant.print c) (NActual, n)) constants }}
   let find_constant c =
-    let* { definition_nodes = { constants; _ }; _ } = get in
-    option_map with_register_external @@ Cmap.find_opt c constants
+    let+ { definition_nodes = { constants; _ }; _ } = get in
+    Cmap.find_opt c constants
 
   let register_inductive i n =
     let* ({ definition_nodes = ({ inductives; _ } as dn); _ } as s) = get in
@@ -222,8 +214,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
         ; definition_nodes =
             { dn with inductives = Indmap.update i (update_error2 (Pp.str "ind") (NActual, n)) inductives }}
   let find_inductive i =
-    let* { definition_nodes = { inductives; _ }; _ } = get in
-    option_map with_register_external @@ Indmap.find_opt i inductives
+    let+ { definition_nodes = { inductives; _ }; _ } = get in
+    Indmap.find_opt i inductives
 
   let register_constructor c n =
     let* ({ definition_nodes = ({ constructors; _ } as dn); _ } as s) = get in
@@ -232,8 +224,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
         ; definition_nodes =
             { dn with constructors = Constrmap.update c (update_error2 (Pp.str "constr") (NActual, n)) constructors }}
   let find_constructor c =
-    let* { definition_nodes = { constructors; _ }; _ } = get in
-    option_map with_register_external @@ Constrmap.find_opt c constructors
+    let+ { definition_nodes = { constructors; _ }; _ } = get in
+    Constrmap.find_opt c constructors
 
   let register_projection p n =
     let* ({ definition_nodes = ({ projections; _ } as dn); _ } as s) = get in
@@ -242,8 +234,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
         ; definition_nodes =
             { dn with projections = ProjMap.update p (update_error2 (Pp.str "proj") (NActual, n)) projections  }}
   let find_projection p =
-    let* { definition_nodes = { projections; _ }; _ } = get in
-    option_map with_register_external @@ ProjMap.find_opt p projections
+    let+ { definition_nodes = { projections; _ }; _ } = get in
+    ProjMap.find_opt p projections
 
   let register_section_variable id n =
     let* ({ section_nodes; _ } as s) = get in
@@ -260,8 +252,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let drain_external_previous_definitions =
     let open Monad.Make(M) in
     let* ({ external_previous; _ } as s) = get in
-    let+ () = List.iter (fun n -> lift @@ register_external n) external_previous
-    and+ () = put { s with external_previous = [] } in
+    let+ () = put { s with external_previous = [] } in
     external_previous
 
   (** Managing the local context *)

@@ -276,7 +276,6 @@ module type GraphMonadType = sig
   type 'a repr_t
   val mk_node : node_label -> children -> node t
   val with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t
-  val register_external : node -> unit t
   val run : 'a t -> 'a repr_t
 end
 
@@ -341,7 +340,6 @@ module SimpleGraph
     pass @@
     let+ (v, nl, ch) = f i in
     v, fun (ec, nls) -> (ec + List.length ch), fun c r -> c (nls c r) nl ch
-  let register_external _ = return ()
   let run m : 'a repr_t =
     let node_count, ((edge_count, ns), res) = run m 0 in
     res, fun mki c -> let r = mki ~node_count ~edge_count in ns c r
@@ -396,9 +394,8 @@ end
 
 type edge_label = edge_type
 type edge_range = { start : int; size : int }
-type ('p, 'nl, 'el, 'n) builder =
-  { paths : 'p
-  ; def_count : int
+type ('nl, 'el, 'n) builder =
+  { def_count : int
   ; node_count : int
   ; edge_count : int
   ; defs : ('nl * edge_range) AList.t
@@ -413,7 +410,7 @@ module GlobalGraph(S : Set.S)
      end)
   : sig
   type node' = S.elt * (bool * int)
-  type nonrec builder = (S.t, D.node_label, D.edge_label, node') builder
+  type nonrec builder = (D.node_label, D.edge_label, node') builder
   val builder_nil : builder
   include GraphMonadType
   with type node_label = D.node_label
@@ -423,8 +420,8 @@ module GlobalGraph(S : Set.S)
 end = struct
   type node' = S.elt * (bool * int)
   type node = node'
-  type nonrec builder = (S.t, D.node_label, D.edge_label, node') builder
-  let builder_nil = { paths = S.empty; def_count = 0; node_count = 0; edge_count = 0
+  type nonrec builder = (D.node_label, D.edge_label, node') builder
+  let builder_nil = { def_count = 0; node_count = 0; edge_count = 0
                     ; defs = AList.nil; nodes = AList.nil; edges = AList.nil }
   type edge_label = D.edge_label
   type node_label = D.node_label
@@ -436,20 +433,18 @@ end = struct
   type writer =
     { defs : (node_label * edge_range) AList.t
     ; nodes : (node_label * edge_range) AList.t
-    ; edges : (edge_label * node') AList.t
-    ; paths : S.t }
+    ; edges : (edge_label * node') AList.t }
   module M = Monad_util.ReaderStateWriterMonad
       (struct type r = S.elt end)
       (struct type s = state end)
       (struct type w = writer
-        let id = { defs = AList.nil; nodes = AList.nil; edges = AList.nil; paths = S.empty }
+        let id = { defs = AList.nil; nodes = AList.nil; edges = AList.nil }
         let comb = fun
-          { defs = d1; nodes = f1; edges = e1; paths = p1 }
-          { defs = d2; nodes = f2; edges = e2; paths = p2 } ->
+          { defs = d1; nodes = f1; edges = e1 }
+          { defs = d2; nodes = f2; edges = e2 } ->
           { defs = AList.append d1 d2
           ; nodes = AList.append f1 f2
-          ; edges = AList.append e1 e2
-          ; paths = S.union p1 p2 }
+          ; edges = AList.append e1 e2 }
       end)
   include M
   type nonrec 'a repr_t = builder -> S.elt -> 'a * builder
@@ -457,8 +452,6 @@ end = struct
   let index_to_node i =
     let+ current = ask in
     current, i
-  let children_paths ch ps =
-    List.fold_left (fun ps (_, (p, _)) -> S.add p ps) ps ch
   let mk_node nl ch =
     let* { def_count; node_count; edge_count } = get in
     let edge_count' = List.length ch in
@@ -471,7 +464,7 @@ end = struct
         let+ () = put { def_count; node_count = node_count + 1; edge_count = edge_count + edge_count' } in
         AList.nil, AList.singleton (nl, { start = edge_count; size = edge_count' }), (false, node_count)
     in
-    let* () = tell { defs; nodes; edges = AList.of_list ch; paths = children_paths ch S.empty } in
+    let* () = tell { defs; nodes; edges = AList.of_list ch } in
     index_to_node i
   let with_delayed_node ?(definition=false) f =
     let* { def_count; node_count; edge_count } = get in
@@ -490,7 +483,7 @@ end = struct
     let* { edge_count; _ } as s = get in
     let edge_count' = List.length ch in
     let+ () = put {s with edge_count = edge_count + edge_count' } in
-    v, fun { defs; nodes; edges; paths } ->
+    v, fun { defs; nodes; edges } ->
       let defs, nodes =
         match definition, D.is_definition nl with
         | true, true ->
@@ -498,15 +491,12 @@ end = struct
         | false, false ->
           defs, AList.cons (nl, { start = edge_count; size = edge_count' }) nodes
         | _, _ -> assert false in
-      { defs; nodes; edges = AList.append edges (AList.of_list ch)
-      ; paths = children_paths ch paths }
-  let register_external (tp, _) =
-    tell { defs = AList.nil; nodes = AList.nil; edges = AList.nil; paths = S.singleton tp }
-  let run m { paths; def_count; node_count; edge_count; defs; nodes; edges } current =
-    let { def_count; node_count; edge_count }, ({ defs; nodes; edges; paths }, result) =
-      let m = tell { defs; nodes; edges; paths } >> m in
+      { defs; nodes; edges = AList.append edges (AList.of_list ch) }
+  let run m { def_count; node_count; edge_count; defs; nodes; edges } current =
+    let { def_count; node_count; edge_count }, ({ defs; nodes; edges }, result) =
+      let m = tell { defs; nodes; edges } >> m in
       run m current { def_count; node_count; edge_count } in
-    result, { paths; def_count; node_count; edge_count
+    result, { def_count; node_count; edge_count
             ; defs; nodes; edges }
 end
 
@@ -978,13 +968,6 @@ module GraphHasher
         else return () in
       v
 
-  let register_external : node -> unit t = fun n ->
-    match !n with
-    | Written (n, _) -> lift @@ G.register_external n
-    | _ ->
-      (* TODO: We know that nothing needs to be done here, because the node is not really external.
-               But this is not really a nice API this way... *)
-      return ()
   let run : 'a t -> G.node HashMap.t -> (G.node HashMap.t * 'a) G.repr_t = fun m hashed ->
     G.run @@ run m 0 hashed
 end

@@ -32,7 +32,7 @@ end
 module rec GlobalHashedCICGraph : functor (S : Set.S) -> sig
   type node' = GlobalHashedCICGraph(S).node
   type lnode = S.elt * (bool * int)
-  type nonrec builder = (S.t, node' node_type * int64, edge_type, lnode) builder
+  type nonrec builder = (node' node_type * int64, edge_type, lnode) builder
   include GraphMonadType
     with type node_label = node' node_type
      and type edge_label = edge_type
@@ -413,14 +413,10 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     relative_deps
 
   module K = Graph_api.Make(Capnp.BytesMessage)
-  let write_graph { paths; def_count; node_count; edge_count; defs; nodes; edges }
-      definition_nodes representative =
-    let depslist = dirpath :: DPset.elements (DPset.remove dirpath paths) in
-    let path_index = CList.fold_left_i (fun i map path -> DPmap.add path i map) 0 DPmap.empty depslist in
-    let resolved_dependencies = resolve_dependencies depslist in
+  let write_graph { def_count; node_count; edge_count; defs; nodes; edges }
+      definition_nodes representative minimum_deps =
     let path_def_count = DPmap.map (fun (_, c, _) -> c) !dependencies in
     let g = K.Builder.Dataset.init_root () in
-    let _ = K.Builder.Dataset.dependencies_set_list g resolved_dependencies in
     (match representative with
      | None ->
        K.Builder.Dataset.representative_set_int_exn g (def_count + node_count)
@@ -432,8 +428,21 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
        K.Builder.Dataset.representative_set_int_exn g representative);
     let _ = K.Builder.Dataset.definitions_set_list g @@
       List.map (fun n -> Stdint.Uint32.of_int @@ n) @@ Int.Set.elements definition_nodes in
-    let path_transform (p, _) =
-      DPmap.find p path_index in
+    let node_dep_index, depslist =
+      let counter = ref 1 in
+      let path_index_map = ref @@ CList.fold_left_i (fun i map p -> DPmap.add p i map) 0 DPmap.empty @@
+      dirpath::(DPset.elements @@ DPset.remove dirpath minimum_deps) in
+      let node_dep_index (p, _) =
+        match DPmap.find_opt p !path_index_map with
+        | Some i -> i
+        | None ->
+          let c = !counter in
+          path_index_map := DPmap.add p c !path_index_map;
+          counter := c + 1;
+          c in
+      let depslist () = List.map fst @@ List.sort (fun (_, i1) (_, i2) -> Int.compare i1 i2) @@
+        DPmap.bindings !path_index_map in
+      node_dep_index, depslist in
     let node_local_index (p, (def, i)) =
       if def then i else DPmap.find p path_def_count + i in
     let node_hash n = snd @@ G.transform_node_type n in
@@ -441,8 +450,9 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let capnp_graph = K.Builder.Dataset.graph_init g in
     Graph_capnp_generator.write_graph ~include_metadata:true
       ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
-      ~node_dep_index:path_transform ~node_local_index
+      ~node_dep_index ~node_local_index
       ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges capnp_graph;
+    let _ = K.Builder.Dataset.dependencies_set_list g @@ resolve_dependencies @@ depslist () in
     Capnp_unix.IO.write_message_to_file ~compression:`None (K.Builder.Dataset.to_message g) (data_file ())
 
   let () = Declaremods.append_end_library_hook @@ fun () ->
@@ -452,12 +462,12 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     (* We want the dependencies of the graph to contain any non-transitive imports *)
     let second_level_deps = DPmap.fold (fun _ (_, _, s') s -> DPset.union s s') !dependencies DPset.empty in
     let non_trans_deps = DPset.filter (fun d -> not @@ DPset.mem d second_level_deps) @@ DPmap.domain !dependencies in
-    let graph_builder = !graph_builder in
-    let graph_builder = { graph_builder with paths = DPset.union graph_builder.paths non_trans_deps } in
 
+    let graph_builder = !graph_builder in
     Lib.add_anonymous_leaf @@
     in_dependencies (dirpath, (data_file ()), graph_builder.def_count, DPmap.domain !dependencies);
-    write_graph graph_builder !definition_nodes !previous_definition
+
+    write_graph graph_builder !definition_nodes !previous_definition non_trans_deps
 
 end
 
