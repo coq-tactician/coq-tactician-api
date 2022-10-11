@@ -180,6 +180,10 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                        else
                          external_previous_definitions := DPmap.add d prev !external_previous_definitions)
                  ~subst:(Some (fun (_, _) -> None)))
+  let in_node_hashes : G.lnode HashMap.t -> Libobject.obj =
+    Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHNODEHASHES"
+                 ~cache:(fun (_, hm) -> node_hashes := HashMap.union (fun _ v _ -> Some v) !node_hashes hm)
+                 ~subst:None)
   let in_known_external_previous_definition : node option -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHKNOWNEXTERNAL"
                  ~cache:(fun (_, prev) ->
@@ -466,6 +470,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let graph_builder = !graph_builder in
     Lib.add_anonymous_leaf @@
     in_dependencies (dirpath, (data_file ()), graph_builder.def_count, DPmap.domain !dependencies);
+    Lib.add_anonymous_leaf @@ in_node_hashes @@
+    HashMap.filter (fun _ (p, _) -> DirPath.equal dirpath p) !node_hashes;
 
     write_graph graph_builder !definition_nodes !previous_definition non_trans_deps
 
