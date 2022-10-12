@@ -433,8 +433,10 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let _ = K.Builder.Dataset.definitions_set_list g @@
       List.map (fun n -> Stdint.Uint32.of_int @@ n) @@ Int.Set.elements definition_nodes in
     let node_dep_index, depslist =
-      let counter = ref 1 in
-      let path_index_map = ref @@ CList.fold_left_i (fun i map p -> DPmap.add p i map) 0 DPmap.empty @@
+      let counter = ref 0 in
+      let path_index_map = ref @@ CList.fold_left_i (fun i map p ->
+          counter := !counter + 1;
+          DPmap.add p i map) 0 DPmap.empty @@
       dirpath::(DPset.elements @@ DPset.remove dirpath minimum_deps) in
       let node_dep_index (p, _) =
         match DPmap.find_opt p !path_index_map with
