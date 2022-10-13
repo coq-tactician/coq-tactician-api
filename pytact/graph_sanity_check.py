@@ -1,4 +1,3 @@
-import sys
 import argparse
 from multiprocessing import Pool
 import os
@@ -6,6 +5,7 @@ from pathlib import Path
 from functools import partial
 from collections import Counter
 import math
+from pytact.dataset_reader import data_viewer, lowlevel_data_viewer
 import capnp
 capnp.remove_import_hook()
 import pytact.common
@@ -14,19 +14,8 @@ graph_api_capnp = capnp.load(graph_api_capnp)
 
 len_nodes = {}
 
-def check_dep(fname, rootdir, _dep):
-    abs_dep = os.path.join(rootdir, _dep)
-    if abs_dep[-2:] == '.v':
-        abs_dep = abs_dep[:-2] + '.bin'    # remove .v -> .bin correction when datasets with .v are no longer used
-    if os.path.isfile(abs_dep):
-        # print(f"{fname}: Dependency file {abs_dep} present")
-        pass
-    else:
-        print(f"{fname}: Error: Dependency file does not exist: {abs_dep}")
-        raise Exception
-
-def process1(rootdir, args, fname):
-    with open(fname) as f:
+def process1(dataset_path: Path, args, fname: Path):
+    with lowlevel_data_viewer(dataset_path) as data:
         file_definitions = 0
         file_original_definitions = 0
         file_base_tactics_text = set()
@@ -43,157 +32,155 @@ def process1(rootdir, args, fname):
         original_proofs = 0
         original_proofs_faithful = 0
         unresolvable = 0
-        g = graph_api_capnp.Dataset.read(f, traversal_limit_in_words=2**64-1)
-        dep0 = g.dependencies[0]
-        nodes_count = len(g.graph.nodes)
-        edges_count = len(g.graph.edges)
-        print(f"{fname}: nodes {nodes_count}, edges {edges_count}, dep[0] {dep0}")
-        for n in g.definitions:
-            if g.graph.nodes[n].label.which() != 'definition':
-                print(f'{fname}: TacticalDefinitions Problem A')
-                raise Exception
+        graphid = data.graphs_by_filename[fname]
+        freader = data[graphid]
+        graph = freader.graph
+        node_counts = [len(data[i].graph.nodes) for i in range(0, len(data.graph_files))]
+        nodes_count = node_counts[graphid]
+        edges_count = len(graph.edges)
+        dependency_count = len(freader.dependencies)
+        print(f"Checking file {fname}: {nodes_count} nodes and {edges_count} edges")
 
-        for n in g.graph.nodes:
+        # Check correctness of Graph struct
+        for n in graph.nodes:
             if not (n.childrenIndex + n.childrenCount <= edges_count):
-                print(f'{fname}: Children of node {n} are not valid indices of edges')
-                raise Exception
+                raise Exception(f"{fname}: Children of node {n} are not valid indices of Graph.edges")
             n = n.label
-            if (n.which() == 'definition'):
+            if (n.which() == graph_api_capnp.Graph.Node.Label.definition):
+
+                # Check correctness of Definition struct
                 file_definitions += 1
-                if n.definition.status.which() == 'original':
-                    file_original_definitions += 1
-                if n.definition.which() == 'tacticalConstant' or n.definition.which() == 'tacticalSectionConstant':
-                    if n.definition.which() == 'tacticalConstant':
-                        ps = n.definition.tacticalConstant
+                definition = n.definition
+                status = definition.status
+                match status.which:
+                    case graph_api_capnp.Definition.Status.original:
+                        file_original_definitions += 1
+                    case graph_api_capnp.Definition.Status.discharged:
+                        if (graph.nodes[status.discharged].label.which !=
+                            graph_api_capnp.Graph.Node.Label.definition):
+                            raise Exception(f"{fname}: Discharged node of definition {definition.name} "
+                                            f"is not a definition")
+                    case graph_api_capnp.Definition.Status.substituted:
+                        if (data[data.local_to_global(graphid, status.substituted.depIndex)]
+                            .graph.nodes[status.substituted.nodeIndex].label.which !=
+                            graph_api_capnp.Graph.Node.Label.definition):
+                            raise Exception(f"{fname}: Substituted node of definition {definition.name} "
+                                            f"is not a definition")
+                if (definition.previous != nodes_count and
+                    graph.nodes[definition.previous].label.which != graph_api_capnp.Graph.Node.Label.definition):
+                    raise Exception(f"{fname}: Previous node of definition {definition.name} is not a definition")
+                for ep in definition.externalPrevious:
+                    if ep >= dependency_count:
+                        raise Exception(f"{fname}: External dependency of definition {definition.name} is "
+                                        f"out of bounds")
+                if definition.which() == 'tacticalConstant' or definition.which() == 'tacticalSectionConstant':
+                    if definition.which() == 'tacticalConstant':
+                        ps = definition.tacticalConstant
                     else:
-                        ps = n.definition.tacticalSectionConstant
+                        ps = definition.tacticalSectionConstant
                     faithful = True
                     before_states = set()
                     for p in ps:
                         for outcome in p.outcomes:
                             before_states.add(outcome.before.id)
                     for p in ps:
-                        for outcome in p.outcomes:
-                            for after in outcome.after:
-                                if after.id not in before_states:
-                                    print(f'{fname}: After state {after} with tactic {p.tactic.text} of definition {n.definition.name} does not have a correspoinding before state')
-                                    raise Exception
-                    for p in ps:
                         proof_steps += 1
-                        if n.definition.status.which() == 'original':
+                        if definition.status.which == graph_api_capnp.Definition.Status.original:
                             original_proof_steps += 1
-                        if (n.definition.status.which() == 'original'
-                            and p.tactic.which() == 'known'
-                            and p.tactic.known.text == p.tactic.known.intermText):
-                            original_proof_steps_faithful += 1
-                        else:
-                            faithful = False
-                        if p.tactic.which() == 'known':
+                            if (p.tactic.which() == graph_api_capnp.ProofStep.Tactic.known
+                                and p.tactic.known.text == p.tactic.known.intermText):
+                                original_proof_steps_faithful += 1
+                            else:
+                                faithful = False
+                        if p.tactic.which() == graph_api_capnp.ProofStep.Tactic.known:
                             ident = p.tactic.known.ident
+                            file_base_tactics_text.add(p.tactic.known.baseText)
+                            file_base_tactics_intermtext.add(p.tactic.known.intermText)
                         else:
                             ident = 0
                         file_tactics[ident] += 1
-                        if n.definition.status.which() == 'original':
+                        if definition.status.which() == graph_api_capnp.Definition.Status.original:
                             file_original_tactics[ident] += 1
                         for outcome in p.outcomes:
+                            for after in outcome.after:
+                                if after.id not in before_states:
+                                    raise Exception(
+                                        f"{fname}: After state {after} with tactic {p.tactic.text} "
+                                        f"of definition {definition.name} does not have a corresponding "
+                                        f"before state")
+                            if (outcome.term.nodeIndex >=
+                                node_counts[data.local_to_global(graphid, outcome.term.depIndex)]):
+                                raise Exception(f"{fname}: Term of outcome {outcome} of definition "
+                                                f"{definition.name} is out of bounds")
+                            for state in [outcome.before] + list(outcome.after):
+                                root_label = (data[data.local_to_global(graphid, state.root.depIndex)].graph
+                                              .nodes[state.root.nodeIndex].label.which)
+                                if root_label != graph_api_capnp.Graph.Node.Label.proofState:
+                                    raise Exception(f"{fname}: root is proof state {state} is {root_label}")
+                                if len(state.context) != len(state.contextNames):
+                                    raise Exception(f"{fname}: Length of context is different from length of"
+                                                    f"contextNames in proof state {state}")
+                                for c in state.context:
+                                    c_label = (data[data.local_to_global(graphid, c.depIndex)].graph
+                                              .nodes[c.nodeIndex].label.which)
+                                    if c_label not in [graph_api_capnp.Graph.Node.Label.contextDef,
+                                                       graph_api_capnp.Graph.Node.Label.contextAssum]:
+                                        raise Exception(
+                                            f"{fname}: ctx {state.context} of a state {state} "
+                                            f"has the wrong node classification {c_label}")
+
                             file_tactic_arguments.setdefault(ident, len(outcome.tacticArguments))
                             if file_tactic_arguments[ident] != len(outcome.tacticArguments):
-                                print(f'{fname}: Tactic with two different argument lengths detected')
-                                raise Exception
+                                raise Exception(f"{fname}: Tactic with two different argument lengths detected")
                             outcomes += 1
-                            if n.definition.status.which() == 'original':
+                            if definition.status.which() == graph_api_capnp.Definition.Status.original:
                                 original_outcomes += 1
                             for a in outcome.tacticArguments:
-                                if a.which() == 'unresolvable':
+                                if a.which == 'unresolvable':
                                     unresolvable += 1
-                        if p.tactic.which() == 'known':
-                            file_base_tactics_text.add(p.tactic.known.baseText)
-                            file_base_tactics_intermtext.add(p.tactic.known.intermText)
+                                elif a.which == "term":
+                                    if (a.term.nodeIndex >=
+                                        node_counts[data.local_to_global(graphid, a.term.depIndex)]):
+                                        raise Exception(f"{fname}: Argument of outcome {outcome} of definition "
+                                                        f"{definition.name} is out of bounds")
+                                else:
+                                    raise Exception(f"{fname}: unknown tactical argument {a}")
                     proofs += 1
-                    if n.definition.status.which() == 'original':
+                    if definition.status.which == graph_api_capnp.Definition.Status.original:
                         original_proofs += 1
-                    if n.definition.status.which() == 'original' and faithful:
-                        original_proofs_faithful += 1
-        for _dep in g.dependencies:
-            check_dep(fname, rootdir, _dep)
-        # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
-        g.total_size
+                        if faithful:
+                            original_proofs_faithful += 1
+
+        for t in graph.edges:
+            if t.target.depIndex >= dependency_count:
+                raise Exception(f"{fname}: target.depIndex {t.target.depIndex} "
+                      f"but len(g.dependencies) is {dependency_count} "
+                      f"and g.dependencies = {freader.dependencies}")
+            if t.target.nodeIndex >= node_counts[data.local_to_global(graphid, t.target.depIndex)]:
+                raise Exception(f"{fname}: Reference for target {t} is out of bounds")
+
+        # Check correctness of Dataset struct
+        if file_definitions != len(freader.definitions):
+            raise Exception(f"{fname}: Counted {file_definitions} definitions in the file, "
+                            f"but Dataset.definitions has size {len(freader.definitions)}")
+        for n in freader.definitions:
+            if graph.nodes[n].label.which != graph_api_capnp.Graph.Node.Label.definition:
+                raise Exception(f"{fname}: Node {n} should be a definition but is not")
+        if freader.representative != len(graph.nodes):
+            if (graph.nodes[freader.representative].label.which() !=
+                graph_api_capnp.Graph.Node.Label.definition):
+                raise Exception(f"{fname}: Representative {freader.representative} is not a definition")
+        for dep in freader.dependencies:
+            if Path(dep) not in data.graphs_by_filename:
+                raise Exception(f"{fname}: Dependency {dep} could not be found")
 
 
-    return (fname, dep0, nodes_count, edges_count,
+    return (fname, nodes_count, edges_count,
             file_definitions, file_original_definitions, file_base_tactics_text,
             file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
             proof_steps, original_proof_steps, original_proof_steps_faithful,
             outcomes, original_outcomes, proofs, original_proofs,
             original_proofs_faithful, unresolvable)
-
-def process2(rootdir, args, res):
-    fname, _, nodes_count, _, _,  _, _, _, _, _, _, _, _, _, _, _, _, _, _, _  = res
-    with open(fname) as f:
-        print(fname)
-        g = graph_api_capnp.Dataset.read(f, traversal_limit_in_words=2**64-1)
-        local_count = nodes_count
-        for t in g.graph.edges:
-            if not (t.target.depIndex < len(g.dependencies)):
-                print(f"Error: in {fname} x.target.depIndex {t.target.depIndex} "
-                      f"but len(g.dependencies) is {len(g.dependencies)} "
-                      f"and g.dependencies = {g.dependencies}")
-                raise Exception
-            _dep = g.dependencies[t.target.depIndex]
-            if _dep in len_nodes.keys():
-                dep_len_nodes = len_nodes[g.dependencies[t.target.depIndex]]
-            else:
-                print(f"WARNING: {fname} reference to {g.dependencies[t.target.depIndex]} "
-                      "is not in the index of bin files in a given dataset, "
-                      "following the reference outside ")
-                check_dep(fname, rootdir, _dep)
-                with open(_dep,'rb') as dep_f:
-                    dep_b = dep_f.read()
-                    dep_g = graph_api_capnp.Dataset.from_bytes_packed(dep_b, traversal_limit_in_words=2**64-1)
-                    dep_len_nodes = len(dep_g.graph.classifications)
-                    # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
-                    g.total_size
-            if not t.target.nodeIndex < dep_len_nodes:
-                print(f"in {fname} reference to {g.dependencies[t.target.depIndex]} "
-                      f"with node {t.target.nodeIndex} but len_nodes[g.dependencies[x.target.depIndex]] "
-                      f"is {len_nodes[g.dependencies[t.target.depIndex]]}")
-                raise Exception
-        for node_index in g.definitions:
-            node_classification = g.graph.nodes[node_index].label
-            if node_classification.definition.which() == 'tacticalConstant':
-                proof_steps = node_classification.definition.tacticalConstant
-            elif node_classification.definition.which() == 'tacticalSectionConstant':
-                proof_steps = node_classification.definition.tacticalSectionConstant
-            else:
-                proof_steps = []
-            for x in proof_steps:
-                for outcome in x.outcomes:
-                    if not (outcome.before.root < local_count):
-                        print(f"{fname}: root {outcome.before.root} of a state {outcome.before} is "
-                              f"outside local node count {local_count}")
-                        raise Exception
-                    for c in outcome.before.context:
-                        if not (c < local_count):
-                            print(f"{fname}: ctx {outcome.before.context} of a state {outcome.before} is "
-                                  f"outside local node count {local_count}")
-                            raise Exception
-                        cl = g.graph.nodes[c].label.which()
-                        if not (cl == 'contextDef' or cl == 'contextAssum'):
-                            print(f"{fname}: ctx {outcome.before.context} of a state {outcme.before} "
-                                  f"has the wrong node classification {cn.label}")
-                            raise Exception
-                    for a in outcome.tacticArguments:
-                        if a.which () == 'unresolvable':
-                            pass
-                        elif a.which() == 'term':
-                            if not (a.term.nodeIndex < len_nodes[g.dependencies[a.term.depIndex]]):
-                                print(f"{fname} argument {a} of proof step {x} is not resolvable")
-                                raise Exception
-                            # TODO: We should check that this node is actually a definition
-                        else:
-                            print(f"{fname}: unknown tactical argument {a}")
-        # Needed to work around this annoying bug: https://github.com/capnproto/pycapnp/issues/82
-        g.total_size
 
 def entropy(d):
     n = sum(d.values())
@@ -217,7 +204,7 @@ def main():
                        help='level of being verbose 0,1..')
 
     args = parser.parse_args()
-    rootdir = Path(os.path.expanduser(args.dir))
+    dataset_path = Path(args.dir).resolve()
 
     tactics = Counter()
     original_tactics = Counter()
@@ -238,20 +225,20 @@ def main():
     original_proofs_faithful_total = 0
     unresolvable_total = 0
 
-    file_list = [f for f in rootdir.glob('**/*.bin') if f.is_file()]
+    file_list = [f.relative_to(dataset_path) for f in dataset_path.glob('**/*.bin') if f.is_file()]
 
-    process1_partial = partial(process1, rootdir, args)
+    process1_partial = partial(process1, dataset_path, args)
     with Pool(args.jobs) as pool:
         results = pool.map(process1_partial, file_list, chunksize=20)
 
     for res in results:
-        (fname, dep0, nodes_count, edges_count,
+        (fname, nodes_count, edges_count,
          file_definitions, file_original_definitions, file_base_tactics_text,
          file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
          proof_steps, original_proof_steps, original_proof_steps_faithful,
          outcomes, original_outcomes, proofs, original_proofs,
          original_proofs_faithful, unresolvable) = res
-        len_nodes[dep0] = nodes_count
+        len_nodes[fname] = nodes_count
         nodes_total += nodes_count
         edges_total += edges_count
         proof_steps_total += proof_steps
@@ -296,18 +283,13 @@ def main():
     print(f"Faithful original proofs total {original_proofs_faithful_total}")
     print(f"Unresolvable tactic arguments {unresolvable_total}")
 
-    if (args.verbose >=1):
+    if (args.verbose >= 1):
         print("Tactics base text:")
         for t in base_tactics_text:
             print(t)
         print("Tactics intermtext text:")
         for t in base_tactics_intermtext:
             print(t)
-
-    process2_partial = partial(process2, rootdir, args)
-    with Pool(args.jobs) as pool:
-        pool.map(process2_partial, results)
-
 
 if __name__ == '__main__':
     main()
