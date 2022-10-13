@@ -70,9 +70,10 @@ type 'node tactical_step =
   ; outcomes : 'node outcome list }
 
 type 'node definition_type =
-  | Ind of inductive (* TODO: Universes? *)
-  | Construct of constructor (* TODO: Universes? *)
-  | Proj of projection (* TODO: Resolve *)
+  (* The first argument of inductive-likes is a node that represents the entire (mutual)-inductive *)
+  | Ind of 'node * inductive (* TODO: Universes? *)
+  | Construct of 'node * constructor (* TODO: Universes? *)
+  | Proj of 'node * projection (* TODO: Resolve *)
   | ManualConst of constant (* TODO: Universes? *)
   | TacticalConstant of constant * 'node tactical_step list (* TODO: Universes? *)
   | ManualSectionConst of Id.t (* TODO: Universes? *)
@@ -94,9 +95,9 @@ type 'node definition' =
 
 let print_definition { previous ; def_type; _ } =
   match def_type with
-  | Ind c -> "Ind " ^ inductive_to_string c
-  | Construct c -> "Construct " ^ constructor_to_string c
-  | Proj p -> "Proj " ^ projection_to_string p
+  | Ind (_, c) -> "Ind " ^ inductive_to_string c
+  | Construct (_, c) -> "Construct " ^ constructor_to_string c
+  | Proj (_, p) -> "Proj " ^ projection_to_string p
   | ManualConst c -> "Const " ^ Label.to_string @@ Constant.label c
   | TacticalConstant (c, _) -> "Const " ^ Label.to_string @@ Constant.label c
   | ManualSectionConst id -> "SecConst " ^ Id.to_string id

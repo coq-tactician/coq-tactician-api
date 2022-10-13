@@ -397,18 +397,21 @@ end = struct
   let mk_fake_definition def_type gref =
     (* TODO: Using the nametab here is very dangerous because it is mutable *)
     let path = Nametab.path_of_global gref in
-    mk_node (Definition { previous = None; external_previous = []; def_type; path; status = DOriginal
-                        ; term_text = None; type_text = "" }) []
+    with_delayed_node @@ fun node ->
+    return (node,
+            Definition { previous = None; external_previous = []; def_type = def_type node;
+                         path; status = DOriginal; term_text = None; type_text = "" },
+            [])
 
-  let mk_definition def_type gref mk_node =
+  let mk_definition (def_type : node definition_type) gref mk_node =
     let* def =
       (* TODO: Using the nametab here is very dangerous because it is mutable *)
       let path = Nametab.path_of_global gref in
       let* previous = get_previous_definition
       and+ status = match def_type with
-        | Ind i -> find_inductive i
-        | Construct c -> find_constructor c
-        | Proj p -> find_projection p
+        | Ind (_, i) -> find_inductive i
+        | Construct (_, c) -> find_constructor c
+        | Proj (_, p) -> find_projection p
         | ManualConst c | TacticalConstant (c, _) -> find_constant c
         | ManualSectionConst c | TacticalSectionConstant (c, _) -> (* Always actual *) return None
       and+ external_previous = drain_external_previous_definitions
@@ -430,7 +433,7 @@ end = struct
             with CErrors.UserError _ -> ""
           in
           match def_type with
-          | Ind (m, i) ->
+          | Ind (_, (m, i)) ->
             let ({ mind_packets; _ } as mb) =
               Environ.lookup_mind m env in
             let univs = Declareops.inductive_polymorphic_context mb in
@@ -438,7 +441,7 @@ end = struct
             let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) env in
             let typ = Inductive.type_of_inductive env ((mb, Array.get mind_packets i), inst) in
             print typ, None
-          | Construct ((m, i), c) ->
+          | Construct (_, ((m, i), c)) ->
             let ({ mind_packets; _ } as mb) =
               Environ.lookup_mind m env in
             let univs = Declareops.inductive_polymorphic_context mb in
@@ -468,9 +471,9 @@ end = struct
       Definition { previous; external_previous; def_type; path; status; type_text; term_text } in
     let* n = mk_node def in
     let+ () = match def_type with
-      | Ind i -> register_inductive i n
-      | Construct c -> register_constructor c n
-      | Proj p -> register_projection p n
+      | Ind (_, i) -> register_inductive i n
+      | Construct (_, c) -> register_constructor c n
+      | Proj (_, p) -> register_projection p n
       | ManualConst c | TacticalConstant (c, _) -> register_constant c n
       | ManualSectionConst id | TacticalSectionConstant (id, _) -> register_section_variable id n in
     n, def
@@ -600,7 +603,7 @@ end = struct
   and gen_const c : G.node t =
     (* Only process canonical constants *)
     let c = Constant.make1 (Constant.canonical c) in
-    follow_def (mk_fake_definition (ManualConst c) (GlobRef.ConstRef c)) @@
+    follow_def (mk_fake_definition (fun _self -> ManualConst c) (GlobRef.ConstRef c)) @@
     cached_gen_const c @@
     let gen_const_aux d p =
       let* env = lookup_env in
@@ -632,7 +635,7 @@ end = struct
     | Some proof ->
       let* proof = List.map gen_proof_step proof in
       gen_const_aux (TacticalConstant (c, proof)) (GlobRef.ConstRef c)
-  and gen_primitive_constructor ind proj_npars typ =
+  and gen_primitive_constructor representative ind proj_npars typ =
     let relctx, sort = Term.decompose_prod_assum typ in
     let real_arity = Rel.nhyps @@ CList.skipn proj_npars @@ OList.rev relctx in
     snd @@ CList.fold_left (fun (reli, m) -> function
@@ -645,7 +648,7 @@ end = struct
              (* TODO: This is clearly incorrect; something needs to be done about this.
                 Note that newer versions of Coq already thread projections differently *)
              let const = GlobRef.ConstRef (Projection.Repr.constant proj) in
-             let+ _ = mk_definition (Proj proj) const (fun d -> mk_node d [ProjTerm, prod]) in
+             let+ _ = mk_definition (Proj (representative, proj)) const (fun d -> mk_node d [ProjTerm, prod]) in
              ()
            | _ -> return ()) >>
           let* typ = gen_constr typ in
@@ -657,7 +660,7 @@ end = struct
           let* def = gen_constr def in
           let+ cont = with_relative letin m in
           letin, (LetIn id), [LetInType, typ; LetInDef, def; LetInTerm, cont])
-      (real_arity - 1, (gen_constr sort)) relctx
+      (real_arity - 1, gen_constr sort) relctx
   and gen_mutinductive_helper m =
     (* Only process canonical inductives *)
     let m = MutInd.make1 (MutInd.canonical m) in
@@ -665,18 +668,30 @@ end = struct
     match c with
     | Some (NActual, _) -> return ()
     | _ ->
-      with_empty_contexts @@
       let* env = lookup_env in
+
+      (* We have to ensure that all dependencies of the inductive are written away before
+         we generate the inductive itself. This is needed, because we want all elements of
+         the mutually recursive definition cluster to be adjacent in the global context *)
+      let dependencies = Definition_order.mutinductive_in_order_traverse env GlobRef.Set.empty
+        (fun c set -> GlobRef.Set.add (GlobRef.ConstRef c) set)
+        (fun m set -> GlobRef.Set.add (GlobRef.IndRef (m, 0)) set)
+        (fun id set -> GlobRef.Set.add (GlobRef.VarRef id) set) m in
+      List.iter (fun r -> map (fun _ -> ()) @@ gen_globref r) @@
+      GlobRef.Set.elements dependencies >>
+
+      with_empty_contexts @@
       let ({ mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
         Environ.lookup_mind m env in
       let inds = OList.mapi (fun i ind -> i, ind) (Array.to_list mind_packets) in
       with_delayed_nodes ~definition:true (OList.length inds) @@ fun indsn ->
+      let representative = OList.hd indsn in
       let inds = OList.combine inds indsn in
       let indsn = OList.rev indsn in (* Backwards ordering w.r.t. Fun *)
       let+ inds = List.map (fun ((i, ({ mind_user_lc; mind_consnames; _ } as ib)), n) ->
           let gen_constr_typ typ = match mind_record with
             | NotRecord | FakeRecord -> gen_constr typ
-            | PrimRecord _ -> gen_primitive_constructor (m, i) (OList.length mind_params_ctxt) typ in
+            | PrimRecord _ -> gen_primitive_constructor representative (m, i) (OList.length mind_params_ctxt) typ in
           let constructs = OList.mapi (fun j x -> j, x) @@
             OList.combine (Array.to_list mind_user_lc) (Array.to_list mind_consnames) in
           let* children =
@@ -684,7 +699,7 @@ end = struct
                 with_relatives indsn @@
                 let* typ = gen_constr_typ typ in
                 let+ n, _ = mk_definition
-                    (Construct ((m, i), j + 1)) (GlobRef.ConstructRef ((m, i), j + 1))
+                    (Construct (representative, ((m, i), j + 1))) (GlobRef.ConstructRef ((m, i), j + 1))
                     (fun d -> mk_node d [ConstructTerm, typ]) in
                 IndConstruct, n) constructs in
             let univs = Declareops.inductive_polymorphic_context mb in
@@ -693,19 +708,19 @@ end = struct
             let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
             let+ n = gen_constr typ in
             (IndType, n)::cstrs in
-          let+ _, def = mk_definition (Ind (m, i)) (GlobRef.IndRef (m, i)) (fun d -> return n) in
+          let+ _, def = mk_definition (Ind (representative, (m, i))) (GlobRef.IndRef (m, i)) (fun d -> return n) in
           def, children
         ) inds in
       (), inds
   and gen_inductive ((m, _) as i) : G.node t =
-    follow_def (mk_fake_definition (Ind i) (GlobRef.IndRef i))
+    follow_def (mk_fake_definition (fun self -> Ind (self, i)) (GlobRef.IndRef i))
       (gen_mutinductive_helper m >>
        let+ n = find_inductive i in
        match n with
        | Some (NActual, inn) -> inn
        | _ -> CErrors.anomaly (Pp.str "Inductive generation problem"))
   and gen_constructor (((m, _), _) as c) : G.node t =
-    follow_def (mk_fake_definition (Construct c) (GlobRef.ConstructRef c))
+    follow_def (mk_fake_definition (fun self -> Construct (self, c)) (GlobRef.ConstructRef c))
       (gen_mutinductive_helper m >>
        let+ n = find_constructor c in
        match n with
@@ -713,9 +728,9 @@ end = struct
        | _ -> CErrors.anomaly (Pp.str "Inductive generation problem"))
   and gen_projection p =
     (* TODO: This is clearly incorrect; something needs to be done about this.
-       Note that newer versions of Coq already thread projections differently *)
+       Note that newer versions of Coq already treat projections differently *)
     let const = GlobRef.ConstRef (Projection.Repr.constant @@ Projection.repr p) in
-    follow_def (mk_fake_definition (Proj (Projection.repr p)) const)
+    follow_def (mk_fake_definition (fun self -> Proj (self, Projection.repr p)) const)
       (gen_mutinductive_helper (Projection.mind p) >>
        let+ n = find_projection (Projection.repr p) in
        match n with
@@ -726,7 +741,7 @@ end = struct
     match sv with
     | None ->
       let gen_aux c =
-        follow_def (mk_fake_definition c (GlobRef.VarRef id)) @@
+        follow_def (mk_fake_definition (fun _self -> c) (GlobRef.VarRef id)) @@
         let* children = if_not_truncate (return []) @@
           match def with
           | Named.Declaration.LocalAssum (_, typ) ->
@@ -856,10 +871,7 @@ end = struct
       mk_node (Int n) []
     | Float f ->
       mk_node (Float f) []
-
-  let with_named_context ctx m = with_named_context gen_constr ctx m
-
-  let gen_globref = function
+  and gen_globref = function
     | GlobRef.VarRef id ->
       let* env = lookup_env in
       let def = Environ.lookup_named id env in
@@ -867,6 +879,9 @@ end = struct
     | GlobRef.ConstRef c -> gen_const c
     | GlobRef.IndRef i -> gen_inductive i
     | GlobRef.ConstructRef c -> gen_constructor c
+
+
+  let with_named_context ctx m = with_named_context gen_constr ctx m
 
   let with_envs f env env_extra x = with_env env (with_env_extra env_extra (f x))
 

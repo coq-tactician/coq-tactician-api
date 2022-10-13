@@ -107,9 +107,9 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
        write_proof arr proof
      | ManualConst c -> manual_constant_set cdef
      | ManualSectionConst id -> manual_section_constant_set cdef
-     | Ind (m, i) -> inductive_set cdef
-     | Construct ((m, i), j) -> constructor_set cdef
-     | Proj p -> projection_set cdef)
+     | Ind (representative, _) -> inductive_set_int_exn cdef @@ node_local_index representative
+     | Construct (representative, _) -> constructor_set_int_exn cdef @@ node_local_index representative
+     | Proj (representative, _) -> projection_set_int_exn cdef @@ node_local_index representative)
   | ConstEmpty -> const_empty_set cnt
   | SortSProp -> sort_s_prop_set cnt
   | SortProp -> sort_prop_set cnt

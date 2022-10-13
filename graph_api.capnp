@@ -314,9 +314,14 @@ struct Definition {
   }
 
   union {
-    inductive @7 :Void;
-    constructor @8 :Void;
-    projection @9 :Void;
+    inductive @7 :NodeIndex;
+    constructor @8 :NodeIndex;
+    projection @9 :NodeIndex;
+    # These definitions are part of a mutually recursive cluster. They hold a reference to another definition
+    # that acts as the 'representative' of the mutually recursive cluster. The representative is chosen such
+    # that all definitions of the cluster are reachable through its `previous` pointer. Additionally, all
+    # definitions within the cluster have the same representative, and no definitions that are not part of the
+    # cluster are interleaved within the chain of `previous` nodes.
 
     manualConstant @10 :Void;
     # A constant defined by directly inputting a term
