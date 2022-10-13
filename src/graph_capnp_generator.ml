@@ -33,9 +33,15 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
        Status.Substituted.node_index_set_int_exn capnp_node @@ node_local_index n);
     let write_proof arr proof =
       let write_proof_state capnp_state { root; context; ps_string; evar } =
-        K.Builder.ProofState.root_set_int_exn capnp_state @@ node_local_index root;
-        ignore(K.Builder.ProofState.context_set_list capnp_state
-                 (List.map (fun (_, n) -> Stdint.Uint32.of_int @@ node_local_index n) context));
+        let capnp_root = K.Builder.ProofState.root_init capnp_state in
+        K.Builder.ProofState.Root.dep_index_set_exn capnp_root @@ node_depindex root;
+        K.Builder.ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index root;
+        let context_arr = K.Builder.ProofState.context_init capnp_state @@ List.length context in
+        List.iteri (fun i (_, arg) ->
+            let arri = Capnp.Array.get context_arr i in
+            K.Builder.Node.dep_index_set_exn arri @@ node_depindex arg;
+            K.Builder.Node.node_index_set_int_exn arri @@ node_local_index arg
+          ) context;
         if include_metadata then begin
           ignore(K.Builder.ProofState.context_names_set_list capnp_state
                    (List.map (fun (id, _) -> Id.to_string id) context));
@@ -50,7 +56,9 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
             let capnp_state = Capnp.Array.get after_arr i in
             write_proof_state capnp_state ps;
           ) proof_states_after;
-        K.Builder.Outcome.term_set_int_exn capnp @@ node_local_index term;
+        let capnp_term = K.Builder.Outcome.term_init capnp in
+        K.Builder.Outcome.Term.dep_index_set_exn capnp_term @@ node_depindex term;
+        K.Builder.Outcome.Term.node_index_set_int_exn capnp_term @@ node_local_index term;
         if include_metadata then
           K.Builder.Outcome.term_text_set capnp @@ term_text;
         let arg_arr = K.Builder.Outcome.tactic_arguments_init capnp (List.length arguments) in

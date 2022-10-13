@@ -34,6 +34,7 @@ let write_execution_result env sigma res hyps concl obj =
   let module ExecutionResult = Api.Builder.ExecutionResult in
   let module Graph = Api.Builder.Graph in
   let module ProofState = Api.Builder.ProofState in
+  let module Node = Api.Builder.Node in
 
   (* Obtain the graph *)
   let updater = gen_proof_state env hyps concl in
@@ -59,8 +60,15 @@ let write_execution_result env sigma res hyps concl obj =
     ~node_dep_index:(fun _ -> 0) ~node_local_index
     ~node_count:(def_count + node_count) ~edge_count (Graph_def.AList.append defs nodes) edges capnp_graph;
   let state = ExecutionResult.NewState.state_init new_state in
-  ProofState.root_set_int_exn state @@ node_local_index @@ fst @@ G.lower root;
-  let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
+  let capnp_root = ProofState.root_init state in
+  ProofState.Root.dep_index_set_exn capnp_root 0;
+  ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index @@ fst @@ G.lower root;
+  let context_arr = ProofState.context_init state @@ List.length context_range in
+  List.iteri (fun i arg ->
+      let arri = Capnp.Array.get context_arr i in
+      Node.dep_index_set_exn arri 0;
+      Node.node_index_set_int_exn arri arg
+    ) context_range;
   ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env sigma;
   let capability = obj context_map_inv in
   ExecutionResult.NewState.obj_set new_state (Some capability);

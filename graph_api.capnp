@@ -209,22 +209,32 @@ struct Argument {
   }
 }
 
+struct Node {
+  depIndex @0 :DepIndex;
+  nodeIndex @1 :NodeIndex;
+}
+
 struct ProofState {
   # A proof state represents a particular point in the tactical proof of a constant.
 
-  root @0 :NodeIndex;
+  root :group {
+    depIndex @0 :DepIndex;
+    nodeIndex @1 :NodeIndex;
+  }
+
   # The entry-point of the proof state, all nodes that are 'part of' the proof state are reachable from here.
 
-  context @1 :List(NodeIndex);
+  context @2 :List(Node);
   # The local context of the proof state. These nodes are either `contextAssum` or `contextDef`. Note that
   # these nodes are also reachable from the root of the proof state.
-  contextNames @2 :List(Text);
 
-  text @3 :Text;
+  contextNames @3 :List(Text);
+
+  text @4 :Text;
   # A textual representation of the proof state. This field is only populated in the dataset, not while interacting
   # with Coq.
 
-  id @4 :ProofStateId;
+  id @5 :ProofStateId;
   # A unique identifier of the proof state. Any two proof states in a tactical proof that have an equal id
   # can morally be regarded to be 'the same' proof state.
   # IMPORTANT: Two proof states with the same id may still have different contents. This is because proof states
@@ -238,15 +248,18 @@ struct Outcome {
   before @0 :ProofState;
   after @1 :List(ProofState);
 
-  term @2 :NodeIndex;
+  term :group {
+    depIndex @2 :DepIndex;
+    nodeIndex @3 :NodeIndex;
+  }
   # The proof term that witnesses the transition from the before state to the after states. It contains a hole
   # (an `evar` node) for each of the after states. It may also refer to elements of the local context of the
   # before state.
 
-  termText @3 :Text;
+  termText @4 :Text;
   # A textual representation of the proof term.
 
-  tacticArguments @4 :List(Argument);
+  tacticArguments @5 :List(Argument);
   # The arguments of the tactic that produced this outcome. Note that these arguments belong to the tactic in
   # `ProofStep.tactic`.
 }
@@ -266,8 +279,8 @@ struct ProofStep {
 
 struct Definition {
   name @0 :Text;
-  # The name of the definition. The name should be unique in a particular super-global context, but is not unique
-  # among different branches of a global context.
+  # The fully-qualified name of the definition. The name should be unique in a particular global context,
+  # but is not unique among different branches of the global in a dataset.
 
   previous @1 :NodeIndex;
   # The previous definition within the global context of the current file.

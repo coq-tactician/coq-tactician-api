@@ -424,6 +424,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
+    let module Node = Api.Builder.Node in
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Prediction = Api.Reader.PredictionProtocol.Prediction in
     let module Response = Api.Reader.PredictionProtocol.Response in
@@ -453,8 +454,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       ~node_dep_index ~node_local_index
       ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph;
     let state = Request.Predict.state_init predict in
-    ProofState.root_set_int_exn state @@ node_local_index @@ fst @@ G.lower root;
-    let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
+    let capnp_root = ProofState.root_init state in
+    ProofState.Root.dep_index_set_exn capnp_root @@ node_dep_index @@ fst @@ G.lower root;
+    ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index @@ fst @@ G.lower root;
+    let context_arr = ProofState.context_init state @@ List.length context_range in
+    List.iteri (fun i arg ->
+        let arri = Capnp.Array.get context_arr i in
+        Node.dep_index_set_exn arri @@ node_dep_index (Local, arg);
+        Node.node_index_set_int_exn arri arg
+      ) context_range;
     match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
