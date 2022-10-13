@@ -280,7 +280,7 @@ class GraphVisualisationBrowser:
                                          for d in self.dataset.values()})
 
         hierarchy = {'files': [], 'subdirs': {}}
-        for f in trans_deps:
+        for f in self.dataset:
             dirs = f.parent.parts
             leaf = hierarchy
             for d in dirs:
@@ -302,7 +302,7 @@ class GraphVisualisationBrowser:
                 rel = retrieve_edges(defaultdict(set), h, depth)
                 (rel, repr) = transitive_reduction(rel)
                 def get_url(r: Path):
-                    if r in trans_deps:
+                    if r in self.dataset:
                         return self.global_context_url(r)
                     else:
                         return self.directory_url(r)
