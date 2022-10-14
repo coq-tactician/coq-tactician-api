@@ -90,7 +90,6 @@ class GraphVisualisationBrowser:
                 dot.edge(id, fid,
                          arrowtail="dot", dir="both", constraint="true")
 
-        print(dot)
         return dot.pipe()
 
     def visualize_term(self, dot, start: Node, depth,
@@ -216,7 +215,6 @@ class GraphVisualisationBrowser:
         dot.attr('graph', fontsize="40pt")
         dot.attr('graph', labelloc="t")
         dot.attr('graph', URL=self.definition_url(fname, definition))
-        #print(dot.source)
         return dot.pipe()
 
     def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int,
@@ -337,7 +335,6 @@ class GraphVisualisationBrowser:
                       URL = self.root_file_url())
             tunnel_hierarchy(dot2, hierarchy, 0)
 
-        #print(dot)
         return dot.pipe()
 
 def transitive_closure(rel):
