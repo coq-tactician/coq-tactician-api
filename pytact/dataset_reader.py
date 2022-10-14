@@ -404,7 +404,7 @@ class Definition:
                 return Definition.TacticalConstant(make_proof_iterable(kind.tacticalConstant))
             case "manualSectionConstant":
                 return Definition.ManualConstant()
-            case "tacticalSetionConstant":
+            case "tacticalSectionConstant":
                 return Definition.TacticalSectionConstant(make_proof_iterable(kind.tacticalSectionConstant))
             case _:
                 assert False

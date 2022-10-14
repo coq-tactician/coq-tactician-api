@@ -111,7 +111,6 @@ class GraphVisualisationBrowser:
         dot.attr('graph', fontsize="40pt")
         dot.attr('graph', labelloc="t")
         dot.attr('graph', URL=self.directory_url(Path(*fname.parts[:-1])))
-        print(dot)
         return dot.pipe()
 
     def visualize_term(self, dot, start: Node, depth,
