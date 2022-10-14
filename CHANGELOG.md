@@ -1,9 +1,12 @@
-# unreleased
+# V12
 
 Changes to the Capn'proto format:
 - Upgraded magic id to v12
 - Added the field `Graph.Node.identity`, which represents an identity of of any node in the graph
 - Removed the field `Definition.hash`, which is now superseded by `Graph.Node.identity`.
+- Make some node references that used to reference local nodes only global (consequence of node sharing)
+- Inductives, constructors and projections now carry information about the mutually recursive cluster
+  they are part of
 
 Changes to the graph:
 - Application nodes are now curried in favor of the previous uncurried approach. This choice was
@@ -25,9 +28,19 @@ Changes to the graph:
   `ProofState.contextNames` struct.
 - A bug was fixed that caused fixpoints that had additional binders in scope to resolve de Bruijn
   indices wrong.
+- Definitions that are not original, but are discharged from a section of substituted from a module
+  functor are now ordered in the global context in the same order as their original counterparts.
 
 Memory layout changes:
 - With the help of `Graph.Node.identity`, nodes with the same identity are now shared in the dataset.
+
+Some statistics on the number of nodes and edges in different variations of sharing:
+- v11: nodes 259685547 edges 503759399
+- v12 unshared uncurried: nodes 259727629 edges 503838873
+- v12 unshared with currying: nodes 157953135 edges 294678745
+- v12 sharing within definitions only and currying: nodes 22751158 edges 50097138
+- v12 sharing within files and currying: nodes 20458599 edges 45496760
+- v12 sharing within dependencies and currying: nodes 18343407 edges 40848033
 
 # stdlib-lgraph-intermediate-v11-global
 http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/graph/lgraph/stdlib-lgraph-intermediate-v11-global.squ
