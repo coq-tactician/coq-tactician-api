@@ -129,6 +129,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
   let external_previous_definitions = Summary.ref ~name:"TacticianGraphExternalPreviousDefinition" DPmap.empty
   let known_external_previous_definitions =
     Summary.ref ~name:"TacticianGraphKnownExternalPreviousDefinition" DPmap.empty
+  let definition_ordering = Summary.ref ~name:"TacticianGraphDefinitionOrdering" GlobRef.Map.empty
+  let definition_ordering_counter = Summary.ref ~name:"TacticianGraphDefinitionOrderingCounter" 0
 
   let update_error p ns n = function
     | None -> Some (ns, n)
@@ -163,6 +165,16 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                      | GProjection p -> GProjection (Mod_subst.subst_proj_repr o p)
                    ))
                  ~discharge:(fun (_, ((_, n), gr)) -> Some ((NDischarged, n), gr)))
+
+  let in_definition_ordering : GlobRef.t -> Libobject.obj =
+    Libobject.(declare_object @@ superglobal_object "LTACRECORDGRAPHDEFINITIONORDERING"
+                 ~cache:(fun (_, gr) ->
+                     definition_ordering := GlobRef.Map.add gr !definition_ordering_counter !definition_ordering;
+                     definition_ordering_counter := !definition_ordering_counter + 1)
+                 ~subst:(Some (fun (subst, gr) -> Globnames.subst_global_reference subst gr))
+                 ~discharge:(fun (_, gr) -> match gr with
+                     | GlobRef.VarRef _ -> None
+                     | _ -> Some gr))
   let in_dependencies : (DirPath.t * string * int * DPset.t) -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHDEPS"
         ~cache:(fun (_, (path, bin, def_count, deps)) ->
@@ -281,14 +293,24 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       ) section_vars Id.Map.empty in
     let env_extra = env_extra_var, env_extra_const in
 
-    (* We calculate a topological ordering of the definitions, in order to create a layout with more reference of
-       locality in the graph encoding. This is not needed for correctness, it's an optimization only. *)
-    let defs = Definition_order.order env section_vars constants minductives in
+    (* We want to order definition by the order in which they were inputted by the user. This is important
+       during section closing and module instantiation, because then we just get a bunch of unsorted definitions
+       all at once. Hence, we remember the information about their original ordering inside the
+       section or module functor. *)
+    let globrefs = (OList.map (fun id -> GlobRef.VarRef id) @@ Id.Set.elements section_vars) @
+                   (OList.map (fun c -> GlobRef.ConstRef c) @@ Cset.elements constants) @
+                   (OList.map (fun m -> GlobRef.IndRef (m, 0)) @@ Mindset.elements minductives) in
+    OList.iter (fun gr -> Lib.add_anonymous_leaf @@ in_definition_ordering gr) @@
+    Definition_order.order env @@ OList.fold_left (fun set gr ->
+        if GlobRef.Map.mem gr !definition_ordering then set else GlobRef.Set.add gr set)
+      GlobRef.Set.empty globrefs;
+    let globrefs = OList.sort (fun gr1 gr2 ->
+        Int.compare
+          (GlobRef.Map.find gr1 !definition_ordering)
+          (GlobRef.Map.find gr2 !definition_ordering)) globrefs in
+
     let updater =
-      List.iter (function
-          | Definition_order.TConst c -> map (fun _ -> ()) @@ gen_const env env_extra c
-          | Definition_order.TMutInd m -> gen_mutinductive_helper env env_extra m
-          | Definition_order.TVar id -> map (fun _ -> ()) @@ gen_section_var env env_extra id) defs
+      List.iter (fun gr -> map (fun _ -> ()) @@ gen_globref env env_extra gr) globrefs
     in
     let known = DPmap.domain !known_external_previous_definitions in
     let external_previous = OList.map snd @@ DPmap.bindings @@

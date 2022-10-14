@@ -3,11 +3,6 @@ open Names
 open Declarations
 open Context
 
-type t =
-  | TConst of Constant.t
-  | TMutInd of MutInd.t
-  | TVar of Id.t
-
 let constr_in_order_traverse acc f g h c =
   let rec aux acc c =
     match Constr.kind c with
@@ -52,26 +47,29 @@ let variable_in_order_traverse env acc f g h id =
     constr_in_order_traverse (constr_in_order_traverse acc f g h term) f g h typ
 
 type accum =
-  { vseen : Id.Set.t
-  ; cseen : Cset.t
-  ; mseen : Mindset.t
-  ; order : t list }
+  { seen : GlobRef.Set.t
+  ; order : GlobRef.t list }
 
-let order env vs cs ms =
-  let rec f c ({ cseen; _ } as acc) =
-      if Cset.mem c cseen || not @@ Cset.mem c cs then acc else
-        let { vseen; cseen; mseen; order } = constant_in_order_traverse env acc f g h c in
-        { vseen; cseen = Cset.add c cseen; mseen; order = (TConst c) :: order }
-  and g m ({ mseen; _ } as acc) =
-      if Mindset.mem m mseen || not @@ Mindset.mem m ms then acc else
-        let { vseen; cseen; mseen; order } = mutinductive_in_order_traverse env acc f g h m in
-        { vseen; cseen; mseen = Mindset.add m mseen; order = (TMutInd m) :: order }
-  and h v ({ vseen; _ } as acc) =
-      if Id.Set.mem v vseen || not @@ Id.Set.mem v vs then acc else
-        let { vseen; cseen; mseen; order } = variable_in_order_traverse env acc f g h v in
-        { vseen = Id.Set.add v vseen; cseen; mseen; order = (TVar v) :: order } in
-  let acc = { vseen = Id.Set.empty; cseen = Cset.empty; mseen = Mindset.empty; order = [] } in
-  let acc = Id.Set.fold h vs acc in
-  let acc = Cset.fold f cs acc in
-  let { order; _ } = Mindset.fold g ms acc in
+let order env grs =
+  let rec f c ({ seen; _ } as acc) =
+    let cr = GlobRef.ConstRef c in
+    if GlobRef.Set.mem cr seen || not @@ GlobRef.Set.mem cr grs then acc else
+      let { seen; order } = constant_in_order_traverse env acc f g h c in
+      { seen = GlobRef.Set.add (GlobRef.ConstRef c) seen; order = cr::order }
+  and g m ({ seen; _ } as acc) =
+    let mr = GlobRef.IndRef (m, 0) in
+    if GlobRef.Set.mem mr seen || not @@ GlobRef.Set.mem mr grs then acc else
+      let { seen; order } = mutinductive_in_order_traverse env acc f g h m in
+        { seen = GlobRef.Set.add mr seen; order = mr::order }
+  and h v ({ seen; _ } as acc) =
+    let vr = GlobRef.VarRef v in
+    if GlobRef.Set.mem vr seen || not @@ GlobRef.Set.mem vr grs then acc else
+      let { seen; order } = variable_in_order_traverse env acc f g h v in
+        { seen = GlobRef.Set.add vr seen; order = vr::order } in
+  let acc = { seen = GlobRef.Set.empty; order = [] } in
+  let { order; _ } = GlobRef.Set.fold (function
+      | GlobRef.VarRef v -> h v
+      | GlobRef.ConstRef c -> f c
+      | GlobRef.IndRef (m, _) -> g m
+      | GlobRef.ConstructRef _ -> assert false) grs acc in
   List.rev order
