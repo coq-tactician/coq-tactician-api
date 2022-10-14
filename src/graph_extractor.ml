@@ -685,9 +685,9 @@ end = struct
         Environ.lookup_mind m env in
       let inds = OList.mapi (fun i ind -> i, ind) (Array.to_list mind_packets) in
       with_delayed_nodes ~definition:true (OList.length inds) @@ fun indsn ->
-      let representative = OList.hd indsn in
       let inds = OList.combine inds indsn in
       let indsn = OList.rev indsn in (* Backwards ordering w.r.t. Fun *)
+      let representative = OList.hd indsn in
       let+ inds = List.map (fun ((i, ({ mind_user_lc; mind_consnames; _ } as ib)), n) ->
           let gen_constr_typ typ = match mind_record with
             | NotRecord | FakeRecord -> gen_constr typ
