@@ -1,6 +1,20 @@
-FROM pestun/coq_python_reinforce_deps
+FROM coqorg/coq:8.11.2-ocaml-4.11.2-flambda
 
 MAINTAINER Vasily Pestun "pestun@ihes.fr"
+
+# conda + pythnon 3.9
+
+RUN curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o \
+    Miniconda3-latest-Linux-x86_64.sh && sh Miniconda3-latest-Linux-x86_64.sh -b -f
+ENV HOME="/home/coq"
+ENV CONDA_EXE="${HOME}/miniconda3/bin/conda"
+
+RUN $CONDA_EXE create -n python3.9 python=3.9 -y
+ENV CONDA_PREFIX="${HOME}/miniconda3/envs/python3.9"
+ENV CONDA_PYTHON_EXE="${HOME}/miniconda3/bin/python"
+RUN echo 'PATH=$CONDA_PREFIX/bin:$PATH' >> .profile
+
+# apt-get level project dependencies
 
 RUN sudo apt-get update
 RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev
