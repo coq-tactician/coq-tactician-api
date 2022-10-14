@@ -51,14 +51,9 @@ class GraphVisualisationBrowser:
     def global_context(self, fname: Path):
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
-        dot.attr('graph', label=f"Global context for {fname}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.directory_url(Path(*fname.parts[:-1])))
+        dot.attr('graph', compound="true")
 
-        dataset = self.dataset[fname]
-        representative = dataset.representative
-        for d in dataset.definitions:
+        def render_def(dot, d):
             label_prefix = None
             if representative and representative.node == d.node:
                 label_prefix = "Representative: "
@@ -68,12 +63,12 @@ class GraphVisualisationBrowser:
                 case Definition.Discharged(target):
                     id = self.render_node(dot, d.node, label_prefix=label_prefix)
                     dot.edge(id, repr(target.node),
-                             arrowtail="inv", dir="both", constraint="false", style="dashed")
+                                arrowtail="inv", dir="both", constraint="false", style="dashed")
                 case Definition.Substituted(target):
                     if d.node.path == target.node.path:
                         id = self.render_node(dot, d.node, label_prefix=label_prefix)
                         dot.edge(id, str(target.node),
-                                 arrowtail="odot", dir="both", constraint="false", style="dashed")
+                                    arrowtail="odot", dir="both", constraint="false", style="dashed")
                     else:
                         with dot.subgraph() as dot2:
                             dot2.attr(rank='same')
@@ -82,14 +77,41 @@ class GraphVisualisationBrowser:
                             dot2.edge(id, id2,
                                       arrowtail="odot", dir="both", constraint="false", style="dashed")
 
-            if prev := d.previous:
-                dot.edge(id, repr(prev.node),
+        dataset = self.dataset[fname]
+        representative = dataset.representative
+        for cluster in dataset.clustered_definitions:
+
+            start = str(cluster[0].node)
+            ltail = None
+            if len(cluster) == 1:
+                render_def(dot, cluster[0])
+            else:
+                ltail = "cluster_"+start
+                with dot.subgraph(name=ltail) as dot2:
+                    last = None
+                    for d in cluster:
+                        render_def(dot2, d)
+                        if last:
+                            dot2.edge(str(last.node), str(d.node), style="invis")
+                        last = d
+
+            if prev := cluster[-1].previous:
+                target = str(prev.node)
+                lhead = None
+                if len(list(prev.cluster)) > 1:
+                    lhead = "cluster_"+target
+                dot.edge(str(cluster[-1].node), target, lhead = lhead, ltail = ltail,
                          arrowtail="dot", dir="both", constraint="true")
-            for fi in d.external_previous:
+            for fi in cluster[-1].external_previous:
                 fid = self.render_file_node(dot, fi.node.path)
-                dot.edge(id, fid,
+                dot.edge(str(cluster[-1].node), fid, ltail = ltail,
                          arrowtail="dot", dir="both", constraint="true")
 
+        dot.attr('graph', label=f"Global context for {fname}")
+        dot.attr('graph', fontsize="40pt")
+        dot.attr('graph', labelloc="t")
+        dot.attr('graph', URL=self.directory_url(Path(*fname.parts[:-1])))
+        print(dot)
         return dot.pipe()
 
     def visualize_term(self, dot, start: Node, depth,
@@ -165,14 +187,12 @@ class GraphVisualisationBrowser:
         d = node.definition
         if not d:
             assert False
-        match d.kind:
-            case Definition.TacticalConstant(proof):
-                proof = proof
-            case Definition.TacticalConstant(proof):
-                proof = proof
-            case _:
-                assert False
+        proof = d.proof
+        if not proof:
+            assert False
+        proof = list(proof)
 
+        print("proof")
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
         surrogates = set()
@@ -184,6 +204,7 @@ class GraphVisualisationBrowser:
                     id = id + '-s'
                 surrogates.add(id)
                 outcome_to_id[(i, j)] = id
+        print(proof)
         for i, step in enumerate(proof):
             with dot.subgraph(name='cluster_' + str(i)) as dot2:
                 dot2.attr('graph', labelloc="b")
@@ -223,18 +244,15 @@ class GraphVisualisationBrowser:
         d = node.definition
         if not d:
             assert False
-        match d.kind:
-            case Definition.TacticalConstant(proof):
-                proof = proof
-            case Definition.TacticalConstant(proof):
-                proof = proof
-            case _:
-                assert False
+        proof = d.proof
+        if not proof:
+            assert False
+        proof = list(proof)
 
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
 
-        outcome = proof[stepi].outcomes[outcomei]
+        outcome = list(proof[stepi].outcomes)[outcomei]
         seen = set()
 
         with dot.subgraph(name='cluster_before') as dot2:
