@@ -5,7 +5,7 @@ from pathlib import Path
 from functools import partial
 from collections import Counter
 import math
-from pytact.dataset_reader import data_viewer, lowlevel_data_viewer
+from pytact.data_reader import lowlevel_data_reader
 import capnp
 capnp.remove_import_hook()
 import pytact.common
@@ -14,7 +14,7 @@ graph_api_capnp = capnp.load(graph_api_capnp)
 
 def open_dataset(dataset_path: Path):
     global ctx
-    ctx = lowlevel_data_viewer(dataset_path)
+    ctx = lowlevel_data_reader(dataset_path)
     global data
     data = ctx.__enter__()
     global node_counts
@@ -253,7 +253,8 @@ def main():
     original_proofs_faithful_total = 0
     unresolvable_total = 0
 
-    file_list = [f.relative_to(dataset_path) for f in dataset_path.glob('**/*.bin') if f.is_file()]
+    with lowlevel_data_reader(dataset_path) as data:
+        file_list = data.graph_files
 
     process1_partial = partial(process1, args)
     with Pool(args.jobs, open_dataset, [dataset_path]) as pool:

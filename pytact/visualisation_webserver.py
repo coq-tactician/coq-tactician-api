@@ -6,7 +6,7 @@ import sys
 import os
 import argparse
 
-from pytact.dataset_reader import data_viewer
+from pytact.data_reader import data_reader
 from pytact.graph_visualize_browse import GraphVisualisationBrowser
 
 class VisualisationServer(BaseHTTPRequestHandler):
@@ -88,10 +88,10 @@ def main():
     args = parser.parse_args()
 
     dataset_path = Path(args.dir).resolve()
-    with data_viewer(dataset_path) as data:
+    with data_reader(dataset_path) as data:
         gv = GraphVisualisationBrowser(data, "http://{}:{}/".format(args.hostname, args.port))
         def handler(*args):
-            VisualisationServer(gv, *args)
+            return VisualisationServer(gv, *args)
         webServer = HTTPServer(('0.0.0.0', args.port), handler)
         print(f"Server started {gv.root_file_url()}")
 

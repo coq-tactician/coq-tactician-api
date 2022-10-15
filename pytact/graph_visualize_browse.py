@@ -5,12 +5,14 @@ from collections import defaultdict
 from pytact.graph_visualize import edge_arrow_map
 
 from pathlib import Path
-from pytact.dataset_reader import Dataset, Definition, Node
+from pytact.data_reader import Dataset, Definition, Node
 
 class GraphVisualisationBrowser:
     def __init__(self, dataset: dict[Path, Dataset], url_prefix: str):
         self.url_prefix = url_prefix
         self.dataset = dataset
+        self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
+                                              for d in self.dataset.values()})
 
     def get_url(self, bin_fname: Path, svg_fname):
         base = bin_fname.with_suffix('')
@@ -287,9 +289,6 @@ class GraphVisualisationBrowser:
         dot = graphviz.Digraph(engine='dot', format='svg')
         dot.attr('graph', ordering="out")
 
-        trans_deps = transitive_closure({d.filename: {dep.filename for dep in d.dependencies}
-                                         for d in self.dataset.values()})
-
         hierarchy = {'files': [], 'subdirs': {}}
         for f in self.dataset:
             dirs = f.parent.parts
@@ -302,7 +301,7 @@ class GraphVisualisationBrowser:
             return len(os.path.commonprefix([p1, p2]))
         def retrieve_edges(rel, h, depth: int):
             for n in h['files']:
-                deps = {Path(*d.parts[:depth+1]) for d in trans_deps[n]
+                deps = {Path(*d.parts[:depth+1]) for d in self.trans_deps[n]
                         if common_length(d.parts, expand_parts) == depth}
                 rel[Path(*n.parts[:depth+1])] |= deps
             for d in h['subdirs']:

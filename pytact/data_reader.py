@@ -1,7 +1,6 @@
 from __future__ import annotations
 import mmap
-from contextlib import contextmanager
-from contextlib import ExitStack
+from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
 from typing import Any, TypeAlias, Union, cast
 from collections.abc import Iterable, Sequence, Generator
@@ -13,7 +12,7 @@ capnp.remove_import_hook()  # pyright: ignore
 graph_api_capnp = capnp.load(graph_api_capnp())  # pyright: ignore
 
 @contextmanager
-def file_dataset_view(fname: Path) -> Generator[Any, None, None]:
+def file_dataset_reader(fname: Path) -> Generator[Any, None, None]:
     def create_mmap(fname):
         # No need to keep the file open, at least on linux
         # Closing this prevents file descriptor limits from being exceeded
@@ -26,14 +25,25 @@ def file_dataset_view(fname: Path) -> Generator[Any, None, None]:
                 yield g
 
 
-class LowlevelDataViewer(Sequence[Any]):
+class LowlevelDataReader(Sequence[Any]):
 
     graphs_by_filename: dict[Path, int]
     "Map from filenames in the dataset to the index of that graph"
 
     graph_files: list[Path]
 
-    def __init__(self, dataset: list[tuple[Path, Any]]):
+    def __init__(self, dataset_path : Path, dataset: list[tuple[Path, Any]]):
+        # Basic, quick sanity check
+        if not dataset:
+            raise ValueError(f"There does not appear to be a dataset located at {dataset_path}")
+        for f, reader in dataset:
+            relative_self = Path(reader.dependencies[0])
+            if f != relative_self:
+                real_root = Path(*(dataset_path/f).parts[:-len(relative_self.parts)])
+                raise ValueError(
+                    f"Path {dataset_path} doesn't appear to be the root of a dataset. "
+                    f"File {dataset_path/f} suggests that the real root might be {real_root}")
+
         self.__graphs = [g for _, g in dataset]
         self.graphs_by_filename = {f: i for i, (f, _) in enumerate(dataset)}
         self.graph_files = [f for f, _ in dataset]
@@ -49,14 +59,13 @@ class LowlevelDataViewer(Sequence[Any]):
         return len(self.__graphs)
 
 @contextmanager
-def lowlevel_data_viewer(dataset_path: Path) -> Generator[LowlevelDataViewer,
-                                                          None, None]:
+def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, None, None]:
     fnames = [f for f in dataset_path.glob('**/*.bin') if f.is_file()]
     with ExitStack() as stack:
         dataset = [(fname.relative_to(dataset_path),
-                    stack.enter_context(file_dataset_view(fname)))
+                    stack.enter_context(file_dataset_reader(fname)))
                    for fname in fnames]
-        yield LowlevelDataViewer(dataset)
+        yield LowlevelDataReader(dataset_path, dataset)
 
 
 ProofStateId = int
@@ -70,11 +79,11 @@ class Node:
 
     nodeid: NodeId
 
-    def __init__(self, graph: GraphId, nodeid: NodeId, lviewer: LowlevelDataViewer):
-        self.__lviewer = lviewer
+    def __init__(self, graph: GraphId, nodeid: NodeId, lreader: LowlevelDataReader):
+        self.__lreader = lreader
         self.__graph = graph
         self.nodeid = nodeid
-        self.__node = lviewer[graph].graph.nodes[nodeid]
+        self.__node = lreader[graph].graph.nodes[nodeid]
 
     def __repr__(self):
         return f"node-{self.__graph}-{self.nodeid}"
@@ -96,9 +105,9 @@ class Node:
     @property
     def children(self) -> Sequence[tuple[Any, Node]]:
         node = self.__node
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         graph = self.__graph
-        edges = lviewer[self.__graph].graph.edges
+        edges = lreader[self.__graph].graph.edges
         start = node.childrenIndex
         count = node.childrenCount
         class Seq(Sequence[tuple[Any, Node]]):
@@ -107,8 +116,8 @@ class Node:
                     raise IndexError()
                 edge = edges[start+index]
                 return (edge.label,
-                   Node(lviewer.local_to_global(graph, edge.target.depIndex),
-                        edge.target.nodeIndex, lviewer))
+                   Node(lreader.local_to_global(graph, edge.target.depIndex),
+                        edge.target.nodeIndex, lreader))
             def __len__(self) -> int:
                 return count
         return Seq()
@@ -116,13 +125,13 @@ class Node:
     @property
     def definition(self) -> Definition | None:
         if graph_api_capnp.Graph.Node.Label.definition == self.label.which:
-            return Definition(self, self.label.definition, self.__graph, self.__lviewer)
+            return Definition(self, self.label.definition, self.__graph, self.__lreader)
         else:
             return None
 
     @property
     def path(self) -> Path:
-        return Path(self.__lviewer[self.__graph].dependencies[0])
+        return Path(self.__lreader[self.__graph].dependencies[0])
 
 class Tactic:
 
@@ -157,10 +166,10 @@ class Tactic:
 
 class ProofState:
 
-    def __init__(self, reader, graph: GraphId, lviewer):
+    def __init__(self, reader, graph: GraphId, lreader: LowlevelDataReader):
         self.__reader = reader
         self.__graph = graph
-        self.__lviewer = lviewer
+        self.__lreader = lreader
 
     def __repr__(self):
         return repr(self.__reader)
@@ -168,14 +177,14 @@ class ProofState:
     @property
     def root(self) -> Node:
         root = self.__reader.root
-        lviewer = self.__lviewer
-        return Node(lviewer.local_to_global(self.__graph, root.depIndex),
-                    root.nodeIndex, self.__lviewer)
+        lreader = self.__lreader
+        return Node(lreader.local_to_global(self.__graph, root.depIndex),
+                    root.nodeIndex, self.__lreader)
 
     @property
     def context(self) -> Sequence[Node]:
         graph = self.__graph
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         context = self.__reader.context
         count = len(context)
         class Seq(Sequence[Node]):
@@ -183,8 +192,8 @@ class ProofState:
                 if index >= count:
                     raise IndexError()
                 n = context[index]
-                return Node(lviewer.local_to_global(graph, n.depIndex),
-                            n.nodeIndex, lviewer)
+                return Node(lreader.local_to_global(graph, n.depIndex),
+                            n.nodeIndex, lreader)
             def __len__(self) -> int:
                 return count
         return Seq()
@@ -207,10 +216,10 @@ class ProofState:
 Unresolvable: TypeAlias = None
 class Outcome:
 
-    def __init__(self, reader, graph: GraphId, lviewer):
+    def __init__(self, reader, graph: GraphId, lreader: LowlevelDataReader):
         self.__reader = reader
         self.__graph = graph
-        self.__lviewer = lviewer
+        self.__lreader = lreader
 
     def __repr__(self):
         return repr(self.__reader)
@@ -220,19 +229,19 @@ class Outcome:
 
     @property
     def before(self) -> ProofState:
-        return ProofState(self.__reader.before, self.__graph, self.__lviewer)
+        return ProofState(self.__reader.before, self.__graph, self.__lreader)
 
     @property
     def after(self) -> Sequence[ProofState]:
         graph = self.__graph
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         after = self.__reader.after
         count = len(after)
         class Seq(Sequence[ProofState]):
             def __getitem__(self, index: int) -> ProofState:
                 if index >= count:
                     raise IndexError()
-                return ProofState(after[index], graph, lviewer)
+                return ProofState(after[index], graph, lreader)
             def __len__(self) -> int:
                 return count
         return Seq()
@@ -240,8 +249,8 @@ class Outcome:
     @property
     def term(self) -> Node:
         term = self.__reader.term
-        return Node(self.__lviewer.local_to_global(self.__graph, term.depIndex),
-                    self.__reader.term.nodeIndex, self.__lviewer)
+        return Node(self.__lreader.local_to_global(self.__graph, term.depIndex),
+                    self.__reader.term.nodeIndex, self.__lreader)
 
     @property
     def term_text(self) -> str:
@@ -250,7 +259,7 @@ class Outcome:
     @property
     def tactic_arguments(self) -> Sequence[Node | Unresolvable]:
         graph = self.__graph
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         args = self.__reader.tactic_arguments
         count = len(args)
         class Seq(Sequence[Node | Unresolvable]):
@@ -262,8 +271,8 @@ class Outcome:
                     case graph_api_capnp.Argument.unresolvable:
                         return None
                     case graph_api_capnp.Argument.term:
-                        return Node(lviewer.local_to_global(graph, arg.term.depIndex),
-                                   arg.term.nodeIndex, lviewer)
+                        return Node(lreader.local_to_global(graph, arg.term.depIndex),
+                                    arg.term.nodeIndex, lreader)
             def __len__(self) -> int:
                 return count
         return Seq()
@@ -271,10 +280,10 @@ class Outcome:
 Unknown: TypeAlias = None
 class ProofStep:
 
-    def __init__(self, reader, graph: GraphId, lviewer):
+    def __init__(self, reader, graph: GraphId, lreader: LowlevelDataReader):
         self.__reader = reader
         self.__graph = graph
-        self.__lviewer = lviewer
+        self.__lreader = lreader
 
     def __repr__(self):
         return repr(self.__reader)
@@ -294,14 +303,14 @@ class ProofStep:
     @property
     def outcomes(self) -> Sequence[Outcome]:
         graph = self.__graph
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         outcomes = self.__reader.outcomes
         count = len(outcomes)
         class Seq(Sequence[Outcome]):
             def __getitem__(self, index: int) -> Outcome:
                 if index >= count:
                     raise IndexError()
-                return Outcome(outcomes[index], graph, lviewer)
+                return Outcome(outcomes[index], graph, lreader)
             def __len__(self) -> int:
                 return count
         return Seq()
@@ -310,11 +319,11 @@ class Definition:
 
     node: Node
 
-    def __init__(self, node: Node, reader, graph: GraphId, lviewer):
+    def __init__(self, node: Node, reader, graph: GraphId, lreader: LowlevelDataReader):
         self.node = node
         self.__reader = reader
         self.__graph = graph
-        self.__lviewer = lviewer
+        self.__lreader = lreader
 
     def __repr__(self):
         return repr(self.__reader)
@@ -329,15 +338,15 @@ class Definition:
     @property
     def previous(self) -> Definition | None:
         nodeid = self.__reader.previous
-        if len(self.__lviewer[self.__graph].graph.nodes) == nodeid:
+        if len(self.__lreader[self.__graph].graph.nodes) == nodeid:
             return None
         else:
-            node = Node(self.__graph, nodeid, self.__lviewer)
+            node = Node(self.__graph, nodeid, self.__lreader)
             return node.definition
 
     @property
     def external_previous(self) -> Sequence[Definition]:
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         graph = self.__graph
         eps = self.__reader.externalPrevious
         count = len(eps)
@@ -345,8 +354,8 @@ class Definition:
             def __getitem__(self, index: int) -> Definition:
                 if index >= count:
                     raise IndexError()
-                depgraph = lviewer.local_to_global(graph, eps[index])
-                return cast(Definition, Node(depgraph, lviewer[depgraph].representative, lviewer).definition)
+                depgraph = lreader.local_to_global(graph, eps[index])
+                return cast(Definition, Node(depgraph, lreader[depgraph].representative, lreader).definition)
             def __len__(self) -> int:
                 return count
         return Seq()
@@ -398,12 +407,12 @@ class Definition:
             case graph_api_capnp.Definition.Status.discharged:
                 return Definition.Discharged(
                     cast(Definition, Node(self.__graph, status.discharged,
-                                          self.__lviewer).definition))
+                                          self.__lreader).definition))
             case graph_api_capnp.Definition.Status.substituted:
                 return Definition.Substituted(
                     cast(Definition,
-                         Node(self.__lviewer.local_to_global(self.__graph, status.substituted.depIndex),
-                              status.substituted.nodeIndex, self.__lviewer).definition))
+                         Node(self.__lreader.local_to_global(self.__graph, status.substituted.depIndex),
+                              status.substituted.nodeIndex, self.__lreader).definition))
             case _:
                 assert False
 
@@ -432,7 +441,7 @@ class Definition:
                             ManualSectionConstant, TacticalSectionConstant]:
         kind = self.__reader
         graph = self.__graph
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         class Seq(Sequence[ProofStep]):
             def __init__(self, reader):
                 self.__reader = reader
@@ -440,7 +449,7 @@ class Definition:
             def __getitem__(self, index: int) -> ProofStep:
                 if index >= self.__count:
                     raise IndexError()
-                return ProofStep(self.__reader[index], graph, lviewer)
+                return ProofStep(self.__reader[index], graph, lreader)
             def __len__(self) -> int:
                 return self.__count
         # TODO: pycapnp does not seem to allow matching on graph_api_capnp.Definition.inductive,
@@ -449,15 +458,15 @@ class Definition:
             case "inductive":
                 return Definition.Inductive(
                     cast(Definition, Node(self.__graph, kind.inductive,
-                                          self.__lviewer).definition))
+                                          self.__lreader).definition))
             case "constructor":
                 return Definition.Inductive(
                     cast(Definition, Node(self.__graph, kind.constructor,
-                                          self.__lviewer).definition))
+                                          self.__lreader).definition))
             case "projection":
                 return Definition.Projection(
                     cast(Definition, Node(self.__graph, kind.projection,
-                                          self.__lviewer).definition))
+                                          self.__lreader).definition))
             case "manualConstant":
                 return Definition.ManualConstant()
             case "tacticalConstant":
@@ -519,15 +528,11 @@ class Definition:
 class Dataset:
     filename: Path
 
-    # TODO: Change to list[Path]
-    dependencies: list[Dataset]
-
-    def __init__(self, filename: Path, dependencies: list[Dataset], graph: GraphId, lviewer):
+    def __init__(self, filename: Path, graph: GraphId, lreader: LowlevelDataReader):
         self.filename = filename
-        self.dependencies = dependencies
         self.__graph = graph
-        self.__reader = lviewer[graph]
-        self.__lviewer = lviewer
+        self.__reader = lreader[graph]
+        self.__lreader = lreader
 
     def __repr__(self):
         return repr(self.__reader)
@@ -536,12 +541,25 @@ class Dataset:
         return str(self.__reader)
 
     @property
+    def dependencies(self) -> Sequence[Path]:
+        dependencies = self.__reader.dependencies
+        count = len(dependencies) - 1
+        class Seq(Sequence[Path]):
+            def __getitem__(self, index: int) -> Path:
+                if index >= count:
+                    raise IndexError()
+                return Path(dependencies[index+1])
+            def __len__(self) -> int:
+                return count
+        return Seq()
+
+    @property
     def representative(self) -> Definition | None:
         representative = self.__reader.representative
         if len(self.__reader.graph.nodes) == representative:
             return None
         else:
-            return Node(self.__graph, representative, self.__lviewer).definition
+            return Node(self.__graph, representative, self.__lreader).definition
 
     @property
     def super_global_context(self) -> Iterable[Definition]:
@@ -559,14 +577,14 @@ class Dataset:
     @property
     def definitions(self) -> Sequence[Definition]:
         graph = self.__graph
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         ds = self.__reader.definitions
         count = len(ds)
         class Seq(Sequence[Definition]):
             def __getitem__(self, index: int) -> Definition:
                 if index >= count:
                     raise IndexError()
-                return cast(Definition, Node(graph, ds[index], lviewer).definition)
+                return cast(Definition, Node(graph, ds[index], lreader).definition)
             def __len__(self) -> int:
                 return count
         return Seq()
@@ -574,32 +592,22 @@ class Dataset:
     @property
     def clustered_definitions(self) -> Iterable[list[Definition]]:
         graph = self.__graph
-        lviewer = self.__lviewer
+        lreader = self.__lreader
         seen = set()
         for nodeid in self.__reader.definitions:
             if not nodeid in seen:
-                d = cast(Definition, Node(graph, nodeid, lviewer).definition)
+                d = cast(Definition, Node(graph, nodeid, lreader).definition)
                 cluster = list(d.cluster)
                 yield cluster
                 for cd in cluster:
                     seen.add(cd.node.nodeid)
 
     def node_by_id(self, nodeid: NodeId) -> Node:
-        return Node(self.__graph, nodeid, self.__lviewer)
+        return Node(self.__graph, nodeid, self.__lreader)
 
 @contextmanager
-def data_viewer(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None]:
-    with lowlevel_data_viewer(dataset_path) as lviewer:
-        datasets = {}
-        def populate(path: Path):
-            if not path in datasets:
-                graph = lviewer.graphs_by_filename[path]
-                reader = lviewer[graph]
-                deps = [Path(dep) for dep in list(reader.dependencies)[1:]]
-                for dep in deps:
-                    populate(dep)
-                datasets[path] = Dataset(path, [datasets[dep] for dep in deps], graph, lviewer)
+def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None]:
+    with lowlevel_data_reader(dataset_path) as lreader:
+        yield {f: Dataset(f, g, lreader)
+               for f, g in lreader.graphs_by_filename.items()}
 
-        for path in lviewer.graphs_by_filename:
-            populate(path)
-        yield datasets
