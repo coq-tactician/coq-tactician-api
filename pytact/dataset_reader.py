@@ -26,7 +26,7 @@ def file_dataset_view(fname: Path) -> Generator[Any, None, None]:
                 yield g
 
 
-class LowlevelDataViewer:
+class LowlevelDataViewer(Sequence[Any]):
 
     graphs_by_filename: dict[Path, int]
     "Map from filenames in the dataset to the index of that graph"
@@ -44,6 +44,9 @@ class LowlevelDataViewer:
 
     def __getitem__(self, graph):
         return self.__graphs[graph]
+
+    def __len__(self) -> int:
+        return len(self.__graphs)
 
 @contextmanager
 def lowlevel_data_viewer(dataset_path: Path) -> Generator[LowlevelDataViewer,
