@@ -189,9 +189,7 @@ class GraphVisualisationBrowser:
         proof = d.proof
         if not proof:
             assert False
-        proof = list(proof)
 
-        print("proof")
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
         surrogates = set()
@@ -203,7 +201,6 @@ class GraphVisualisationBrowser:
                     id = id + '-s'
                 surrogates.add(id)
                 outcome_to_id[(i, j)] = id
-        print(proof)
         for i, step in enumerate(proof):
             with dot.subgraph(name='cluster_' + str(i)) as dot2:
                 dot2.attr('graph', labelloc="b")
@@ -246,12 +243,11 @@ class GraphVisualisationBrowser:
         proof = d.proof
         if not proof:
             assert False
-        proof = list(proof)
 
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
 
-        outcome = list(proof[stepi].outcomes)[outcomei]
+        outcome = proof[stepi].outcomes[outcomei]
         seen = set()
 
         with dot.subgraph(name='cluster_before') as dot2:

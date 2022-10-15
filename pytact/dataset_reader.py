@@ -3,7 +3,8 @@ import mmap
 from contextlib import contextmanager
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Any, Generator, Iterable, TypeAlias, Union, cast
+from typing import Any, TypeAlias, Union, cast
+from collections.abc import Iterable, Sequence, Generator
 from pathlib import Path
 import capnp
 from pytact.common import graph_api_capnp
@@ -90,15 +91,24 @@ class Node:
         return self.__node.identity
 
     @property
-    def children(self) -> Iterable[tuple[Any, Node]]:
+    def children(self) -> Sequence[tuple[Any, Node]]:
         node = self.__node
         lviewer = self.__lviewer
+        graph = self.__graph
         edges = lviewer[self.__graph].graph.edges
-        for i in range(node.childrenIndex, node.childrenIndex+node.childrenCount):
-            edge = edges[i]
-            yield (edge.label,
-                   Node(lviewer.local_to_global(self.__graph, edge.target.depIndex),
+        start = node.childrenIndex
+        count = node.childrenCount
+        class Seq(Sequence[tuple[Any, Node]]):
+            def __getitem__(self, index: int) -> tuple[Any, Node]:
+                if index >= count:
+                    raise IndexError()
+                edge = edges[start+index]
+                return (edge.label,
+                   Node(lviewer.local_to_global(graph, edge.target.depIndex),
                         edge.target.nodeIndex, lviewer))
+            def __len__(self) -> int:
+                return count
+        return Seq()
 
     @property
     def definition(self) -> Definition | None:
@@ -160,15 +170,24 @@ class ProofState:
                     root.nodeIndex, self.__lviewer)
 
     @property
-    def context(self) -> Iterable[Node]:
+    def context(self) -> Sequence[Node]:
         graph = self.__graph
         lviewer = self.__lviewer
-        for id in self.__reader.context:
-            yield Node(lviewer.local_to_global(graph, id.depIndex),
-                       id.nodeIndex, lviewer)
+        context = self.__reader.context
+        count = len(context)
+        class Seq(Sequence[Node]):
+            def __getitem__(self, index: int) -> Node:
+                if index >= count:
+                    raise IndexError()
+                n = context[index]
+                return Node(lviewer.local_to_global(graph, n.depIndex),
+                            n.nodeIndex, lviewer)
+            def __len__(self) -> int:
+                return count
+        return Seq()
 
     @property
-    def context_names(self) -> Iterable[str]:
+    def context_names(self) -> Sequence[str]:
         return self.__reader.contextNames
 
     @property
@@ -201,11 +220,19 @@ class Outcome:
         return ProofState(self.__reader.before, self.__graph, self.__lviewer)
 
     @property
-    def after(self) -> Iterable[ProofState]:
+    def after(self) -> Sequence[ProofState]:
         graph = self.__graph
         lviewer = self.__lviewer
-        for after in self.__reader.after:
-            yield ProofState(after, graph, lviewer)
+        after = self.__reader.after
+        count = len(after)
+        class Seq(Sequence[ProofState]):
+            def __getitem__(self, index: int) -> ProofState:
+                if index >= count:
+                    raise IndexError()
+                return ProofState(after[index], graph, lviewer)
+            def __len__(self) -> int:
+                return count
+        return Seq()
 
     @property
     def term(self) -> Node:
@@ -218,16 +245,25 @@ class Outcome:
         return self.__reader.termText
 
     @property
-    def tactic_arguments(self) -> Iterable[Node | Unresolvable]:
+    def tactic_arguments(self) -> Sequence[Node | Unresolvable]:
         graph = self.__graph
         lviewer = self.__lviewer
-        for arg in self.__reader.tactic_arguments:
-            match arg.which:
-                case graph_api_capnp.Argument.unresolvable:
-                    yield None
-                case graph_api_capnp.Argument.term:
-                    yield Node(lviewer.local_to_global(graph, arg.term.depIndex),
-                               arg.term.nodeIndex, lviewer)
+        args = self.__reader.tactic_arguments
+        count = len(args)
+        class Seq(Sequence[Node | Unresolvable]):
+            def __getitem__(self, index: int) -> Node | Unresolvable:
+                if index >= count:
+                    raise IndexError()
+                arg = args[index]
+                match arg.which:
+                    case graph_api_capnp.Argument.unresolvable:
+                        return None
+                    case graph_api_capnp.Argument.term:
+                        return Node(lviewer.local_to_global(graph, arg.term.depIndex),
+                                   arg.term.nodeIndex, lviewer)
+            def __len__(self) -> int:
+                return count
+        return Seq()
 
 Unknown: TypeAlias = None
 class ProofStep:
@@ -253,11 +289,19 @@ class ProofStep:
                 return Tactic(tactic.known)
 
     @property
-    def outcomes(self) -> Iterable[Outcome]:
+    def outcomes(self) -> Sequence[Outcome]:
         graph = self.__graph
         lviewer = self.__lviewer
-        for outcome in self.__reader.outcomes:
-            yield Outcome(outcome, graph, lviewer)
+        outcomes = self.__reader.outcomes
+        count = len(outcomes)
+        class Seq(Sequence[Outcome]):
+            def __getitem__(self, index: int) -> Outcome:
+                if index >= count:
+                    raise IndexError()
+                return Outcome(outcomes[index], graph, lviewer)
+            def __len__(self) -> int:
+                return count
+        return Seq()
 
 class Definition:
 
@@ -289,14 +333,20 @@ class Definition:
             return node.definition
 
     @property
-    def external_previous(self) -> Iterable[Definition]:
+    def external_previous(self) -> Sequence[Definition]:
         lviewer = self.__lviewer
         graph = self.__graph
-        def representative(dep_index) -> Definition:
-            depgraph = lviewer.local_to_global(graph, dep_index)
-            return cast(Definition, Node(depgraph, lviewer[depgraph].representative, lviewer).definition)
-        for dep_index in self.__reader.externalPrevious:
-            yield representative(dep_index)
+        eps = self.__reader.externalPrevious
+        count = len(eps)
+        class Seq(Sequence[Definition]):
+            def __getitem__(self, index: int) -> Definition:
+                if index >= count:
+                    raise IndexError()
+                depgraph = lviewer.local_to_global(graph, eps[index])
+                return cast(Definition, Node(depgraph, lviewer[depgraph].representative, lviewer).definition)
+            def __len__(self) -> int:
+                return count
+        return Seq()
 
     def __global_context(self, seen: set[Node]) -> Iterable[Definition]:
         if prev := self.previous:
@@ -367,12 +417,12 @@ class Definition:
     class ManualConstant: pass
     @dataclass
     class TacticalConstant:
-        proof: Iterable[ProofStep]
+        proof: Sequence[ProofStep]
     @dataclass
     class ManualSectionConstant: pass
     @dataclass
     class TacticalSectionConstant:
-        proof: Iterable[ProofStep]
+        proof: Sequence[ProofStep]
     @property
     def kind(self) -> Union[Inductive, Constructor, Projection,
                             ManualConstant, TacticalConstant,
@@ -380,9 +430,16 @@ class Definition:
         kind = self.__reader
         graph = self.__graph
         lviewer = self.__lviewer
-        def make_proof_iterable(reader) -> Iterable[ProofStep]:
-            for ps in reader:
-                yield ProofStep(ps, graph, lviewer)
+        class Seq(Sequence[ProofStep]):
+            def __init__(self, reader):
+                self.__reader = reader
+                self.__count = len(reader)
+            def __getitem__(self, index: int) -> ProofStep:
+                if index >= self.__count:
+                    raise IndexError()
+                return ProofStep(self.__reader[index], graph, lviewer)
+            def __len__(self) -> int:
+                return self.__count
         # TODO: pycapnp does not seem to allow matching on graph_api_capnp.Definition.inductive,
         #       we should report this at some point. Alternative is to use the string.
         match kind.which:
@@ -401,16 +458,16 @@ class Definition:
             case "manualConstant":
                 return Definition.ManualConstant()
             case "tacticalConstant":
-                return Definition.TacticalConstant(make_proof_iterable(kind.tacticalConstant))
+                return Definition.TacticalConstant(Seq(kind.tacticalConstant))
             case "manualSectionConstant":
                 return Definition.ManualConstant()
             case "tacticalSectionConstant":
-                return Definition.TacticalSectionConstant(make_proof_iterable(kind.tacticalSectionConstant))
+                return Definition.TacticalSectionConstant(Seq(kind.tacticalSectionConstant))
             case _:
                 assert False
 
     @property
-    def proof(self) -> Iterable[ProofStep] | None:
+    def proof(self) -> Sequence[ProofStep] | None:
         match self.kind:
             case Definition.TacticalConstant(proof):
                 return proof
@@ -497,11 +554,19 @@ class Dataset:
             yield from cluster[-1].__clustered_global_context(set())
 
     @property
-    def definitions(self) -> Iterable[Definition]:
+    def definitions(self) -> Sequence[Definition]:
         graph = self.__graph
         lviewer = self.__lviewer
-        for nodeid in self.__reader.definitions:
-            yield cast(Definition, Node(graph, nodeid, lviewer).definition)
+        ds = self.__reader.definitions
+        count = len(ds)
+        class Seq(Sequence[Definition]):
+            def __getitem__(self, index: int) -> Definition:
+                if index >= count:
+                    raise IndexError()
+                return cast(Definition, Node(graph, ds[index], lviewer).definition)
+            def __len__(self) -> int:
+                return count
+        return Seq()
 
     @property
     def clustered_definitions(self) -> Iterable[list[Definition]]:
