@@ -1,71 +1,52 @@
-# Python 3 server example
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-import time
-import sys
-import os
 import argparse
 
 from pytact.data_reader import data_reader
-from pytact.graph_visualize_browse import GraphVisualisationBrowser
+from pytact.graph_visualize_browse import GraphVisualisationBrowser, UrlMaker
 
-class VisualisationServer(BaseHTTPRequestHandler):
-    def __init__(self, gv, *args):
-        self.gv = gv
-        BaseHTTPRequestHandler.__init__(self, *args)
+from sanic import Sanic
+from sanic.response import html
 
-    def do_GET(self):
+app = Sanic("graph-visualizer")
 
-        print("path:", self.path)
-        dirname, basename = os.path.split(self.path)
-        dirname = dirname.removeprefix('/')
-        if basename == "file_deps.svg":
-            self.send_svg(self.gv.file_deps(Path(dirname)))
-            return
-        fname = dirname+".bin"
-        print("fname:", fname)
+@app.get('/<path:path>/definition/<defid:int>/proof/step/<stepi:int>/outcome/<outcomei:int>')
+async def outcome(request, path: str, defid: str, stepi: str, outcomei: str):
+    return html(app.ctx.gv.outcome(Path(path).with_suffix(".bin"), int(defid), int(stepi), int(outcomei)))
 
-        if basename == "index.svg":
-            self.send_svg(self.gv.global_context(Path(fname)))
-            return
-        if basename.startswith("definition-"):
-            basename = basename.removeprefix("definition-").removesuffix(".svg")
-            if basename.isdigit():
-                defid = int(basename)
-                self.send_svg(self.gv.definition(Path(fname), defid))
-                return
-            else:
-                defid, proof_label, *proof_args = basename.split('-')
-                assert proof_label == "proof"
-                defid = int(defid)
-                if not proof_args:
-                    self.send_svg(self.gv.proof(Path(fname), defid))
-                    return
-                step_label, step_i, outcome_label, outcome_i = proof_args
-                assert step_label == "step"
-                assert outcome_label == "outcome"
-                step_i = int(step_i)
-                outcome_i = int(outcome_i)
-                self.send_svg(self.gv.outcome(Path(fname), defid, step_i, outcome_i))
-                return
+@app.get('/<path:path>/definition/<defid:int>/proof')
+async def proof(request, path: str, defid: str):
+    return html(app.ctx.gv.proof(Path(path).with_suffix(".bin"), int(defid)))
 
-        self.send_err()
+@app.get('/<path:path>/definition/<defid:int>')
+async def definition(request, path: str, defid: str):
+    return html(app.ctx.gv.definition(Path(path).with_suffix(".bin"), int(defid)))
 
-    def send_svg(self, svg):
-        self.send_response(200)
-        self.send_header("Content-type", "image/svg+xml")
-        self.end_headers()
-        self.wfile.write(svg)
+@app.get('/<path:path>/context')
+async def global_context(request, path: str):
+    return html(app.ctx.gv.global_context(Path(path).with_suffix(".bin")))
 
-    def send_err(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        self.wfile.write(bytes("<html><head><title>404</title></head>", "utf-8"))
-        self.wfile.write(bytes("<p>Request: %s</p>" % self.path, "utf-8"))
-        self.wfile.write(bytes("<body>", "utf-8"))
-        self.wfile.write(bytes("<p>Unexpected path</p>", "utf-8"))
-        self.wfile.write(bytes("</body></html>", "utf-8"))
+@app.get('/<path:path>')
+async def folder(request, path: str):
+    return html(app.ctx.gv.folder(Path(path)))
+
+@app.get('/')
+async def root_folder(request):
+    return html(app.ctx.gv.folder(Path()))
+
+class SanicUrlMaker(UrlMaker):
+    def definition(self, fname: Path, defid: int) -> str:
+        return app.url_for('definition', path=fname.with_suffix(''), defid=defid)
+    def proof(self, fname: Path, defid: int) -> str:
+        return app.url_for('proof', path=fname.with_suffix(''), defid=defid)
+    def outcome(self, fname: Path, defid: int, stepi: int, outcomei: int) -> str:
+        return app.url_for('outcome', path=fname.with_suffix(''),
+                           defid=defid, stepi=stepi, outcomei=outcomei)
+    def global_context(self, fname: Path) -> str:
+        return app.url_for('global_context', path=fname.with_suffix(''))
+    def folder(self, path: Path) -> str:
+        return app.url_for('folder', path=path)
+    def root_folder(self) -> str:
+        return app.url_for('root_folder')
 
 def main():
 
@@ -82,26 +63,18 @@ def main():
                         help='the port where the webserver should listen')
     parser.add_argument('--hostname',
                        type=str,
-                       default='localhost',
+                       default='0.0.0.0',
                        help='the ip or domain of the hosting machine')
+    parser.add_argument('--dev',
+                        action='store_true',
+                        help='run the server in development mode')
 
     args = parser.parse_args()
 
     dataset_path = Path(args.dir).resolve()
     with data_reader(dataset_path) as data:
-        gv = GraphVisualisationBrowser(data, "http://{}:{}/".format(args.hostname, args.port))
-        def handler(*args):
-            return VisualisationServer(gv, *args)
-        webServer = HTTPServer(('0.0.0.0', args.port), handler)
-        print(f"Server started {gv.root_file_url()}")
+        app.ctx.gv = GraphVisualisationBrowser(data, SanicUrlMaker())
+        app.run(host=args.hostname, port=args.port, dev=args.dev)
 
-        try:
-            webServer.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            webServer.server_close()
-            print("Server stopped.")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -1,34 +1,40 @@
 import os
 import graphviz
 from collections import defaultdict
+from abc import ABC, abstractmethod
 
 from pytact.graph_visualize import edge_arrow_map
 
 from pathlib import Path
 from pytact.data_reader import Dataset, Definition, Node
 
-class GraphVisualisationBrowser:
-    def __init__(self, dataset: dict[Path, Dataset], url_prefix: str):
-        self.url_prefix = url_prefix
-        self.dataset = dataset
-        self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
-                                              for d in self.dataset.values()})
+class UrlMaker(ABC):
 
-    def get_url(self, bin_fname: Path, svg_fname):
-        base = bin_fname.with_suffix('')
-        return self.url_prefix+str(base/svg_fname)
-    def definition_url(self, fname: Path, defid: int):
-        return self.get_url(fname, f"definition-{defid}.svg")
-    def proof_url(self, fname: Path, defid: int):
-        return self.get_url(fname, f"definition-{defid}-proof.svg")
-    def proof_outcome_url(self, fname: Path, defid: int, stepi: int, outcomei: int):
-        return self.get_url(fname, f"definition-{defid}-proof-step-{stepi}-outcome-{outcomei}.svg")
-    def global_context_url(self, fname: Path):
-        return self.get_url(fname, "index.svg")
-    def directory_url(self, path: Path):
-        return self.url_prefix+str(path/"file_deps.svg")
-    def root_file_url(self):
-        return self.directory_url(Path())
+    @abstractmethod
+    def definition(self, fname: Path, defid: int) -> str:
+        pass
+    @abstractmethod
+    def proof(self, fname: Path, defid: int) -> str:
+        pass
+    @abstractmethod
+    def outcome(self, fname: Path, defid: int, stepi: int, outcomei: int) -> str:
+        pass
+    @abstractmethod
+    def global_context(self, fname: Path) -> str:
+        pass
+    @abstractmethod
+    def folder(self, path: Path) -> str:
+        pass
+    @abstractmethod
+    def root_folder(self) -> str:
+        pass
+
+class GraphVisualisationBrowser:
+    def __init__(self, data: dict[Path, Dataset], url_maker: UrlMaker):
+        self.data = data
+        self.url_maker = url_maker
+        self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
+                                              for d in self.data.values()})
 
     def render_node(self, dot, node: Node, label_prefix=None, prefix=None):
         id = repr(node)
@@ -38,7 +44,7 @@ class GraphVisualisationBrowser:
         url = None
         if d := node.definition:
             label = d.name
-            url = self.definition_url(node.path, node.nodeid)
+            url = self.url_maker.definition(node.path, node.nodeid)
         if label_prefix:
             label = label_prefix + label
         dot.node(id, label, URL = url)
@@ -47,7 +53,7 @@ class GraphVisualisationBrowser:
     def render_file_node(self, dot, f: Path):
         label = f"File:{f}"
         node_id = f"file-{f}"
-        dot.node(node_id, label, URL = self.global_context_url(f))
+        dot.node(node_id, label, URL = self.url_maker.global_context(f))
         return node_id
 
     def global_context(self, fname: Path):
@@ -79,7 +85,7 @@ class GraphVisualisationBrowser:
                             dot2.edge(id, id2,
                                       arrowtail="odot", dir="both", constraint="false", style="dashed")
 
-        dataset = self.dataset[fname]
+        dataset = self.data[fname]
         representative = dataset.representative
         for cluster in dataset.clustered_definitions:
 
@@ -112,7 +118,7 @@ class GraphVisualisationBrowser:
         dot.attr('graph', label=f"Global context for {fname}")
         dot.attr('graph', fontsize="40pt")
         dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.directory_url(Path(*fname.parts[:-1])))
+        dot.attr('graph', URL=self.url_maker.folder(Path(*fname.parts[:-1])))
         return dot.pipe()
 
     def visualize_term(self, dot, start: Node, depth,
@@ -157,7 +163,7 @@ class GraphVisualisationBrowser:
         dot = graphviz.Digraph(format='svg')
         dot.attr('graph', ordering="out")
 
-        start = self.dataset[fname].node_by_id(definition)
+        start = self.data[fname].node_by_id(definition)
 
         self.visualize_term(dot, start, depth=depth,
                             prefix=None, maxNodes=maxNodes, showLabel=showLabel, seen=set())
@@ -168,11 +174,11 @@ class GraphVisualisationBrowser:
             match d.kind:
                 case Definition.TacticalConstant(proof):
                     dot.node('proof_reference', "Proof",
-                             URL = self.proof_url(fname, definition),
+                             URL = self.url_maker.proof(fname, definition),
                              fontsize="40pt")
                 case Definition.TacticalSectionConstant(proof):
                     dot.node('proof_reference', "Proof",
-                             URL = self.proof_url(fname, definition),
+                             URL = self.url_maker.proof(fname, definition),
                              fontsize="40pt")
                 case _:
                     pass
@@ -180,11 +186,11 @@ class GraphVisualisationBrowser:
         dot.attr('graph', label=f"Definition {label} from {fname}")
         dot.attr('graph', fontsize="40pt")
         dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.global_context_url(fname))
+        dot.attr('graph', URL=self.url_maker.global_context(fname))
         return dot.pipe()
 
     def proof(self, fname: Path, definition: int):
-        node = self.dataset[fname].node_by_id(definition)
+        node = self.data[fname].node_by_id(definition)
         d = node.definition
         if not d:
             assert False
@@ -216,7 +222,7 @@ class GraphVisualisationBrowser:
                     dot2.node(before_id, label='⬤', shape='circle',
                               fontsize="10pt", fixedsize="true", width="0.3pt",
                               style="filled", fillcolor="white",
-                              URL = self.proof_outcome_url(fname, definition, i, j))
+                              URL = self.url_maker.outcome(fname, definition, i, j))
                     for after in outcome.after:
                         if outcome.before.id == after.id:
                             after_id = before_id + '-s'
@@ -233,12 +239,12 @@ class GraphVisualisationBrowser:
         dot.attr('graph', label=f"Proof of {d.name} from {fname}")
         dot.attr('graph', fontsize="40pt")
         dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.definition_url(fname, definition))
+        dot.attr('graph', URL=self.url_maker.definition(fname, definition))
         return dot.pipe()
 
     def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int,
                       depth = 0, maxNodes=100, showLabel=False):
-        node = self.dataset[fname].node_by_id(definition)
+        node = self.data[fname].node_by_id(definition)
         d = node.definition
         if not d:
             assert False
@@ -279,18 +285,18 @@ class GraphVisualisationBrowser:
                  " of " + d.name + " from " + str(fname))
         dot.attr('graph', fontsize="40pt")
         dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.proof_url(fname, definition))
+        dot.attr('graph', URL=self.url_maker.proof(fname, definition))
 
         return dot.pipe('svg')
 
-    def file_deps(self, expand_path: Path):
+    def folder(self, expand_path: Path):
         expand_parts = expand_path.parts
 
         dot = graphviz.Digraph(engine='dot', format='svg')
         dot.attr('graph', ordering="out")
 
         hierarchy = {'files': [], 'subdirs': {}}
-        for f in self.dataset:
+        for f in self.data:
             dirs = f.parent.parts
             leaf = hierarchy
             for d in dirs:
@@ -312,10 +318,10 @@ class GraphVisualisationBrowser:
                 rel = retrieve_edges(defaultdict(set), h, depth)
                 (rel, repr) = transitive_reduction(rel)
                 def get_url(r: Path):
-                    if r in self.dataset:
-                        return self.global_context_url(r)
+                    if r in self.data:
+                        return self.url_maker.global_context(r)
                     else:
-                        return self.directory_url(r)
+                        return self.url_maker.folder(r)
                 for n in rel:
                     if len(repr[n]) == 1:
                         label = n.parts[-1]
@@ -339,12 +345,12 @@ class GraphVisualisationBrowser:
                         cluster_name = 'cluster_' + str(cur_path)
                         with dot.subgraph(name=cluster_name) as dot2:
                             dot2.attr('graph', style="filled", fillcolor="white", label=d,
-                                      URL = self.directory_url(Path(*expand_parts[:depth+1])))
+                                      URL = self.url_maker.folder(Path(*expand_parts[:depth+1])))
                             tunnel_hierarchy(dot2, h['subdirs'][d], depth+1)
 
         with dot.subgraph(name='cluster_root') as dot2:
             dot2.attr('graph', style="filled", fillcolor="white", label='dataset',
-                      URL = self.root_file_url())
+                      URL = self.url_maker.root_folder())
             tunnel_hierarchy(dot2, hierarchy, 0)
 
         return dot.pipe()
