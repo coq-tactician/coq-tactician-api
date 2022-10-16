@@ -2,11 +2,13 @@ import os
 import graphviz
 from collections import defaultdict
 from abc import ABC, abstractmethod
-
-from pytact.graph_visualize import edge_arrow_map
-
 from pathlib import Path
 from pytact.data_reader import Dataset, Definition, Node
+import capnp
+capnp.remove_import_hook()
+import pytact.common
+graph_api_capnp = pytact.common.graph_api_capnp()
+graph_api_capnp = capnp.load(graph_api_capnp)
 
 class UrlMaker(ABC):
 
@@ -36,29 +38,73 @@ class GraphVisualisationBrowser:
         self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
                                               for d in self.data.values()})
 
+
+        arrow_heads = [ "dot", "inv", "odot", "invdot", "invodot" ]
+        edge_arrow_map = {}
+        for group in graph_api_capnp.groupedEdges:
+            for i, sort in enumerate(group.conflatable):
+                edge_arrow_map[sort] = arrow_heads[i]
+        self.edge_arrow_map = edge_arrow_map
+
+    def node_label_map(self, label) -> tuple[str, str]:
+        enum = graph_api_capnp.Graph.Node.Label
+        match label.which:
+            case enum.sortProp:
+                return 'ellipse', 'Prop'
+            case enum.sortSProp:
+                return 'ellipse', 'SProp'
+            case enum.sortSet:
+                return 'ellipse', 'Set'
+            case enum.sortType:
+                return 'ellipse', 'Type'
+            case enum.rel:
+                return 'circle', '↑'
+            case enum.prod:
+                return 'circle', '∀'
+            case 'lambda':
+                return 'circle', 'λ'
+            case enum.letIn:
+                return 'ellipse', 'let'
+            case enum.app:
+                return 'circle', '@'
+            case enum.caseBranch:
+                return 'ellipse', 'branch'
+            case _:
+                label = str(label.which)
+                shape = 'ellipse'
+                if label.islower():
+                    return shape, label
+                else:
+                    return shape, label[0].capitalize()+label[1:]
+
+    def dot_apply_style(self, dot):
+        dot.attr('node', style="rounded, filled", penwidth="0", fontname="Helvetica")
+        dot.attr('edge', arrowsize='0.7')
+
     def render_node(self, dot, node: Node, label_prefix=None, prefix=None):
         id = repr(node)
         if prefix:
             id = prefix + '-' + id
-        label = node.label.which()
+        shape, label = self.node_label_map(node.label)
         url = None
         if d := node.definition:
             label = d.name
             url = self.url_maker.definition(node.path, node.nodeid)
+            shape = 'box'
         if label_prefix:
             label = label_prefix + label
-        dot.node(id, label, URL = url)
+        dot.node(id, label, URL = url, shape = shape)
         return id
 
     def render_file_node(self, dot, f: Path):
-        label = f"File:{f}"
+        label = f"File: {f.with_suffix('')}"
         node_id = f"file-{f}"
-        dot.node(node_id, label, URL = self.url_maker.global_context(f))
+        dot.node(node_id, label, URL = self.url_maker.global_context(f), shape='box')
         return node_id
 
     def global_context(self, fname: Path):
         dot = graphviz.Digraph(format='svg')
-        dot.attr('graph', ordering="out")
+        self.dot_apply_style(dot)
         dot.attr('graph', compound="true")
 
         def render_def(dot, d):
@@ -96,6 +142,7 @@ class GraphVisualisationBrowser:
             else:
                 ltail = "cluster_"+start
                 with dot.subgraph(name=ltail) as dot2:
+                    dot2.attr('graph', style='rounded')
                     last = None
                     for d in cluster:
                         render_def(dot2, d)
@@ -108,12 +155,10 @@ class GraphVisualisationBrowser:
                 lhead = None
                 if len(list(prev.cluster)) > 1:
                     lhead = "cluster_"+target
-                dot.edge(str(cluster[-1].node), target, lhead = lhead, ltail = ltail,
-                         arrowtail="dot", dir="both", constraint="true")
+                dot.edge(str(cluster[-1].node), target, lhead = lhead, ltail = ltail)
             for fi in cluster[-1].external_previous:
                 fid = self.render_file_node(dot, fi.node.path)
-                dot.edge(str(cluster[-1].node), fid, ltail = ltail,
-                         arrowtail="dot", dir="both", constraint="true")
+                dot.edge(str(cluster[-1].node), fid, ltail = ltail)
 
         dot.attr('graph', label=f"Global context for {fname}")
         dot.attr('graph', fontsize="40pt")
@@ -153,15 +198,14 @@ class GraphVisualisationBrowser:
                         else:
                             label = ""
                         dot.edge(id, cid, label=label,
-                                 arrowtail=edge_arrow_map[edge], dir="both")
+                                 arrowtail=self.edge_arrow_map[edge], dir="both")
             return id
         recurse(start, depth)
         return seen
 
     def definition(self, fname: Path, definition: int, showLabel=False, depth=1, maxNodes=100):
-
         dot = graphviz.Digraph(format='svg')
-        dot.attr('graph', ordering="out")
+        self.dot_apply_style(dot)
 
         start = self.data[fname].node_by_id(definition)
 
@@ -171,17 +215,10 @@ class GraphVisualisationBrowser:
         label = "[not a definition]"
         if d := start.definition:
             label = d.name
-            match d.kind:
-                case Definition.TacticalConstant(proof):
-                    dot.node('proof_reference', "Proof",
-                             URL = self.url_maker.proof(fname, definition),
-                             fontsize="40pt")
-                case Definition.TacticalSectionConstant(proof):
-                    dot.node('proof_reference', "Proof",
-                             URL = self.url_maker.proof(fname, definition),
-                             fontsize="40pt")
-                case _:
-                    pass
+            if d.proof:
+                dot.node('proof_reference', "Proof",
+                         URL = self.url_maker.proof(fname, definition),
+                         fontsize="40pt")
 
         dot.attr('graph', label=f"Definition {label} from {fname}")
         dot.attr('graph', fontsize="40pt")
@@ -199,6 +236,8 @@ class GraphVisualisationBrowser:
             assert False
 
         dot = graphviz.Digraph(format='svg')
+        self.dot_apply_style(dot)
+        dot.attr('node', fontsize="10pt", style="filled", fillcolor="white", penwidth="1")
         dot.attr('graph', ordering="out")
         surrogates = set()
         outcome_to_id = {}
@@ -211,7 +250,7 @@ class GraphVisualisationBrowser:
                 outcome_to_id[(i, j)] = id
         for i, step in enumerate(proof):
             with dot.subgraph(name='cluster_' + str(i)) as dot2:
-                dot2.attr('graph', labelloc="b")
+                dot2.attr('graph', labelloc="b", style="rounded")
                 if tactic := step.tactic:
                     tactic_text = tactic.text
                 else:
@@ -219,9 +258,7 @@ class GraphVisualisationBrowser:
                 dot2.attr(label=tactic_text)
                 for j, outcome in enumerate(step.outcomes):
                     before_id = outcome_to_id[(i, j)]
-                    dot2.node(before_id, label='⬤', shape='circle',
-                              fontsize="10pt", fixedsize="true", width="0.3pt",
-                              style="filled", fillcolor="white",
+                    dot2.node(before_id, label='⬤', shape='circle', fixedsize="true", width="0.3pt",
                               URL = self.url_maker.outcome(fname, definition, i, j))
                     for after in outcome.after:
                         if outcome.before.id == after.id:
@@ -233,7 +270,7 @@ class GraphVisualisationBrowser:
                         dot.edge(before_id, after_id, style=style)
                     if not outcome.after:
                         qedid = str('qed-'+str(i)+'-'+str(j))
-                        dot2.node(qedid, label='', shape='point')
+                        dot2.node(qedid, label='', shape='point', fillcolor='black')
                         dot.edge(before_id, qedid)
 
         dot.attr('graph', label=f"Proof of {d.name} from {fname}")
@@ -253,7 +290,7 @@ class GraphVisualisationBrowser:
             assert False
 
         dot = graphviz.Digraph(format='svg')
-        dot.attr('graph', ordering="out")
+        self.dot_apply_style(dot)
 
         outcome = proof[stepi].outcomes[outcomei]
         seen = set()
@@ -293,7 +330,7 @@ class GraphVisualisationBrowser:
         expand_parts = expand_path.parts
 
         dot = graphviz.Digraph(engine='dot', format='svg')
-        dot.attr('graph', ordering="out")
+        self.dot_apply_style(dot)
 
         hierarchy = {'files': [], 'subdirs': {}}
         for f in self.data:
@@ -319,22 +356,22 @@ class GraphVisualisationBrowser:
                 (rel, repr) = transitive_reduction(rel)
                 def get_url(r: Path):
                     if r in self.data:
-                        return self.url_maker.global_context(r)
+                        return r.with_suffix('').parts[-1], self.url_maker.global_context(r)
                     else:
-                        return self.url_maker.folder(r)
+                        return r.parts[-1], self.url_maker.folder(r)
                 for n in rel:
                     if len(repr[n]) == 1:
-                        label = n.parts[-1]
-                        url = get_url(n)
+                        label, url = get_url(n)
                         shape = 'box'
                     else:
-                        label = '<<table border="0" cellborder="1" cellpadding="7">'
+                        label = '<<table border="0" cellborder="0" cellpadding="7">'
                         for r in repr[n]:
-                            label += f'<tr><td href="{get_url(r)}">{r.parts[-1]}</td></tr>'
+                            slabel, surl = get_url(r)
+                            label += f'<tr><td href="{surl}">{slabel}</td></tr>'
                         label += "</table>>"
                         url = None
                         shape = 'plaintext'
-                    dot.node(str(n), label, URL = url, shape = shape, margin="0,0")
+                    dot.node(str(n), label, URL = url, shape = shape)
                 for n, deps in rel.items():
                     for d in deps:
                         dot.edge(str(n), str(d))
