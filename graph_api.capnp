@@ -1,4 +1,4 @@
-@0xbab8ca9624df2b9c; # v12
+@0x8a58f5e8c91ebd1d; # v13
 
 ######################################################################################################
 #
@@ -96,7 +96,7 @@ struct Graph {
 
       # Constr nodes
       rel @9 :Void;
-      evar @10 :Void;
+      evar @10 :ProofStateId;
       evarSubst @11 :Void;
       cast @12 :Void;
       prod @13 :Void;
@@ -398,6 +398,9 @@ struct Dataset {
   # Note that some of these nodes may not be part of the 'super-global' context that is reachable using the
   # `representative` field as an entry point. The reason is that the global context is a forest (list of tree's)
   # and the 'super-global' context is only the main spine of this forest.
+
+  moduleName @4 :Text;
+  # The name of the module defined by this file.
 }
 
 

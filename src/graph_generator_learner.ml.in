@@ -481,6 +481,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       ~node_dep_index ~node_local_index
       ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges capnp_graph;
     let _ = K.Builder.Dataset.dependencies_set_list g @@ resolve_dependencies @@ depslist () in
+    K.Builder.Dataset.module_name_set g @@ DirPath.to_string dirpath;
     Capnp_unix.IO.write_message_to_file ~compression:`None (K.Builder.Dataset.to_message g) (data_file ())
 
   let () = Declaremods.append_end_library_hook @@ fun () ->

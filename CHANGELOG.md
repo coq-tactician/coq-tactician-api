@@ -1,4 +1,13 @@
-# V12
+# v13
+Changes to the Capn'proto format:
+- Upgraded magic id to v13
+- Added a backwards-compatible field `Dataset.moduleName`
+- Added the `ProofStateId` to `evar` nodes, which can be cross-referenced with `ProofState.id`.
+
+Changes to the graph:
+- Fixed a bug in graph-sharing, where local context elements where shared based on a reversed index.
+
+# v12
 
 Changes to the Capn'proto format:
 - Upgraded magic id to v12

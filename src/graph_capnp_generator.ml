@@ -116,7 +116,7 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
   | SortSet -> sort_set_set cnt
   | SortType -> sort_type_set cnt
   | Rel -> rel_set cnt
-  | Evar _ -> evar_set cnt
+  | Evar i -> evar_set_int_exn cnt i
   | EvarSubst -> evar_subst_set cnt
   | Cast -> cast_set cnt
   | Prod _ -> prod_set cnt

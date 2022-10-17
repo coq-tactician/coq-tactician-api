@@ -376,7 +376,7 @@ end = struct
           (try
              ignore (Environ.lookup_named id.binder_name env); (index, m)
            with Not_found ->
-             index + 1,
+             index - 1,
              let* typ = gen_constr typ in
              let* var = mk_node (ContextAssum (index, id.binder_name)) [ContextDefType, typ] in
              let+ (ctx, v) = with_named id.binder_name var m in
@@ -385,13 +385,13 @@ end = struct
           (try
              ignore (Environ.lookup_named id.binder_name env); (index, m)
            with Not_found ->
-             index + 1,
+             index - 1,
              let* typ = gen_constr typ in
              let* term = gen_constr term in
              let* var = mk_node (ContextDef (index, id.binder_name)) [ContextDefType, typ; ContextDefTerm, term] in
              let+ (ctx, v) = with_named id.binder_name var m in
              ((ContextElem, var)::ctx), v))
-      c ~init:(0, (let+ m = m in [], m))
+      c ~init:(OList.length c, (let+ m = m in [], m))
 
   (* This is used for definition leafs when we don't want to 'follow' definitions *)
   let mk_fake_definition def_type gref =
