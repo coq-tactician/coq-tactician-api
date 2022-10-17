@@ -304,34 +304,33 @@ class ProofState:
                     root.nodeIndex, self.__lreader)
 
     @property
-    def context(self) -> Sequence[Node]:
-        """The local context of the proof state. These nodes label's are either `contextAssum` or `contextDef`.
+    def context(self) -> Sequence[tuple[str, Node]]:
+        """The local context of the proof state, given as a tuple of their original name as they appeared in the
+        proof and the corresponding node.
+
+        The nodes always have either label `contextAssum` or `contextDef`.
         Note that these nodes are also reachable from the root of the proof state.
+
+        The names of the context elements should be used for debugging and viewing purposes only, because
+        hypothesis-generating tactics have been modified to use auto-generated names. Hence, tactics should
+        not be concerned about the names of the context.
         """
         graph = self.__graph
         lreader = self.__lreader
         context = self.__reader.context
+        context_names = self.__reader.contextNames
         count = len(context)
-        class Seq(Sequence[Node]):
-            def __getitem__(self, index: int) -> Node:
+        class Seq(Sequence[tuple[str, Node]]):
+            def __getitem__(self, index: int) -> tuple[str, Node]:
                 if index >= count:
                     raise IndexError()
                 n = context[index]
-                return Node(lreader.local_to_global(graph, n.depIndex),
-                            n.nodeIndex, lreader)
+                return (context_names[index],
+                        Node(lreader.local_to_global(graph, n.depIndex),
+                             n.nodeIndex, lreader))
             def __len__(self) -> int:
                 return count
         return Seq()
-
-    @property
-    def context_names(self) -> Sequence[str]:
-        """
-        The names of the local context nodes of the proof state, as they originally appeared in the proof.
-        These names should be used for debugging and viewing purposes only, because hypothesis-generating tactics have
-        been modified to use auto-generated names. Hence, tactics should not be concerned about the names of
-        the context.
-        """
-        return self.__reader.contextNames
 
     @property
     def text(self) -> str:

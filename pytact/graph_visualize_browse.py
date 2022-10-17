@@ -1,6 +1,8 @@
+from dataclasses import dataclass, field
 import os
 import graphviz
 from collections import defaultdict
+from collections.abc import Sequence
 from abc import ABC, abstractmethod
 from pathlib import Path
 from pytact.data_reader import Dataset, Definition, Node
@@ -31,6 +33,50 @@ class UrlMaker(ABC):
     def root_folder(self) -> str:
         pass
 
+@dataclass
+class Settings:
+    ignore_edges: list[int] = field(default_factory=
+                                    lambda: [graph_api_capnp.EdgeClassification.schema.enumerants['constOpaqueDef']])
+    unshare_nodes: list[int] = field(default_factory=
+                                     [graph_api_capnp.Graph.Node.Label.definition.value])
+    remove_trivial_evar_substs: bool = True
+    show_edge_labels: bool = False
+    order_edges: bool = False
+
+def node_label_map(node: Node) -> tuple[str, str]:
+    enum = graph_api_capnp.Graph.Node.Label
+    label = node.label
+    if d := node.definition:
+        return 'box', d.name
+    match label.which:
+        case enum.sortProp:
+            return 'ellipse', 'Prop'
+        case enum.sortSProp:
+            return 'ellipse', 'SProp'
+        case enum.sortSet:
+            return 'ellipse', 'Set'
+        case enum.sortType:
+            return 'ellipse', 'Type'
+        case enum.rel:
+            return 'circle', '↑'
+        case enum.prod:
+            return 'circle', '∀'
+        case 'lambda':
+            return 'circle', 'λ'
+        case enum.letIn:
+            return 'ellipse', 'let'
+        case enum.app:
+            return 'circle', '@'
+        case enum.caseBranch:
+            return 'ellipse', 'branch'
+        case _:
+            label = str(label.which)
+            shape = 'ellipse'
+            if label.islower():
+                return shape, label
+            else:
+                return shape, label[0].capitalize()+label[1:]
+
 class GraphVisualisationBrowser:
     def __init__(self, data: dict[Path, Dataset], url_maker: UrlMaker):
         self.data = data
@@ -46,53 +92,16 @@ class GraphVisualisationBrowser:
                 edge_arrow_map[sort] = arrow_heads[i]
         self.edge_arrow_map = edge_arrow_map
 
-    def node_label_map(self, label) -> tuple[str, str]:
-        enum = graph_api_capnp.Graph.Node.Label
-        match label.which:
-            case enum.sortProp:
-                return 'ellipse', 'Prop'
-            case enum.sortSProp:
-                return 'ellipse', 'SProp'
-            case enum.sortSet:
-                return 'ellipse', 'Set'
-            case enum.sortType:
-                return 'ellipse', 'Type'
-            case enum.rel:
-                return 'circle', '↑'
-            case enum.prod:
-                return 'circle', '∀'
-            case 'lambda':
-                return 'circle', 'λ'
-            case enum.letIn:
-                return 'ellipse', 'let'
-            case enum.app:
-                return 'circle', '@'
-            case enum.caseBranch:
-                return 'ellipse', 'branch'
-            case _:
-                label = str(label.which)
-                shape = 'ellipse'
-                if label.islower():
-                    return shape, label
-                else:
-                    return shape, label[0].capitalize()+label[1:]
-
     def dot_apply_style(self, dot):
         dot.attr('node', style="rounded, filled", penwidth="0", fontname="Helvetica")
         dot.attr('edge', arrowsize='0.7')
 
-    def render_node(self, dot, node: Node, label_prefix=None, prefix=None):
-        id = repr(node)
-        if prefix:
-            id = prefix + '-' + id
-        shape, label = self.node_label_map(node.label)
+    def render_node(self, dot, node: Node, shape: str, label: str, id: str | None = None):
+        if not id:
+            id = str(node)
         url = None
         if d := node.definition:
-            label = d.name
             url = self.url_maker.definition(node.path, node.nodeid)
-            shape = 'box'
-        if label_prefix:
-            label = label_prefix + label
         dot.node(id, label, URL = url, shape = shape)
         return id
 
@@ -107,32 +116,33 @@ class GraphVisualisationBrowser:
         self.dot_apply_style(dot)
         dot.attr('graph', compound="true")
 
+        dataset = self.data[fname]
+        representative = dataset.representative
+
         def render_def(dot, d):
-            label_prefix = None
+            label = d.name
             if representative and representative.node == d.node:
-                label_prefix = "Representative: "
+                label = "Representative: " + label
             match d.status:
                 case Definition.Original():
-                    id = self.render_node(dot, d.node, label_prefix=label_prefix)
+                    id = self.render_node(dot, d.node, 'box', label)
                 case Definition.Discharged(target):
-                    id = self.render_node(dot, d.node, label_prefix=label_prefix)
+                    id = self.render_node(dot, d.node, 'box', label)
                     dot.edge(id, repr(target.node),
                                 arrowtail="inv", dir="both", constraint="false", style="dashed")
                 case Definition.Substituted(target):
                     if d.node.path == target.node.path:
-                        id = self.render_node(dot, d.node, label_prefix=label_prefix)
+                        id = self.render_node(dot, d.node, 'box', label)
                         dot.edge(id, str(target.node),
                                     arrowtail="odot", dir="both", constraint="false", style="dashed")
                     else:
                         with dot.subgraph() as dot2:
                             dot2.attr(rank='same')
-                            id = self.render_node(dot2, d.node, label_prefix=label_prefix)
-                            id2 = self.render_node(dot2, target.node)
+                            id = self.render_node(dot2, d.node, 'box', label)
+                            id2 = self.render_node(dot2, target.node, 'box', target.name)
                             dot2.edge(id, id2,
                                       arrowtail="odot", dir="both", constraint="false", style="dashed")
 
-        dataset = self.data[fname]
-        representative = dataset.representative
         for cluster in dataset.clustered_definitions:
 
             start = str(cluster[0].node)
@@ -166,16 +176,29 @@ class GraphVisualisationBrowser:
         dot.attr('graph', URL=self.url_maker.folder(Path(*fname.parts[:-1])))
         return dot.pipe()
 
-    def visualize_term(self, dot, start: Node, depth,
-                       prefix = None, maxNodes = 100, showLabel=False, seen=set()):
+    def visualize_term(self, dot, start: Node, depth, depth_ignore: set[Node] = set(),
+                       maxNodes=100, showLabel=False, seen=set(),
+                       node_label_map=node_label_map,
+                       prefix='', before_prefix='', proof_state_prefix: dict[int, str] = {}
+                       ) -> str:
         nodes_left = maxNodes
-        def recurse(node: Node, depth):
+        def recurse(node: Node, depth, context_prefix):
             nonlocal seen
             nonlocal nodes_left
 
-            id = str(node)
-            if prefix:
-                id = prefix + '-' + id
+            enum = graph_api_capnp.Graph.Node.Label
+            match node.label.which:
+                case enum.proofState:
+                    node_prefix = context_prefix
+                case enum.contextAssum:
+                    node_prefix = context_prefix
+                case enum.contextDef:
+                    node_prefix = context_prefix
+                case enum.evarSubst:
+                    node_prefix = prefix + context_prefix
+                case _:
+                    node_prefix = prefix
+            id = node_prefix + str(node)
             if id in seen:
                 return id
             else:
@@ -186,13 +209,19 @@ class GraphVisualisationBrowser:
                 dot.node(id, 'truncated')
                 return id
 
-            id = self.render_node(dot, node, prefix=prefix)
-            if node.definition:
+            shape, label = node_label_map(node)
+            self.render_node(dot, node, shape, label, id=id)
+            if node.definition and not node in depth_ignore:
                 depth -= 1
             if depth >= 0:
+                if node.label.which == graph_api_capnp.Graph.Node.Label.evar:
+                    context_prefix = proof_state_prefix.get(node.label.evar, context_prefix)
+
                 for edge, child in node.children:
                     if edge != 'constOpaqueDef':
-                        cid = recurse(child, depth)
+                        cid = recurse(child, depth,
+                                      before_prefix if edge == graph_api_capnp.EdgeClassification.evarSubstTerm
+                                      else context_prefix)
                         if showLabel:
                             label = str(edge)
                         else:
@@ -200,17 +229,20 @@ class GraphVisualisationBrowser:
                         dot.edge(id, cid, label=label,
                                  arrowtail=self.edge_arrow_map[edge], dir="both")
             return id
-        recurse(start, depth)
-        return seen
+        id = recurse(start, depth, before_prefix)
+        return id
 
-    def definition(self, fname: Path, definition: int, showLabel=False, depth=1, maxNodes=100):
+    def definition(self, fname: Path, definition: int, showLabel=False, maxNodes=100):
         dot = graphviz.Digraph(format='svg')
         self.dot_apply_style(dot)
 
         start = self.data[fname].node_by_id(definition)
+        depth_ignore = set()
+        if d := start.definition:
+            depth_ignore = {d.node for d in start.definition.cluster}
 
-        self.visualize_term(dot, start, depth=depth,
-                            prefix=None, maxNodes=maxNodes, showLabel=showLabel, seen=set())
+        self.visualize_term(dot, start, depth=0, depth_ignore=depth_ignore,
+                            maxNodes=maxNodes, showLabel=showLabel, seen=set())
 
         label = "[not a definition]"
         if d := start.definition:
@@ -295,26 +327,45 @@ class GraphVisualisationBrowser:
         outcome = proof[stepi].outcomes[outcomei]
         seen = set()
 
+        def node_label_map_with_ctx_names(context: Sequence[tuple[str, Node]]):
+            mapping = {n: s for s, n in context}
+            def nlm(node: Node):
+                enum = graph_api_capnp.Graph.Node.Label
+                match node.label.which:
+                    case enum.contextAssum:
+                        return 'ellipse', f"ContextAssum {mapping[node]}"
+                    case enum.contextDef:
+                        return 'ellipse', f"ContextDef {mapping[node]}"
+                    case _:
+                        return node_label_map(node)
+            return nlm
+
         with dot.subgraph(name='cluster_before') as dot2:
             dot2.attr('graph', label="Before state")
-            self.visualize_term(dot2, outcome.before.root, depth=depth, prefix='before',
-                                maxNodes=maxNodes, showLabel=showLabel, seen=seen)
+            ps = outcome.before
+            prefix = 'before'
+            self.visualize_term(dot2, ps.root, depth=depth, prefix=prefix, before_prefix=prefix,
+                                maxNodes=maxNodes, showLabel=showLabel, seen=seen,
+                                node_label_map=node_label_map_with_ctx_names(ps.context))
 
         for ai, after in enumerate(outcome.after):
             with dot.subgraph(name='cluster_after' + str(ai)) as dot2:
                 dot2.attr('graph', label="After state " + str(ai))
-                self.visualize_term(dot2, after.root, depth=depth, prefix='after'+str(ai),
-                                    maxNodes=maxNodes, showLabel=showLabel, seen=seen)
+                prefix = f'after{ai}'
+                self.visualize_term(dot2, after.root, depth=depth, prefix=prefix, before_prefix=prefix,
+                                    maxNodes=maxNodes, showLabel=showLabel, seen=seen,
+                                    node_label_map=node_label_map_with_ctx_names(after.context))
 
         with dot.subgraph(name='cluster_term') as dot2:
             dot2.attr('graph', label="Proof term")
             prefix = 'term'
-            self.visualize_term(dot2, outcome.term, depth=depth,
-                                prefix=prefix, maxNodes=maxNodes, showLabel=False, seen=seen)
+            proof_state_prefix = {after.id: f'after{ai}' for ai, after in enumerate(outcome.after)}
+            id = self.visualize_term(dot2, outcome.term, depth=depth, prefix=prefix, before_prefix='before',
+                                proof_state_prefix=proof_state_prefix,
+                                maxNodes=maxNodes, showLabel=False, seen=seen)
             # Sometimes the subgraph is completely empty because the term is contained in another subgraph.
             # Therefore, we artificially add a extra root node
-            dot2.node('artificial-root', 'artificial-root')
-            id = prefix + "-" + str(outcome.term)
+            dot2.node('artificial-root', 'TermRoot')
             dot2.edge('artificial-root', id)
 
 
