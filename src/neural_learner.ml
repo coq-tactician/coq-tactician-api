@@ -287,7 +287,7 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
 
   let node_local_index (_, (def, i)) =
     if def then i else def_count + i in
-  let node_hash n = snd n in
+  let node_hash n = snd @@ G.transform_node_type n in
   let node_label n = fst @@ G.transform_node_type n in
   Graph_capnp_generator.write_graph
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
@@ -447,7 +447,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let node_dep_index (p, _) = match p with
       | Local -> 0
       | Global -> 1 in
-    let node_hash n = snd n in
+    let node_hash n = snd @@ G.transform_node_type n in
     let node_label n = fst @@ G.transform_node_type n in
     Graph_capnp_generator.write_graph
       ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)

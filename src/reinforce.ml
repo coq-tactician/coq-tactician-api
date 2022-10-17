@@ -53,7 +53,7 @@ let write_execution_result env sigma res hyps concl obj =
   (* Write graph to capnp structure *)
   let new_state = ExecutionResult.new_state_init res in
   let capnp_graph = ExecutionResult.NewState.graph_init new_state in
-  let node_hash n = snd n in
+  let node_hash n = snd @@ G.transform_node_type n in
   let node_label n = fst @@ G.transform_node_type n in
   Graph_capnp_generator.write_graph
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
