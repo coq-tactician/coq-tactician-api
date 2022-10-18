@@ -164,7 +164,18 @@ def process1(args, fname: Path):
                         if len(state.context) != len(state.contextNames):
                             raise Exception(f"{fname}: Length of context is different from length of"
                                             f"contextNames in proof state {state}")
+                        root_graphid = data.local_to_global(graphid, state.root.depIndex)
+                        root_graph = data[root_graphid].graph
+                        root_node = root_graph.nodes[state.root.nodeIndex]
+                        root_children = [(data.local_to_global(root_graphid,
+                                                               root_graph.edges[i].target.depIndex),
+                                         root_graph.edges[i].target.nodeIndex) for i in
+                                         range(root_node.childrenIndex,
+                                               root_node.childrenIndex+root_node.childrenCount)]
                         for c in state.context:
+                            if (data.local_to_global(graphid, c.depIndex), c.nodeIndex) not in root_children:
+                                raise Exception(
+                                    f"{fname}: hyp {c} of state {state} is not reachable from the root")
                             c_label = (data[data.local_to_global(graphid, c.depIndex)].graph
                                       .nodes[c.nodeIndex].label.which)
                             if c_label not in [graph_api_capnp.Graph.Node.Label.contextDef,
