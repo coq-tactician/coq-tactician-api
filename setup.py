@@ -36,7 +36,8 @@ setuptools.setup(
     install_requires=[
         'pycapnp',
         'graphviz',
-        'sanic==22.6.2'],
+        'sanic[ext]==22.6.2',
+        'Jinja2'],
     entry_points={'console_scripts': [
                                       'pytact-server=pytact.fake_python_server:main',
                                       'pytact-check=pytact.graph_sanity_check:main',
