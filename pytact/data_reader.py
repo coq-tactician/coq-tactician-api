@@ -861,6 +861,10 @@ class Dataset:
                 for cd in cluster:
                     seen.add(cd.node.nodeid)
 
+    @property
+    def module_name(self) -> str:
+        return self.__reader.moduleName
+
     def node_by_id(self, nodeid: NodeId) -> Node:
         """Lookup a node inside of this file by it's local node-id. This is a low-level function."""
         return Node(self.__graph, nodeid, self.__lreader)

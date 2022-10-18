@@ -175,7 +175,8 @@ def process1(args, fname: Path):
                         for c in state.context:
                             if (data.local_to_global(graphid, c.depIndex), c.nodeIndex) not in root_children:
                                 raise Exception(
-                                    f"{fname}: hyp {c} of state {state} is not reachable from the root")
+                                    f"{fname}: hyp {c} of state {state} in def {definition.name} is not "
+                                    f"reachable from the root")
                             c_label = (data[data.local_to_global(graphid, c.depIndex)].graph
                                       .nodes[c.nodeIndex].label.which)
                             if c_label not in [graph_api_capnp.Graph.Node.Label.contextDef,

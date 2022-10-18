@@ -42,13 +42,15 @@
          .svg {
              flex-grow: 1;
              overflow: scroll;
+             padding: 20px;
          }
         </style>
     </head>
 
     <body>
         <div class="ui menu vertical settings active">
-            <form id="settings-form" class="ui form item">
+            <form id="settings-form" class="ui form item" autocomplete="off">
+                <input type="hidden" name="no_defaults" value="true">
                 <div class="field">
                     <div class="ui toggle checkbox">
                         <input type="checkbox" id="show_trivial_evar_substs" name="show_trivial_evar_substs"
@@ -71,17 +73,34 @@
                     </div>
                 </div>
                 <div class="field">
-                    <label>Pets</label>
-                    <select class="ui selection dropdown search clearable" multiple>
-                        <option value="">Pet</option>
-                        <option value="0">Cat</option>
-                        <option value="1">Dog</option>
-                        <option value="2">Bird</option>
-                        <option value="3">Rabbit</option>
-                        <option value="4">Squirrel</option>
-                        <option value="5">Horse</option>
-                        <option value="6">Turtle</option>
-                        <option value="7">Parrot</option>
+                    <div class="ui toggle checkbox">
+                        <input type="checkbox" id="concentrate_edges" name="concentrate_edges"
+                               {% if settings.concentrate_edges %}checked{% endif %}>
+                        <label for="concentrate_edges">Concentrate edges</label>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Ignore edges</label>
+                    <select class="ui selection dropdown search clearable" name="ignore_edges" multiple>
+                        {% for (value, name) in edge_labels %}
+                        <option value="{{ value }}"
+                                {% if value in settings.ignore_edges %}selected{% endif %}>{{ name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
+                    <label>
+                        Unshare nodes
+                    </label>
+                    <button class="tiny ui button compact fluid" onclick="$('#unshare_nodes option').prop('selected', true)">
+                        Select All
+                    </button>
+                    <select class="ui selection dropdown search clearable"
+                            id="unshare_nodes" name="unshare_nodes" multiple>
+                        {% for (value, name) in node_labels %}
+                        <option value="{{ value }}"
+                                {% if value in settings.unshare_nodes %}selected{% endif %}>{{ name }}</option>
+                        {% endfor %}
                     </select>
                 </div>
                 <div class="field" id="settings-submit">
@@ -93,14 +112,17 @@
             <div class="ui top attached menu">
                 <a class="item" onclick="$('.settings').toggleClass('active')">
                     <i class="sidebar icon"></i>
-                    Menu
+                    Settings
                 </a>
                 <div class="ui item breadcrumb">
-                    <a class="section">Home</a>
+                    {% for (name, url) in location %}
                     <i class="right chevron icon divider"></i>
-                    <a class="section">Registration</a>
-                    <i class="right chevron icon divider"></i>
-                    <div class="active section">Personal Information</div>
+                    {% if loop.index0 == active_location %}
+                    <div class="active section">{{ name }}</div>
+                    {% else %}
+                    <a class="section" href="{{ url }}">{{ name }}</a>
+                    {% endif %}
+                    {% endfor %}
                 </div>
             </div>
             <br>
@@ -112,7 +134,8 @@
          $('.ui.dropdown').dropdown()
          $('.ui.sidebar').sidebar()
          $("#settings-form").find(':input').each(() =>
-             $(this).change(() => $('#settings-form').submit()))
+             $(this).change(() =>
+                 setTimeout(() => $('#settings-form').submit(), 5)))
          $('#settings-submit').hide()
         </script>
     </body>

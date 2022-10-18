@@ -36,13 +36,20 @@ class UrlMaker(ABC):
 
 @dataclass
 class Settings:
-    ignore_edges: list[int] = field(default_factory=
-                                    lambda: [graph_api_capnp.EdgeClassification.schema.enumerants['constOpaqueDef']])
-    unshare_nodes: list[int] = field(default_factory=
-                                     lambda: [graph_api_capnp.Graph.Node.Label.definition.value])
+    no_defaults: bool = False # Should we use default settings?
+    ignore_edges: list[int] = field(default_factory=lambda: [])
+    unshare_nodes: list[int] = field(default_factory=lambda: [])
     show_trivial_evar_substs: bool = False
     show_edge_labels: bool = False
     order_edges: bool = False
+    concentrate_edges: bool = False
+
+    def __post_init__(self):
+        if not self.no_defaults:
+            self.ignore_edges = [graph_api_capnp.EdgeClassification.schema.enumerants['constOpaqueDef']]
+            label = graph_api_capnp.Graph.Node.Label
+            self.unshare_nodes = [label.definition.value, label.sortSProp.value,
+                                  label.sortProp.value, label.sortSet.value, label.sortType.value]
 
 @dataclass
 class GraphVisualizationData:
@@ -53,40 +60,57 @@ class GraphVisualizationData:
         self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
                                               for d in self.data.values()})
 
+@dataclass
+class GraphVisualizationOutput:
+    svg: bytes
+    location: list[tuple[str, str]] # tuple[Name, URL]
+    active_location: int
+
 def camel2pascal_case(s: str) -> str:
     if s.islower():
         return s
     else:
         return s[0].capitalize()+s[1:]
 
-def node_label_map(node: Node) -> tuple[str, str]:
+def node_label_map(node: Node) -> tuple[str, str, str]:
     enum = graph_api_capnp.Graph.Node.Label
     label = node.label
     if d := node.definition:
-        return 'box', d.name
+        name = d.name
+        return 'box', name.split('.')[-1], f"{camel2pascal_case(str(node.label.definition.which))} {d.name}"
     match label.which:
         case enum.sortProp:
-            return 'ellipse', 'Prop'
+            return 'ellipse', 'Prop', 'SortProp'
         case enum.sortSProp:
-            return 'ellipse', 'SProp'
+            return 'ellipse', 'SProp', 'SortSProp'
         case enum.sortSet:
-            return 'ellipse', 'Set'
+            return 'ellipse', 'Set', 'SortSet'
         case enum.sortType:
-            return 'ellipse', 'Type'
+            return 'ellipse', 'Type', 'SortType'
         case enum.rel:
-            return 'circle', '↑'
+            return 'circle', '↑', 'rel'
         case enum.prod:
-            return 'circle', '∀'
+            return 'circle', '∀', 'prod'
         case 'lambda':
-            return 'circle', 'λ'
+            return 'circle', 'λ', 'lambda'
         case enum.letIn:
-            return 'ellipse', 'let'
+            return 'ellipse', 'let', 'LetIn'
         case enum.app:
-            return 'circle', '@'
+            return 'circle', '@', 'app'
         case enum.caseBranch:
-            return 'ellipse', 'branch'
+            return 'ellipse', 'branch', 'CaseBranch'
         case _:
-            return 'ellipse', camel2pascal_case(str(label.which))
+            name = camel2pascal_case(str(label.which))
+            return 'ellipse', name, name
+
+def make_label(context, name):
+    name_split = name.split('.')
+    common = os.path.commonprefix([name_split, context.split('.')])
+    return '.'.join(name_split[len(common):])
+
+def make_tooltip(d):
+    return f"{camel2pascal_case(str(d.node.label.definition.which))} {d.name}"
+
 
 class GraphVisualizator:
     def __init__(self, data: GraphVisualizationData, url_maker: UrlMaker, settings: Settings = Settings()):
@@ -94,6 +118,7 @@ class GraphVisualizator:
         self.trans_deps = data.trans_deps
         self.url_maker = url_maker
         self.settings = settings
+        self.node_counter = 0
 
 
         arrow_heads = [ "dot", "inv", "odot", "invdot", "invodot" ]
@@ -103,19 +128,38 @@ class GraphVisualizator:
                 edge_arrow_map[sort] = arrow_heads[i]
         self.edge_arrow_map = edge_arrow_map
 
+    def url_for_path(self, r: Path):
+        if r in self.data:
+            return r.with_suffix('').parts[-1], self.url_maker.global_context(r)
+        elif len(r.parts) > 0:
+            return r.parts[-1], self.url_maker.folder(r)
+        else:
+            return 'dataset', self.url_maker.root_folder()
+
+    def path2location(self, path: Path):
+        return [self.url_for_path(parent) for parent in list(reversed(path.parents)) + [path]]
+
     def dot_apply_style(self, dot):
-        dot.attr('node', style="rounded, filled", penwidth="0", fontname="Helvetica")
-        dot.attr('edge', arrowsize='0.7')
+        dot.attr('node', fontsize='11', fontname="Helvetica", margin='0', height='0.3',
+                 style="rounded, filled", penwidth="0")
+        dot.attr('edge', fontsize='11', fontname="Helvetica", arrowsize='0.5', penwidth="0.6")
+        dot.attr('graph', fontsize='11', fontname="Helvetica", penwidth="0.6", ranksep='0.3')
         if self.settings.order_edges:
             dot.attr('graph', ordering='out')
+        if self.settings.concentrate_edges:
+            dot.attr('graph', concentrate='true')
 
-    def render_node(self, dot, node: Node, shape: str, label: str, id: str | None = None):
+
+    def render_node(self, dot, node: Node, shape: str, label: str, id: str | None = None,
+                    tooltip: str | None = None):
         if not id:
             id = str(node)
+        if not tooltip:
+            tooltip = label
         url = None
         if d := node.definition:
             url = self.url_maker.definition(node.path, node.nodeid)
-        dot.node(id, label, URL = url, shape = shape)
+        dot.node(id, label, URL = url, shape = shape, tooltip = tooltip)
         return id
 
     def render_file_node(self, dot, f: Path):
@@ -131,28 +175,32 @@ class GraphVisualizator:
 
         dataset = self.data[fname]
         representative = dataset.representative
+        module_name = dataset.module_name
 
-        def render_def(dot, d):
-            label = d.name
+        def render_def(dot, d: Definition):
+            label = make_label(module_name, d.name)
             if representative and representative.node == d.node:
                 label = "Representative: " + label
+            tooltip = make_tooltip(d)
             match d.status:
                 case Definition.Original():
-                    id = self.render_node(dot, d.node, 'box', label)
+                    id = self.render_node(dot, d.node, 'box', label, tooltip=tooltip)
                 case Definition.Discharged(target):
-                    id = self.render_node(dot, d.node, 'box', label)
+                    id = self.render_node(dot, d.node, 'box', label, tooltip=tooltip)
                     dot.edge(id, repr(target.node),
                                 arrowtail="inv", dir="both", constraint="false", style="dashed")
                 case Definition.Substituted(target):
                     if d.node.path == target.node.path:
-                        id = self.render_node(dot, d.node, 'box', label)
+                        id = self.render_node(dot, d.node, 'box', label, tooltip=tooltip)
                         dot.edge(id, str(target.node),
                                     arrowtail="odot", dir="both", constraint="false", style="dashed")
                     else:
                         with dot.subgraph() as dot2:
                             dot2.attr(rank='same')
-                            id = self.render_node(dot2, d.node, 'box', label)
-                            id2 = self.render_node(dot2, target.node, 'box', target.name)
+                            id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
+                            id2 = self.render_node(dot2, target.node, 'box',
+                                                   make_label(module_name, target.name),
+                                                   tooltip=make_tooltip(target))
                             dot2.edge(id, id2,
                                       arrowtail="odot", dir="both", constraint="false", style="dashed")
 
@@ -183,17 +231,16 @@ class GraphVisualizator:
                 fid = self.render_file_node(dot, fi.node.path)
                 dot.edge(str(cluster[-1].node), fid, ltail = ltail)
 
-        dot.attr('graph', label=f"Global context for {fname}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.url_maker.folder(Path(*fname.parts[:-1])))
-        return dot.pipe()
+        location = self.path2location(fname)
+        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
 
     def visualize_term(self, dot, start: Node, depth, depth_ignore: set[Node] = set(),
-                       maxNodes=100, seen=set(),
+                       maxNodes=100, seen: dict[str, str]|None=None,
                        node_label_map=node_label_map,
                        prefix='', before_prefix='', proof_state_prefix: dict[int, str] = {}
                        ) -> str:
+        if seen == None:
+            seen = {}
         nodes_left = maxNodes
         def recurse(node: Node, depth, context_prefix):
             nonlocal seen
@@ -213,17 +260,18 @@ class GraphVisualizator:
                     node_prefix = prefix
             id = node_prefix + str(node)
             if id in seen:
-                return id
-            else:
-                seen.add(id)
+                return seen[id]
+            dot_id = f"c{self.node_counter}-{id}"
+            seen[id] = dot_id
             nodes_left -= 1
+            self.node_counter += 1
             if nodes_left < 0:
-                id = 'trunc' + str(nodes_left)
+                id = 'trunc' + str(self.node_counter)
                 dot.node(id, 'truncated')
                 return id
 
-            shape, label = node_label_map(node)
-            self.render_node(dot, node, shape, label, id=id)
+            shape, label, tooltip = node_label_map(node)
+            self.render_node(dot, node, shape, label, id=dot_id, tooltip=tooltip)
             if node.definition and not node in depth_ignore:
                 depth -= 1
             if depth >= 0:
@@ -231,20 +279,25 @@ class GraphVisualizator:
                     context_prefix = proof_state_prefix.get(node.label.evar, context_prefix)
 
                 for edge, child in node.children:
-                        if child.label.which == graph_api_capnp.Graph.Node.Label.evarSubst:
-                            substs = [s for _, s in child.children]
-                            if not self.settings.show_trivial_evar_substs and substs[0] == substs[1]:
-                                continue
-                        cid = recurse(child, depth,
-                                      before_prefix if edge == graph_api_capnp.EdgeClassification.evarSubstTerm
-                                      else context_prefix)
-                        if self.settings.show_edge_labels:
-                            label = camel2pascal_case(str(edge))
-                        else:
-                            label = ""
-                        dot.edge(id, cid, label=label,
-                                 arrowtail=self.edge_arrow_map[edge], dir="both")
-            return id
+                    if edge.raw in self.settings.ignore_edges:
+                        continue
+                    if child.label.which == graph_api_capnp.Graph.Node.Label.evarSubst:
+                        substs = [s for _, s in child.children]
+                        if not self.settings.show_trivial_evar_substs and substs[0] == substs[1]:
+                            continue
+                    cid = recurse(child, depth,
+                                    before_prefix if edge == graph_api_capnp.EdgeClassification.evarSubstTerm
+                                    else context_prefix)
+                    edge_name = camel2pascal_case(str(edge))
+                    if self.settings.show_edge_labels:
+                        label = edge_name
+                    else:
+                        label = ""
+                    dot.edge(dot_id, cid, label=label, tooltip=edge_name, labeltooltip=edge_name,
+                                arrowtail=self.edge_arrow_map[edge], dir="both")
+            if node.label.which.raw in self.settings.unshare_nodes:
+                del seen[id]
+            return dot_id
         id = recurse(start, depth, before_prefix)
         return id
 
@@ -258,21 +311,22 @@ class GraphVisualizator:
             depth_ignore = {d.node for d in start.definition.cluster}
 
         self.visualize_term(dot, start, depth=0, depth_ignore=depth_ignore,
-                            maxNodes=maxNodes, seen=set())
+                            maxNodes=maxNodes)
 
+        location = self.path2location(fname)
+        ext_location = location
         label = "[not a definition]"
+        proof = []
         if d := start.definition:
             label = d.name
             if d.proof:
-                dot.node('proof_reference', "Proof",
-                         URL = self.url_maker.proof(fname, definition),
-                         fontsize="40pt")
-
-        dot.attr('graph', label=f"Definition {label} from {fname}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.url_maker.global_context(fname))
-        return dot.pipe()
+                proof = [("Proof", self.url_maker.proof(fname, definition))]
+        ext_location = (
+            location +
+            [(make_label(self.data[fname].module_name, label),
+              self.url_maker.definition(fname, definition))] +
+            proof)
+        return GraphVisualizationOutput(dot.pipe(), ext_location, len(location))
 
     def proof(self, fname: Path, definition: int):
         node = self.data[fname].node_by_id(definition)
@@ -285,7 +339,7 @@ class GraphVisualizator:
 
         dot = graphviz.Digraph(format='svg')
         self.dot_apply_style(dot)
-        dot.attr('node', fontsize="10pt", style="filled", fillcolor="white", penwidth="1")
+        dot.attr('node', style="filled", fillcolor="white", penwidth="0.6")
         dot.attr('graph', ordering="out")
         surrogates = set()
         outcome_to_id = {}
@@ -306,7 +360,7 @@ class GraphVisualizator:
                 dot2.attr(label=tactic_text)
                 for j, outcome in enumerate(step.outcomes):
                     before_id = outcome_to_id[(i, j)]
-                    dot2.node(before_id, label='⬤', shape='circle', fixedsize="true", width="0.3pt",
+                    dot2.node(before_id, label='⬤', shape='circle', fontsize="7", height="0.25pt",
                               URL = self.url_maker.outcome(fname, definition, i, j))
                     for after in outcome.after:
                         if outcome.before.id == after.id:
@@ -318,14 +372,14 @@ class GraphVisualizator:
                         dot.edge(before_id, after_id, style=style)
                     if not outcome.after:
                         qedid = str('qed-'+str(i)+'-'+str(j))
-                        dot2.node(qedid, label='', shape='point', fillcolor='black')
+                        dot2.node(qedid, label='', shape='point', height='0.05', fillcolor='black')
                         dot.edge(before_id, qedid)
 
-        dot.attr('graph', label=f"Proof of {d.name} from {fname}")
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.url_maker.definition(fname, definition))
-        return dot.pipe()
+        location = (self.path2location(fname) +
+                    [(make_label(self.data[fname].module_name, d.name),
+                      self.url_maker.definition(fname, definition)),
+                     ("Proof", self.url_maker.proof(fname, definition))])
+        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
 
     def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int,
                       depth = 0, maxNodes=100):
@@ -341,7 +395,7 @@ class GraphVisualizator:
         self.dot_apply_style(dot)
 
         outcome = proof[stepi].outcomes[outcomei]
-        seen = set()
+        seen = {}
 
         def node_label_map_with_ctx_names(context: Sequence[tuple[str, Node]]):
             mapping = {n: s for s, n in context}
@@ -349,9 +403,11 @@ class GraphVisualizator:
                 enum = graph_api_capnp.Graph.Node.Label
                 match node.label.which:
                     case enum.contextAssum:
-                        return 'ellipse', f"ContextAssum {mapping[node]}"
+                        name = f"ContextAssum {mapping[node]}"
+                        return 'ellipse', name, name
                     case enum.contextDef:
-                        return 'ellipse', f"ContextDef {mapping[node]}"
+                        name = f"ContextDef {mapping[node]}"
+                        return 'ellipse', name, name
                     case _:
                         return node_label_map(node)
             return nlm
@@ -384,16 +440,15 @@ class GraphVisualizator:
             dot2.node('artificial-root', 'TermRoot')
             dot2.edge('artificial-root', id)
 
+        location = (self.path2location(fname) +
+                    [(make_label(self.data[fname].module_name, d.name),
+                      self.url_maker.definition(fname, definition)),
+                     ("Proof", self.url_maker.proof(fname, definition)),
+                     (f"Step {stepi} outcome {outcomei}",
+                      self.url_maker.outcome(fname, definition, stepi, outcomei))])
+        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
 
-        dot.attr('graph', label="Proof step " + str(stepi) + " outcome " + str(outcomei) +
-                 " of " + d.name + " from " + str(fname))
-        dot.attr('graph', fontsize="40pt")
-        dot.attr('graph', labelloc="t")
-        dot.attr('graph', URL=self.url_maker.proof(fname, definition))
-
-        return dot.pipe('svg')
-
-    def folder(self, expand_path: Path):
+    def folder(self, expand_path: Path) -> GraphVisualizationOutput:
         expand_parts = expand_path.parts
 
         dot = graphviz.Digraph(engine='dot', format='svg')
@@ -421,19 +476,14 @@ class GraphVisualizator:
             if depth == len(expand_parts):
                 rel = retrieve_edges(defaultdict(set), h, depth)
                 (rel, repr) = transitive_reduction(rel)
-                def get_url(r: Path):
-                    if r in self.data:
-                        return r.with_suffix('').parts[-1], self.url_maker.global_context(r)
-                    else:
-                        return r.parts[-1], self.url_maker.folder(r)
                 for n in rel:
                     if len(repr[n]) == 1:
-                        label, url = get_url(n)
+                        label, url = self.url_for_path(n)
                         shape = 'box'
                     else:
                         label = '<<table border="0" cellborder="0" cellpadding="7">'
                         for r in repr[n]:
-                            slabel, surl = get_url(r)
+                            slabel, surl = self.url_for_path(r)
                             label += f'<tr><td href="{html.escape(surl)}">{slabel}</td></tr>'
                         label += "</table>>"
                         url = None
@@ -457,7 +507,8 @@ class GraphVisualizator:
                       URL = self.url_maker.root_folder())
             tunnel_hierarchy(dot2, hierarchy, 0)
 
-        return dot.pipe()
+        location = self.path2location(expand_path)
+        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
 
 def transitive_closure(rel):
     trans_deps = defaultdict(set)

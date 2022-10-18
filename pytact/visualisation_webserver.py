@@ -1,16 +1,29 @@
 from dataclasses import asdict
 from pathlib import Path
 import argparse
-from typing import Any
 
 from pytact.data_reader import data_reader
-from pytact.graph_visualize_browse import GraphVisualizationData, GraphVisualizator, UrlMaker, Settings
+from pytact.graph_visualize_browse import (
+    GraphVisualizationData, GraphVisualizator, UrlMaker, Settings, GraphVisualizationOutput, camel2pascal_case)
+
+import capnp
+capnp.remove_import_hook()
+import pytact.common
+graph_api_capnp = pytact.common.graph_api_capnp()
+graph_api_capnp = capnp.load(graph_api_capnp)
 
 from sanic import Sanic
 from sanic_ext import validate
 
-def post_process_svg(svg):
-    return svg.decode("utf-8").split('\n', 3)[-1]
+def post_process(output: GraphVisualizationOutput, settings: Settings):
+    result = asdict(output)
+    result['settings'] = settings
+    result['svg'] = result['svg'].decode("utf-8").split('\n', 3)[-1]
+    result['edge_labels'] = [(v, camel2pascal_case(name)) for (name, v) in
+                             graph_api_capnp.EdgeClassification.schema.enumerants.items()]
+    result['node_labels'] = [(v, camel2pascal_case(name)) for (v, name) in
+                             enumerate(list(graph_api_capnp.Graph.Node.Label.schema.union_fields))]
+    return result
 
 app = Sanic("graph-visualizer")
 
@@ -43,48 +56,42 @@ class SanicUrlMaker(UrlMaker):
 @app.ext.template("visualizer.html")
 async def outcome(request, path: str, defid: str, stepi: str, outcomei: str, query: Settings):
     gv = GraphVisualizator(app.ctx.gvd, SanicUrlMaker(query), query)
-    return {"svg": post_process_svg(gv.outcome(Path(path).with_suffix(".bin"), int(defid), int(stepi), int(outcomei))),
-            "settings": query}
+    return post_process(gv.outcome(Path(path).with_suffix(".bin"), int(defid), int(stepi), int(outcomei)), query)
 
 @app.get('/<path:path>/definition/<defid:int>/proof')
 @validate(query=Settings)
 @app.ext.template("visualizer.html")
 async def proof(request, path: str, defid: str, query: Settings):
     gv = GraphVisualizator(app.ctx.gvd, SanicUrlMaker(query), query)
-    return {"svg": post_process_svg(gv.proof(Path(path).with_suffix(".bin"), int(defid))),
-            "settings": query}
+    return post_process(gv.proof(Path(path).with_suffix(".bin"), int(defid)), query)
 
 @app.get('/<path:path>/definition/<defid:int>')
 @validate(query=Settings)
 @app.ext.template("visualizer.html")
 async def definition(request, path: str, defid: str, query: Settings):
     gv = GraphVisualizator(app.ctx.gvd, SanicUrlMaker(query), query)
-    return {"svg": post_process_svg(gv.definition(Path(path).with_suffix(".bin"), int(defid))),
-            "settings": query}
+    return post_process(gv.definition(Path(path).with_suffix(".bin"), int(defid)), query)
 
 @app.get('/<path:path>/context')
 @validate(query=Settings)
 @app.ext.template("visualizer.html")
 async def global_context(request, path: str, query: Settings):
     gv = GraphVisualizator(app.ctx.gvd, SanicUrlMaker(query), query)
-    return {"svg": post_process_svg(gv.global_context(Path(path).with_suffix(".bin"))),
-            "settings": query}
+    return post_process(gv.global_context(Path(path).with_suffix(".bin")), query)
 
 @app.get('/<path:path>')
 @validate(query=Settings)
 @app.ext.template("visualizer.html")
 async def folder(request, path: str, query: Settings):
     gv = GraphVisualizator(app.ctx.gvd, SanicUrlMaker(query), query)
-    return {"svg": post_process_svg(gv.folder(Path(path))),
-            "settings": query}
+    return post_process(gv.folder(Path(path)), query)
 
 @app.get('/')
 @validate(query=Settings)
 @app.ext.template("visualizer.html")
 async def root_folder(request, query: Settings):
     gv = GraphVisualizator(app.ctx.gvd, SanicUrlMaker(query), query)
-    return {"svg": post_process_svg(gv.folder(Path())),
-            "settings": query}
+    return post_process(gv.folder(Path()), query)
 
 def main():
 
