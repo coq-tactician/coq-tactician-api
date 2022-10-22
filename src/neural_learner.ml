@@ -267,7 +267,7 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
       List.map (gen_section_var env env_extra) section_vars in
     let (_, (state, _)), builder =
       CICGraphMonad.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater
-        Graph_generator_learner.HashMap.empty G.builder_nil Global in
+        G.HashMap.empty G.builder_nil Global in
     builder, state in
 
   let tacs = List.fold_left (fun map tac ->
@@ -433,7 +433,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let updater = gen_proof_state env ps in
     let (_, (_, (root, context_map))), { def_count; node_count; edge_count; defs; nodes; edges } =
       CICGraphMonad.run ~include_opaque:false ~state updater
-        Graph_generator_learner.HashMap.empty G.builder_nil Local in
+        G.HashMap.empty G.builder_nil Local in
     let node_local_index (_, (def, i)) =
       if def then i else def_count + i in
     let context_map = Id.Map.map (fun n ->

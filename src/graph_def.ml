@@ -414,10 +414,10 @@ module GlobalGraph(S : Set.S)
   type nonrec builder = (D.node_label, D.edge_label, node') builder
   val builder_nil : builder
   include GraphMonadType
-  with type node_label = D.node_label
-   and type edge_label = D.edge_label
-   and type node = node'
-   and type 'a repr_t = builder -> S.elt -> 'a * builder
+    with type node_label = D.node_label
+     and type edge_label = D.edge_label
+     and type node = node'
+     and type 'a repr_t = builder -> S.elt -> 'a * builder
 end = struct
   type node' = S.elt * (bool * int)
   type node = node'
@@ -531,6 +531,20 @@ module XXHasher = struct
   let to_int = Int64.to_int
 end
 
+module type CICHasherType = sig
+  type t
+  type state
+  type node_label
+  type edge_label
+  val with_state      : (state -> state) -> t
+  val update          : t -> state -> state
+  val update_int      : int -> state -> state
+  val update_node_label : physical:bool -> node_label -> state -> state
+  val update_edge_label : physical:bool -> edge_label -> state -> state
+  val to_int          : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
+  val compare         : t -> t -> int
+end
+
 module CICHasher
     (H : sig
        type t
@@ -541,23 +555,42 @@ module CICHasher
        val update_string   : string -> state -> state
        val compare         : t -> t -> int
        val to_int          : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
-     end) = struct
+     end)
+    (K : sig type node val node_hash : node -> H.t end) :
+  CICHasherType with type t = H.t
+                 and type state = H.state
+                 and type node_label = K.node node_type
+                 and type edge_label = edge_label
+= struct
   include H
-  (* Definitions are never equal to any other definition, even if their names, type and body are equal.
-     The reason is that they are also part of a global context. We don't want the hash of a definition
-     to rely on a particular global context, but at the same time, we can also not merge two nodes with
-     a different global context... *)
-  let never_equal = function
-    | Definition _ -> true
-    | _ -> false
-  let update_node_label p =
+  type nonrec edge_label = edge_label
+  type node_label = K.node node_type
+  let update_node_label ~physical p =
     let u = update_int in
     match p with
     | ProofState -> u 0
     | UndefProofState -> u 1
     | ContextDef (idx, _) -> fun s -> u 2 @@ update_int idx s
     | ContextAssum (idx, _) -> fun s -> u 3 @@ update_int idx s
-    | Definition { path; _ } -> fun s -> u 4 @@ update_string (Libnames.string_of_path path) s
+    | Definition { path; previous; external_previous; status; _ } -> fun s ->
+      let h = u 4 @@ update_string (Libnames.string_of_path path) s in
+      (match physical with
+       | false -> h
+       | true ->
+         (* TODO: It seems that this hash should also include a hash of a potential proof. But
+            it seems extremely unlikely (impossible?) that two otherwise equal definitions with different
+            proofs will collide. *)
+         (* We include the current dirpath in the hash, because we want all definitions to be part
+            of their own file. *)
+         update_string (DirPath.to_string @@ Global.current_dirpath ()) @@
+         (match status with
+          | DOriginal -> u 0
+          | DDischarged n -> fun h -> u 1 @@ update (K.node_hash n) h
+          | DSubstituted n -> fun h -> u 2 @@ update (K.node_hash n) h) @@
+         (match previous with
+          | None -> fun x -> x
+          | Some prev -> update (K.node_hash prev)) @@
+         List.fold_left (fun h n -> update (K.node_hash n) h) h external_previous)
     | ConstEmpty -> u 5
     | SortSProp -> u 6
     | SortProp -> u 7
@@ -580,7 +613,7 @@ module CICHasher
     | Int i -> fun s -> u 24 @@ update_string (Uint63.to_string i) s (* Not very efficient but who cares *)
     | Float f -> fun s -> u 25 @@ update_string (Float64.to_string f) s (* Not very efficient but who cares *)
     | Primitive p -> fun s -> u 26 @@ update_string (CPrimitives.to_string p) s
-  let update_edge_label =
+  let update_edge_label ~physical =
     let u = update_int in
     function
     | ContextElem -> u 0
@@ -672,31 +705,31 @@ end
 *)
 module GraphHasher
     (D : sig type node_label type edge_label end)
-    (H : sig
-       type t
-       type state
-       val with_state      : (state -> state) -> t
-       val update          : t -> state -> state
-       val update_int      : int -> state -> state
-       (* val update_string   : string -> state -> state *)
-       val update_node_label : D.node_label -> state -> state
-       val update_edge_label : D.edge_label -> state -> state
-       val compare         : t -> t -> int
-       val to_int          : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
-       val never_equal     : D.node_label -> bool (* Nodes with these labels are never equal to any other node *)
-     end)
+    (H : CICHasherType with type node_label = D.node_label
+                        and type edge_label = D.edge_label)
+    (M : Map.S with type key = H.t)
     (G : GraphMonadType with type node_label = D.node_label * H.t and type edge_label = D.edge_label)
   : sig
     include GraphMonadType
       with type node_label = D.node_label
        and type edge_label = D.edge_label
-       and type 'a repr_t = G.node Map.Make(H).t -> (G.node Map.Make(H).t * 'a) G.repr_t
+       and type 'a repr_t = G.node M.t -> (G.node M.t * 'a) G.repr_t
     val lower : node -> G.node * H.t
-    val lift : G.node * H.t -> node
+    val physical_hash : node -> H.t
   end
 = struct
   type node_label = D.node_label
   type edge_label = D.edge_label
+
+  (** For every node, we calculate two hashes:
+      - The structural hash contains info on all of the nodes that can be reached structurally through
+        the children of the node.
+      - The physical hash contains additional information about the global context where the node occurred.
+      The first one is reported in the datasets as the `identity` of a node. The second one is used for
+      de-duplication of the graph. The reason for this is that we don't want to de-duplicate definitions
+      that are structurally equal but occur in different global contexts.
+  *)
+  type hashes = { physical : H.t; structural : H.t }
   type binder_info =
     { is_definition : bool option
     ; final : bool
@@ -704,7 +737,7 @@ module GraphHasher
   type node_info =
     { label : node_label
     ; children : (edge_label * node) list
-    ; hash : H.t
+    ; hash : hashes
     ; size : int
     ; id : int
     ; depth : int
@@ -713,7 +746,7 @@ module GraphHasher
     | Normal of node_info
     | BinderPlaceholder of { depth : int }
     | Binder of node_info * binder_info
-    | Written of G.node * H.t
+    | Written of G.node * hashes
   and node = node' ref
   let gen_id =
     let id = ref 0 in
@@ -721,11 +754,11 @@ module GraphHasher
       id := !id + 1;
       !id
   let lower n = match !n with
-    | Written (n, h) -> n, h
+    | Written (n, { structural; _ }) -> n, structural
     | _ -> assert false
-  let lift (g, h) = ref @@ Written (g, h)
+  let make_lower_node nl { structural; _ } ch = G.mk_node (nl, structural) ch
   type children = (edge_label * node) list
-  module HashMap = Map.Make(H)
+  module HashMap = M
   type 'a repr_t = G.node HashMap.t -> (G.node HashMap.t * 'a) G.repr_t
 
   module M = Monad_util.ReaderStateMonadT
@@ -738,25 +771,37 @@ module GraphHasher
   open Monad.Make(M)
   include Monad_util.WithMonadNotations(M)
 
+  let physical_hash n =
+    let which = fun { physical; _ } -> physical in
+    match !n with
+      | Written (_, hash) -> which hash
+      | BinderPlaceholder _ -> H.with_state @@ fun x -> x
+      | Normal { hash; _ } -> which hash
+      | Binder ({ hash; _ }, _) -> which hash
+
   let calc_hash curr_depth nl ch =
     (* Technically speaking, we should sort the hashes to make the final hash invariant w.r.t. child ordering.
        However, because the ordering is deterministic in practice, we don't need to do that. *)
-    let hashes state = OList.fold_left (fun state (el, n) ->
+    let hashes ~physical state =
+      let which = if physical then fun { physical; _ } -> physical else fun { structural; _ } -> structural in
+      OList.fold_left (fun state (el, n) ->
         let n = match !n with
-          | Written (_, hash) -> hash
+          | Written (_, hash) -> which hash
           | BinderPlaceholder _ -> H.with_state @@ fun x -> x
-          | Normal { hash; _ } -> hash
-          | Binder ({ hash; _ }, { seen = false; _ }) -> hash
+          | Normal { hash; _ } -> which hash
+          | Binder ({ hash; _ }, { seen = false; _ }) -> which hash
           | Binder ({ depth; label; _ }, { seen = true; final = false; _ }) ->
               H.with_state @@ fun state ->
               (* Careful to include the label of the binder as well as its de Bruijn index *)
-              H.update_node_label label @@ H.update_int (curr_depth - depth) state
-          | Binder ({ hash; _ }, { seen = true; final = true; _ }) -> hash
+              H.update_node_label ~physical label @@ H.update_int (curr_depth - depth) state
+          | Binder ({ hash; _ }, { seen = true; final = true; _ }) -> which hash
         in
-        H.update n @@ H.update_edge_label el state
+        H.update n @@ H.update_edge_label ~physical el state
       ) state ch in
-    H.with_state @@ fun state ->
-    H.update_node_label nl @@ hashes state
+    let final ~physical = H.with_state @@ fun state ->
+      H.update_node_label ~physical nl @@ hashes ~physical state in
+    { structural = final ~physical:false
+    ; physical = final ~physical:true }
 
   let calc_min_binder_referenced ch =
     OList.fold_left (fun acc (_, n) -> match !n with
@@ -776,7 +821,8 @@ module GraphHasher
          A constant 0 would be sufficient. But this would make the algorithm less efficient.
          So we use the absolute value of the hash. In order to prevent integer overflows, we reduce
          the hash to 32 bits. *)
-      (abs @@ H.to_int hash) mod 4294967296
+      (* We use hash.structural here, because this is the lowest common denominator *)
+      (abs @@ H.to_int hash.structural) mod 4294967296
     | Normal { size; _ } -> size
     | Binder (_, { seen = true; _ }) -> 0
     | Binder ({ size; _ }, { seen = false; _ }) -> size
@@ -800,20 +846,24 @@ module GraphHasher
       n.contents <- Normal { i with hash }
     | BinderPlaceholder _ -> assert false
 
-  let share_node nl hash conta contb =
+  let share_node nl { physical; _ } conta contb =
     let add_node node =
       let* map = get in
-      put (HashMap.add hash node map) in
-    if H.never_equal nl then conta (fun _ -> return ()) else
-      let* map = get in
-      match HashMap.find_opt hash map with
-      | None -> conta add_node
-      | Some node -> contb node
+      put (HashMap.add physical node map) in
+    let* map = get in
+    match HashMap.find_opt physical map with
+    | None -> conta add_node
+    | Some node -> contb node
 
   let write_node_and_children connected_component_hash n =
-    let tag_connected_component hash = H.with_state @@ fun state ->
-      H.update connected_component_hash @@ H.update hash state in
-    let rec aux n =
+    let tag_connected_component { structural; physical } =
+      { structural =
+          (H.with_state @@ fun state ->
+           H.update connected_component_hash.structural @@ H.update structural state)
+      ; physical =
+          (H.with_state @@ fun state ->
+           H.update connected_component_hash.physical @@ H.update physical state) } in
+  let rec aux n =
       match !n with
       | Written (n, _) -> return n
       | Normal { label; children; hash; _ } ->
@@ -821,7 +871,7 @@ module GraphHasher
         let* ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
         share_node label hash
           (fun add ->
-             let* node = lift @@ G.mk_node (label, hash) ch in
+             let* node = lift @@ make_lower_node label hash ch in
              let+ () = add node in
              n.contents <- Written (node, hash);
              node)
@@ -837,7 +887,7 @@ module GraphHasher
                  let* () = add node in
                  n.contents <- Written (node, hash);
                  let+ ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
-                 node, (label, hash), ch in
+                 node, (label, hash.structural), ch in
                G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@
                run computation depth (* depth really doesn't matter*) map in
              let+ () = put map in
@@ -913,7 +963,7 @@ module GraphHasher
     | Some ch ->
       share_node nl hash
        (fun add ->
-         let* node = lift @@ G.mk_node (nl, hash) ch in
+         let* node = lift @@ make_lower_node nl hash ch in
          let+ () = add node in
          ref @@ Written (node, hash))
        (fun node -> return @@ ref @@ Written (node, hash))
@@ -941,7 +991,7 @@ module GraphHasher
     | Some ch ->
       share_node nl hash
        (fun add ->
-         let* node' = lift @@ G.mk_node (nl, hash) ch in
+         let* node' = lift @@ make_lower_node nl hash ch in
          let+ () = add node' in
          node.contents <- Written (node', hash);
          v)

@@ -8,9 +8,8 @@ module OList = CList
 
 let dirpath = Global.current_dirpath ()
 
-module HashMap = Map.Make(CICHasher(XXHasher))
-
 module GlobalCICGraph(S : Set.S) = struct
+  module HashMap = Map.Make(XXHasher)
   type lnode = S.elt * (bool * int)
   include GlobalGraph(S)(
     struct
@@ -21,7 +20,6 @@ module GlobalCICGraph(S : Set.S) = struct
         | _ -> false
     end)
   let lower n = n, Int64.of_int 0
-  let lift (n, _) = n
   let transform_node_type n = n, Int64.of_int 0
   type 'a repr_t =
     lnode HashMap.t -> builder -> S.elt -> (lnode HashMap.t * 'a) * builder
@@ -33,33 +31,64 @@ module rec GlobalHashedCICGraph : functor (S : Set.S) -> sig
   type node' = GlobalHashedCICGraph(S).node
   type lnode = S.elt * (bool * int)
   type nonrec builder = (node' node_type * int64, edge_type, lnode) builder
+  module Hasher : Map.OrderedType
+  module HashMap : Map.S with type key = Hasher.t
   include GraphMonadType
     with type node_label = node' node_type
      and type edge_label = edge_type
      and type 'a repr_t = lnode HashMap.t -> builder -> S.elt -> (lnode HashMap.t * 'a) * builder
   val lower : node -> lnode * int64
-  val lift : lnode * int64 -> node
   val builder_nil : builder
   val transform_node_type : 'a -> 'a
 end = functor (S : Set.S) -> struct
   type node' = GlobalHashedCICGraph(S).node
   type lnode = S.elt * (bool * int)
-  module GG = GlobalGraph(S)(
+  module rec GG
+    : sig
+      type node' = S.elt * (bool * int)
+      type nonrec builder = (GH.node node_type * int64, edge_label, node') builder
+      val builder_nil : builder
+      include GraphMonadType
+        with type node_label = GH.node node_type * int64
+         and type edge_label = edge_label
+         and type node = node'
+         and type 'a repr_t = builder -> S.elt -> 'a * builder
+    end
+    = GlobalGraph(S)(
     struct
       type edge_label = edge_type
-      type node_label = node' node_type * int64
+      type node_label = GH.node node_type * int64
       let is_definition (d, _) = match d with
         | Definition _ -> true
         | _ -> false
     end)
-  type builder = GG.builder
-  let builder_nil = GG.builder_nil
-  include GraphHasher
+  and Hasher :
+    CICHasherType with type t = int64
+                   and type node_label = GH.node node_type
+                   and type edge_label = edge_label =
+    CICHasher(XXHasher)
       (struct
-        type node_label = GlobalHashedCICGraph(S).node node_type
+        type node = GH.node
+        let node_hash n = GH.physical_hash n
+      end)
+  and HashMap : Map.S with type key = Hasher.t = Map.Make(Hasher)
+  and GH : sig
+    include GraphMonadType
+      with type node_label = GH.node node_type
+       and type edge_label = edge_type
+       and type 'a repr_t = lnode HashMap.t -> GG.builder -> S.elt -> (lnode HashMap.t * 'a) * GG.builder
+    val lower : GH.node -> lnode * int64
+    val physical_hash : GH.node -> int64
+  end
+    = GraphHasher
+      (struct
+        type node_label = GH.node node_type
         type edge_label = edge_type
       end)
-      (CICHasher(XXHasher))(GG)
+      (Hasher)(HashMap)(GG)
+  type builder = GG.builder
+  let builder_nil = GG.builder_nil
+  include GH
   let transform_node_type n = n
 end
 
@@ -116,7 +145,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
   (* Global state of the graph generator *)
   let graph_builder = ref G.builder_nil
-  let node_hashes = ref HashMap.empty
+  let node_hashes = ref G.HashMap.empty
   let definition_nodes = ref Int.Set.empty
   let dependencies = Summary.ref ~name:"TacticianGraphDependencies" DPmap.empty
   let section_nodes = Summary.ref ~name:"TacticianGraphSectionNodes" Id.Map.empty
@@ -192,9 +221,9 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                        else
                          external_previous_definitions := DPmap.add d prev !external_previous_definitions)
                  ~subst:(Some (fun (_, _) -> None)))
-  let in_node_hashes : G.lnode HashMap.t -> Libobject.obj =
+  let in_node_hashes : G.lnode G.HashMap.t -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHNODEHASHES"
-                 ~cache:(fun (_, hm) -> node_hashes := HashMap.union (fun _ v _ -> Some v) !node_hashes hm)
+                 ~cache:(fun (_, hm) -> node_hashes := G.HashMap.union (fun _ v _ -> Some v) !node_hashes hm)
                  ~subst:None)
   let in_known_external_previous_definition : node option -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHKNOWNEXTERNAL"
@@ -496,7 +525,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     Lib.add_anonymous_leaf @@
     in_dependencies (dirpath, (data_file ()), graph_builder.def_count, DPmap.domain !dependencies);
     Lib.add_anonymous_leaf @@ in_node_hashes @@
-    HashMap.filter (fun _ (p, _) -> DirPath.equal dirpath p) !node_hashes;
+    G.HashMap.filter (fun _ (p, _) -> DirPath.equal dirpath p) !node_hashes;
 
     write_graph graph_builder !definition_nodes !previous_definition non_trans_deps
 
