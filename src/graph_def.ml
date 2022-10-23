@@ -529,6 +529,8 @@ module XXHasher = struct
   let update_string s state = XXH64.update state s; state
   let compare = Int64.compare
   let to_int = Int64.to_int
+  let hash = to_int
+  let equal a b = Int64.equal a b
 end
 
 module type CICHasherType = sig
@@ -542,8 +544,9 @@ module type CICHasherType = sig
   val update_string   : string -> state -> state
   val update_node_label : physical:bool -> node_label -> state -> state
   val update_edge_label : physical:bool -> edge_label -> state -> state
-  val to_int          : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
   val compare         : t -> t -> int
+  val hash            : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
+  val equal           : t -> t -> bool
 end
 
 module CICHasher
@@ -555,7 +558,8 @@ module CICHasher
        val update_int      : int -> state -> state
        val update_string   : string -> state -> state
        val compare         : t -> t -> int
-       val to_int          : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
+       val hash            : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
+       val equal           : t -> t -> bool
      end)
     (K : sig type node val node_hash : node -> H.t end) :
   CICHasherType with type t = H.t
@@ -708,13 +712,13 @@ module GraphHasher
     (D : sig type node_label type edge_label end)
     (H : CICHasherType with type node_label = D.node_label
                         and type edge_label = D.edge_label)
-    (M : Map.S with type key = H.t)
+    (M : Hashtbl.S with type key = H.t)
     (G : GraphMonadType with type node_label = D.node_label * H.t and type edge_label = D.edge_label)
   : sig
     include GraphMonadType
       with type node_label = D.node_label
        and type edge_label = D.edge_label
-       and type 'a repr_t = (H.t * G.node) M.t -> ((H.t * G.node) M.t * 'a) G.repr_t
+       and type 'a repr_t = (H.t * G.node) M.t -> 'a G.repr_t
     val lower : node -> G.node * H.t
     val physical_hash : node -> H.t
   end
@@ -760,12 +764,11 @@ module GraphHasher
   let make_lower_node nl { structural; _ } ch = G.mk_node (nl, structural) ch
   type children = (edge_label * node) list
   module HashMap = M
-  type 'a repr_t = (H.t * G.node) HashMap.t -> ((H.t * G.node) HashMap.t * 'a) G.repr_t
+  type 'a repr_t = (H.t * G.node) HashMap.t -> 'a G.repr_t
 
-  module M = Monad_util.ReaderStateMonadT
+  module M = Monad_util.ReaderMonadT
       (G)
-      (struct type r = int end) (* Current binder depth *)
-      (struct type s = (H.t * G.node) HashMap.t end) (* TODO: Consider replacing this with a mutable hashmap for speed *)
+      (struct type r = ((H.t * G.node) HashMap.t * int) end) (* Current binder depth *)
 
   module OList = List
   open M
@@ -823,7 +826,7 @@ module GraphHasher
          So we use the absolute value of the hash. In order to prevent integer overflows, we reduce
          the hash to 32 bits. *)
       (* We use hash.structural here, because this is the lowest common denominator *)
-      (abs @@ H.to_int hash.structural) mod 4294967296
+      (abs @@ H.hash hash.structural) mod 4294967296
     | Normal { size; _ } -> size
     | Binder (_, { seen = true; _ }) -> 0
     | Binder ({ size; _ }, { seen = false; _ }) -> size
@@ -850,10 +853,10 @@ module GraphHasher
   let dirpath = H.with_state @@ fun h -> H.update_string (DirPath.to_string @@ Global.current_dirpath ()) h
   let share_node nl ({ physical; _ } as hash) conta contb =
     let add_node file_physical node =
-      let* map = get in
-      put (HashMap.add physical (file_physical, node) map) in
-    let* map = get in
-    match HashMap.find_opt physical map with
+      let+ map, _ = ask in
+      HashMap.add map physical (file_physical, node) in
+    let* map, _ = ask in
+    match HashMap.find_opt map physical with
     | None ->
       let physical = H.with_state @@ fun h -> H.update dirpath @@ H.update physical h in
       conta { hash with physical } (add_node physical)
@@ -884,17 +887,14 @@ module GraphHasher
         let hash = tag_connected_component hash in
         share_node label hash
           (fun hash add ->
-             let* depth = ask in
-             let* map = get in
-             let* map, node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
+             let* map, depth = ask in
+             let+ node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
                let computation =
                  let* () = add node in
                  n.contents <- Written (node, hash);
                  let+ ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
                  node, (label, hash.structural), ch in
-               G.map (fun (a, (b, c, d)) -> (a, b), c, d) @@
-               run computation depth (* depth really doesn't matter*) map in
-             let+ () = put map in
+               run computation (map, depth (* depth really doesn't matter*)) in
              node)
           (fun hash node ->
              n.contents <- Written (node, hash);
@@ -961,7 +961,7 @@ module GraphHasher
         | _ -> None) (Some [])
 
   let mk_node : node_label -> children -> node t = fun nl ch ->
-    let* depth = ask in
+    let* _, depth = ask in
     let hash = calc_hash depth nl ch in
     match children_converged ch with
     | Some ch ->
@@ -986,8 +986,8 @@ module GraphHasher
 
   let with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t =
     fun ?definition f ->
-    local (fun d -> d + 1) @@
-    let* depth = ask in
+    local (fun (map, d) -> map, d + 1) @@
+    let* _, depth = ask in
     let node = ref @@ BinderPlaceholder { depth } in
     let* v, nl, ch = f node in
     let hash = calc_hash depth nl ch in
@@ -1024,5 +1024,5 @@ module GraphHasher
       v
 
   let run = fun m hashed ->
-    G.run @@ run m 0 hashed
+    G.run @@ run m (hashed, 0)
 end

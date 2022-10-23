@@ -170,15 +170,14 @@ end = struct
         type node = node'
         let node_hash _ = XXHasher.with_state (fun s -> s)
       end)
-  and HashMap : Map.S with type key = Hasher.t =
-    Map.Make(Hasher)
+  and HashMap : Hashtbl.S with type key = Hasher.t = Hashtbl.Make(Hasher)
   and GH : sig
     include GraphMonadType
       with type node_label = node' node_type
        and type edge_label = edge_type
        and type 'a repr_t =
              (int64 * int) HashMap.t ->
-             ((int64 * int) HashMap.t * 'a) *
+             'a *
              ((node_count:int -> edge_count:int -> result) ->
               (result -> final -> (edge_label * int) list -> result) ->
               result)
@@ -200,7 +199,7 @@ end = struct
     'a *
     ((node_count:int -> edge_count:int -> result) ->
      (result -> final -> (edge_label * int) list -> result) -> result)
-  let run m = let (_, res), it = run m HashMap.empty in res, it
+  let run m = run m (HashMap.create 0)
 end
 
 module SimpleViz = Viz(SimpleCICGraph)
