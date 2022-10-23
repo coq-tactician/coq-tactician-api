@@ -15,6 +15,7 @@ module type Hashable = sig
 end
 
 module GlobalCICGraph(S : Hashable) = struct
+  module Hasher = XXHasher
   module HashMap = Hashtbl.Make(XXHasher)
   type lnode = S.t * (bool * int)
   include GlobalGraph(S)(
