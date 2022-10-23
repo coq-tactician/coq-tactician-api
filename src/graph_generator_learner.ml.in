@@ -27,41 +27,50 @@ module GlobalCICGraph(S : Set.S) = struct
     let res, x = run m b e in (HashMap.empty, res), x
 end
 
-module rec GlobalHashedCICGraph : functor (S : Set.S) -> sig
+module type HashableSet = sig
+  type t
+  val hash : t -> int64
+end
+
+module rec GlobalHashedCICGraph : functor (S : HashableSet) -> sig
   type node' = GlobalHashedCICGraph(S).node
-  type lnode = S.elt * (bool * int)
+  type lnode = S.t * (bool * int)
   type nonrec builder = (node' node_type * int64, edge_type, lnode) builder
   module Hasher : Map.OrderedType
   module HashMap : Hashtbl.S with type key = Hasher.t
   include GraphMonadType
     with type node_label = node' node_type
      and type edge_label = edge_type
-     and type 'a repr_t = (int64 * lnode) HashMap.t -> builder -> S.elt -> 'a * builder
+     and type 'a repr_t = lnode HashMap.t -> builder -> S.t -> 'a * builder
   val lower : node -> lnode * int64
   val builder_nil : builder
   val transform_node_type : 'a -> 'a
-end = functor (S : Set.S) -> struct
+end = functor (S : HashableSet) -> struct
   type node' = GlobalHashedCICGraph(S).node
-  type lnode = S.elt * (bool * int)
+  type lnode = S.t * (bool * int)
   module rec GG
     : sig
-      type node' = S.elt * (bool * int)
+      type node' = S.t * (bool * int)
       type nonrec builder = (GH.node node_type * int64, edge_label, node') builder
       val builder_nil : builder
       include GraphMonadType
         with type node_label = GH.node node_type * int64
          and type edge_label = edge_label
          and type node = node'
-         and type 'a repr_t = builder -> S.elt -> 'a * builder
+         and type 'a repr_t = builder -> S.t -> 'a * builder
+      val node_location : node' -> int64
     end
-    = GlobalGraph(S)(
-    struct
-      type edge_label = edge_type
-      type node_label = GH.node node_type * int64
-      let is_definition (d, _) = match d with
-        | Definition _ -> true
-        | _ -> false
-    end)
+    = struct
+      include GlobalGraph(S)(
+        struct
+          type edge_label = edge_type
+          type node_label = GH.node node_type * int64
+          let is_definition (d, _) = match d with
+            | Definition _ -> true
+            | _ -> false
+        end)
+      let node_location (p, _) = S.hash p
+    end
   and Hasher :
     CICHasherType with type t = int64
                    and type node_label = GH.node node_type
@@ -76,7 +85,7 @@ end = functor (S : Set.S) -> struct
     include GraphMonadType
       with type node_label = GH.node node_type
        and type edge_label = edge_type
-       and type 'a repr_t = (int64 * lnode) HashMap.t -> GG.builder -> S.elt -> 'a * GG.builder
+       and type 'a repr_t = lnode HashMap.t -> GG.builder -> S.t -> 'a * GG.builder
     val lower : GH.node -> lnode * int64
     val physical_hash : GH.node -> int64
   end
@@ -93,7 +102,11 @@ end = functor (S : Set.S) -> struct
 end
 
 (* module G = GlobalCICGraph(DPset) *)
-module G = GlobalHashedCICGraph(DPset)
+module HashDPset = struct
+  type t = DirPath.t
+  let hash p = XXHasher.with_state @@ fun h -> XXHasher.update_string (DirPath.to_string p) h
+end
+module G = GlobalHashedCICGraph(HashDPset)
 module CICGraphMonad = struct
   include CICGraphMonad(G)
   type node' = node
@@ -221,7 +234,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                        else
                          external_previous_definitions := DPmap.add d prev !external_previous_definitions)
                  ~subst:(Some (fun (_, _) -> None)))
-  let in_node_hashes : (int64 * G.lnode) G.HashMap.t -> Libobject.obj =
+  let in_node_hashes : G.lnode G.HashMap.t -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHNODEHASHES"
                  ~cache:(fun (_, hm) ->
                      G.HashMap.iter (fun k v -> G.HashMap.replace node_hashes k v) hm)
@@ -525,8 +538,8 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     Lib.add_anonymous_leaf @@
     in_dependencies (dirpath, (data_file ()), graph_builder.def_count, DPmap.domain !dependencies);
     let local_node_hashes = G.HashMap.create 100 in
-    G.HashMap.iter (fun k (x, (p, y)) ->
-        if DirPath.equal dirpath p then G.HashMap.add local_node_hashes k (x, (p, y))) node_hashes;
+    G.HashMap.iter (fun k (p, y) ->
+        if DirPath.equal dirpath p then G.HashMap.add local_node_hashes k (p, y)) node_hashes;
     Lib.add_anonymous_leaf @@ in_node_hashes local_node_hashes;
 
     write_graph graph_builder !definition_nodes !previous_definition non_trans_deps

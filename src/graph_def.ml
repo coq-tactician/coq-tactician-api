@@ -403,23 +403,23 @@ type ('nl, 'el, 'n) builder =
   ; nodes : ('nl * edge_range) AList.t
   ; edges : ('el * 'n) AList.t }
 (* TODO: See if this can be merged with SimpleGraph *)
-module GlobalGraph(S : Set.S)
+module GlobalGraph(S : sig type t end)
     (D : sig
        type node_label
        type edge_label
        val is_definition : node_label -> bool
      end)
   : sig
-  type node' = S.elt * (bool * int)
+  type node' = S.t * (bool * int)
   type nonrec builder = (D.node_label, D.edge_label, node') builder
   val builder_nil : builder
   include GraphMonadType
     with type node_label = D.node_label
      and type edge_label = D.edge_label
      and type node = node'
-     and type 'a repr_t = builder -> S.elt -> 'a * builder
+     and type 'a repr_t = builder -> S.t -> 'a * builder
 end = struct
-  type node' = S.elt * (bool * int)
+  type node' = S.t * (bool * int)
   type node = node'
   type nonrec builder = (D.node_label, D.edge_label, node') builder
   let builder_nil = { def_count = 0; node_count = 0; edge_count = 0
@@ -436,7 +436,7 @@ end = struct
     ; nodes : (node_label * edge_range) AList.t
     ; edges : (edge_label * node') AList.t }
   module M = Monad_util.ReaderStateWriterMonad
-      (struct type r = S.elt end)
+      (struct type r = S.t end)
       (struct type s = state end)
       (struct type w = writer
         let id = { defs = AList.nil; nodes = AList.nil; edges = AList.nil }
@@ -448,7 +448,7 @@ end = struct
           ; edges = AList.append e1 e2 }
       end)
   include M
-  type nonrec 'a repr_t = builder -> S.elt -> 'a * builder
+  type nonrec 'a repr_t = builder -> S.t -> 'a * builder
   open Monad_util.WithMonadNotations(M)
   let index_to_node i =
     let+ current = ask in
@@ -713,12 +713,15 @@ module GraphHasher
     (H : CICHasherType with type node_label = D.node_label
                         and type edge_label = D.edge_label)
     (M : Hashtbl.S with type key = H.t)
-    (G : GraphMonadType with type node_label = D.node_label * H.t and type edge_label = D.edge_label)
+    (G : sig
+       include GraphMonadType with type node_label = D.node_label * H.t and type edge_label = D.edge_label
+       val node_location : node -> H.t
+    end)
   : sig
     include GraphMonadType
       with type node_label = D.node_label
        and type edge_label = D.edge_label
-       and type 'a repr_t = (H.t * G.node) M.t -> 'a G.repr_t
+       and type 'a repr_t = G.node M.t -> 'a G.repr_t
     val lower : node -> G.node * H.t
     val physical_hash : node -> H.t
   end
@@ -764,11 +767,11 @@ module GraphHasher
   let make_lower_node nl { structural; _ } ch = G.mk_node (nl, structural) ch
   type children = (edge_label * node) list
   module HashMap = M
-  type 'a repr_t = (H.t * G.node) HashMap.t -> 'a G.repr_t
+  type 'a repr_t = G.node HashMap.t -> 'a G.repr_t
 
   module M = Monad_util.ReaderMonadT
       (G)
-      (struct type r = ((H.t * G.node) HashMap.t * int) end) (* Current binder depth *)
+      (struct type r = (G.node HashMap.t * int) end) (* Current binder depth *)
 
   module OList = List
   open M
@@ -852,15 +855,18 @@ module GraphHasher
 
   let dirpath = H.with_state @@ fun h -> H.update_string (DirPath.to_string @@ Global.current_dirpath ()) h
   let share_node nl ({ physical; _ } as hash) conta contb =
-    let add_node file_physical node =
+    let add_node node =
       let+ map, _ = ask in
-      HashMap.add map physical (file_physical, node) in
+      HashMap.add map physical node in
     let* map, _ = ask in
     match HashMap.find_opt map physical with
     | None ->
       let physical = H.with_state @@ fun h -> H.update dirpath @@ H.update physical h in
-      conta { hash with physical } (add_node physical)
-    | Some (physical, node) -> contb { hash with physical } node
+      conta { hash with physical } add_node
+    | Some node ->
+      let physical = H.with_state @@ fun h ->
+        H.update (G.node_location node) @@ H.update physical h in
+      contb { hash with physical } node
 
   let write_node_and_children connected_component_hash n =
     let tag_connected_component { structural; physical } =

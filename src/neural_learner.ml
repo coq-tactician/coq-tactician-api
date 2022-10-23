@@ -47,11 +47,14 @@ let executable_option = declare_string_option ~name:"Executable" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
-type path = Local | Global
-module PathSet = Set.Make(struct type t = path let compare = compare end)
+type location = Local | Global
+module Hashable = struct
+  type t = location
+  let hash _ = XXHasher.with_state @@ fun h -> h
+end
 
-(* module G = Graph_generator_learner.GlobalCICGraph(PathSet) *)
-module G = Graph_generator_learner.GlobalHashedCICGraph(PathSet)
+(* module G = Graph_generator_learner.GlobalCICGraph(Hashable) *)
+module G = Graph_generator_learner.GlobalHashedCICGraph(Hashable)
 module CICGraphMonad = struct
   include CICGraphMonad(G)
   type node' = node

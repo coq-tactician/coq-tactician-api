@@ -176,7 +176,7 @@ end = struct
       with type node_label = node' node_type
        and type edge_label = edge_type
        and type 'a repr_t =
-             (int64 * int) HashMap.t ->
+             int HashMap.t ->
              'a *
              ((node_count:int -> edge_count:int -> result) ->
               (result -> final -> (edge_label * int) list -> result) ->
@@ -188,12 +188,16 @@ end = struct
         type edge_label = edge_type
       end)
       (Hasher)(HashMap)
-      (SimpleGraph(
-        struct
-          type nonrec result = result
-          type edge_label = edge_type
-          type node_label = final
-        end))
+      (struct
+        include SimpleGraph(
+          struct
+            type nonrec result = result
+            type edge_label = edge_type
+            type node_label = final
+          end)
+        let node_location _ = XXHasher.with_state @@ fun h -> h
+      end
+      )
   include GH
   type 'a repr_t =
     'a *
