@@ -177,8 +177,8 @@ end = struct
       with type node_label = node' node_type
        and type edge_label = edge_type
        and type 'a repr_t =
-             int HashMap.t ->
-             (int HashMap.t * 'a) *
+             (int64 * int) HashMap.t ->
+             ((int64 * int) HashMap.t * 'a) *
              ((node_count:int -> edge_count:int -> result) ->
               (result -> final -> (edge_label * int) list -> result) ->
               result)

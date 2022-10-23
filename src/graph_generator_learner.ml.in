@@ -36,7 +36,7 @@ module rec GlobalHashedCICGraph : functor (S : Set.S) -> sig
   include GraphMonadType
     with type node_label = node' node_type
      and type edge_label = edge_type
-     and type 'a repr_t = lnode HashMap.t -> builder -> S.elt -> (lnode HashMap.t * 'a) * builder
+     and type 'a repr_t = (int64 * lnode) HashMap.t -> builder -> S.elt -> ((int64 * lnode) HashMap.t * 'a) * builder
   val lower : node -> lnode * int64
   val builder_nil : builder
   val transform_node_type : 'a -> 'a
@@ -76,7 +76,7 @@ end = functor (S : Set.S) -> struct
     include GraphMonadType
       with type node_label = GH.node node_type
        and type edge_label = edge_type
-       and type 'a repr_t = lnode HashMap.t -> GG.builder -> S.elt -> (lnode HashMap.t * 'a) * GG.builder
+       and type 'a repr_t = (int64 * lnode) HashMap.t -> GG.builder -> S.elt -> ((int64 * lnode) HashMap.t * 'a) * GG.builder
     val lower : GH.node -> lnode * int64
     val physical_hash : GH.node -> int64
   end
@@ -221,7 +221,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                        else
                          external_previous_definitions := DPmap.add d prev !external_previous_definitions)
                  ~subst:(Some (fun (_, _) -> None)))
-  let in_node_hashes : G.lnode G.HashMap.t -> Libobject.obj =
+  let in_node_hashes : (int64 * G.lnode) G.HashMap.t -> Libobject.obj =
     Libobject.(declare_object @@ superglobal_object_nodischarge "LTACRECORDGRAPHNODEHASHES"
                  ~cache:(fun (_, hm) -> node_hashes := G.HashMap.union (fun _ v _ -> Some v) !node_hashes hm)
                  ~subst:None)
@@ -525,7 +525,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     Lib.add_anonymous_leaf @@
     in_dependencies (dirpath, (data_file ()), graph_builder.def_count, DPmap.domain !dependencies);
     Lib.add_anonymous_leaf @@ in_node_hashes @@
-    G.HashMap.filter (fun _ (p, _) -> DirPath.equal dirpath p) !node_hashes;
+    G.HashMap.filter (fun _ (_, (p, _)) -> DirPath.equal dirpath p) !node_hashes;
 
     write_graph graph_builder !definition_nodes !previous_definition non_trans_deps
 
