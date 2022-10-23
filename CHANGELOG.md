@@ -6,6 +6,12 @@ Changes to the Capn'proto format:
 
 Changes to the graph:
 - Fixed a bug in graph-sharing, where local context elements where shared based on a reversed index.
+- The physical location of a node is now determined by the calculation of a physical hash that includes
+  the global context of that node.
+- The physical location of nodes now also includes a hash of the file of that node. This is needed
+  because files may have diamond dependencies. This can cause two nodes that are physically equal to
+  be located in two unrelated dependencies, violating the contract of having only one hash for one node.
+  Adding the file to the hash resolves this.
 
 # v12
 

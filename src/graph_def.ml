@@ -853,20 +853,22 @@ module GraphHasher
       n.contents <- Normal { i with hash }
     | BinderPlaceholder _ -> assert false
 
-  let dirpath = H.with_state @@ fun h -> H.update_string (DirPath.to_string @@ Global.current_dirpath ()) h
   let share_node nl ({ physical; _ } as hash) conta contb =
+    (* We update the physical hash of any node with it's physical file location.
+       This is needed to make the node completely unique in an environment where
+       a file has a diamond dependency on other files. The two unrelated files may
+       have contain nodes with equal hashes, violating the rule of having only one
+       hash for one node. *)
+    let update node = H.with_state @@ fun h -> H.update (G.node_location node) @@ H.update physical h in
     let add_node node =
       let+ map, _ = ask in
-      HashMap.add map physical node in
+      HashMap.add map physical node;
+      { hash with physical = update node } in
     let* map, _ = ask in
     match HashMap.find_opt map physical with
-    | None ->
-      let physical = H.with_state @@ fun h -> H.update dirpath @@ H.update physical h in
-      conta { hash with physical } add_node
+    | None -> conta add_node
     | Some node ->
-      let physical = H.with_state @@ fun h ->
-        H.update (G.node_location node) @@ H.update physical h in
-      contb { hash with physical } node
+      contb { hash with physical = update node } node
 
   let write_node_and_children connected_component_hash n =
     let tag_connected_component { structural; physical } =
@@ -883,20 +885,20 @@ module GraphHasher
         let hash = tag_connected_component hash in
         let* ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
         share_node label hash
-          (fun hash add ->
+          (fun add ->
              let* node = lift @@ make_lower_node label hash ch in
-             let+ () = add node in
+             let+ hash = add node in
              n.contents <- Written (node, hash);
              node)
           (fun hash node -> n.contents <- Written (node, hash); return node)
       | Binder ({ label; children; hash; _ }, { final = true; is_definition; _ }) ->
         let hash = tag_connected_component hash in
         share_node label hash
-          (fun hash add ->
+          (fun add ->
              let* map, depth = ask in
              let+ node = lift @@ G.with_delayed_node ?definition:is_definition @@ fun node ->
                let computation =
-                 let* () = add node in
+                 let* hash = add node in
                  n.contents <- Written (node, hash);
                  let+ ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
                  node, (label, hash.structural), ch in
@@ -972,9 +974,9 @@ module GraphHasher
     match children_converged ch with
     | Some ch ->
       share_node nl hash
-       (fun hash add ->
+       (fun add ->
          let* node = lift @@ make_lower_node nl hash ch in
-         let+ () = add node in
+         let+ hash = add node in
          ref @@ Written (node, hash))
        (fun hash node -> return @@ ref @@ Written (node, hash))
     | None ->
@@ -1000,9 +1002,9 @@ module GraphHasher
     match children_converged ch with
     | Some ch ->
       share_node nl hash
-       (fun hash add ->
+       (fun add ->
          let* node' = lift @@ make_lower_node nl hash ch in
-         let+ () = add node' in
+         let+ hash = add node' in
          node.contents <- Written (node', hash);
          v)
        (fun hash node' ->
