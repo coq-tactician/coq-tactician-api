@@ -5,7 +5,7 @@ from pathlib import Path
 from functools import partial
 from collections import Counter
 import math
-from pytact.data_reader import lowlevel_data_reader
+from pytact.data_reader import lowlevel_data_reader, lowlevel_to_highlevel, Definition, Node
 import capnp
 capnp.remove_import_hook()
 import pytact.common
@@ -19,17 +19,8 @@ def open_dataset(dataset_path: Path):
     data = ctx.__enter__()
     global node_counts
     node_counts = [len(data[i].graph.nodes) for i in range(0, len(data.graph_files))]
-
-def get_cluster(d):
-    match d.which:
-        case "inductive":
-            return d.inductive
-        case "constructor":
-            return d.constructor
-        case "projection":
-            return d.projection
-        case _:
-            return None
+    global hdata
+    hdata = lowlevel_to_highlevel(data)
 
 def process1(args, fname: Path):
     file_definitions = 0
@@ -76,52 +67,41 @@ def process1(args, fname: Path):
     if file_definitions != len(freader.definitions):
         raise Exception(f"{fname}: Counted {file_definitions} definitions in the file, "
                         f"but Dataset.definitions has size {len(freader.definitions)}")
-    for n in freader.definitions:
-        if graph.nodes[n].label.which != graph_api_capnp.Graph.Node.Label.definition:
-            raise Exception(f"{fname}: Node {n} should be a definition but is not")
+
+    hreader = hdata[fname]
+    for d in hreader.definitions:
+        if not d.node.definition:
+            raise Exception(f"{fname}: Node {d.node} should be a definition but is not")
 
         # Check correctness of Definition struct
-        definition = graph.nodes[n].label.definition
-        status = definition.status
-        match status.which:
-            case graph_api_capnp.Definition.Status.original:
+        match d.status:
+            case Definition.Original():
                 file_original_definitions += 1
-            case graph_api_capnp.Definition.Status.discharged:
-                if (graph.nodes[status.discharged].label.which !=
-                    graph_api_capnp.Graph.Node.Label.definition):
-                    raise Exception(f"{fname}: Discharged node of definition {definition.name} "
+            case Definition.Discharged(original):
+                if not original.node.definition:
+                    raise Exception(f"{fname}: Discharged node of definition {d.name} "
                                     f"is not a definition")
-            case graph_api_capnp.Definition.Status.substituted:
-                if (data[data.local_to_global(graphid, status.substituted.depIndex)]
-                    .graph.nodes[status.substituted.nodeIndex].label.which !=
-                    graph_api_capnp.Graph.Node.Label.definition):
-                    raise Exception(f"{fname}: Substituted node of definition {definition.name} "
+            case Definition.Substituted(original):
+                if not original.node.definition:
+                    raise Exception(f"{fname}: Substituted node of definition {d.name} "
                                     f"is not a definition")
-        cluster = get_cluster(definition)
-        if cluster != None:
-            parent = cluster
-            while parent != n:
-                if parent >= nodes_count:
-                    raise Exception(f"{fname}: Cluster {cluster} {graph.nodes[cluster].label.definition.name} "
-                                    f"does not contain {n} {definition.name}")
-                pd = graph.nodes[parent].label.definition
-                pc = get_cluster(pd)
-                if pc == None or pc != cluster:
-                    raise Exception(f"{fname}: Cluster of {n} {definition.name} contains unrelated "
-                                    f"definition {parent} {pd.name}")
-                parent = pd.previous
-        if (definition.previous != nodes_count and
-            graph.nodes[definition.previous].label.which != graph_api_capnp.Graph.Node.Label.definition):
-            raise Exception(f"{fname}: Previous node of definition {definition.name} is not a definition")
-        for ep in definition.externalPrevious:
-            if ep >= dependency_count:
-                raise Exception(f"{fname}: External dependency of definition {definition.name} is "
-                                f"out of bounds")
-        if definition.which() == 'tacticalConstant' or definition.which() == 'tacticalSectionConstant':
-            if definition.which() == 'tacticalConstant':
-                ps = definition.tacticalConstant
-            else:
-                ps = definition.tacticalSectionConstant
+        crepr = d.cluster_representative
+        if d not in d.cluster:
+            raise Exception(f"{fname}: Cluster represented by {crepr.name}"
+                            f"does not contain {d.name}")
+        for cd in d.cluster:
+            if crepr != cd.cluster_representative:
+                raise Exception(f"{fname}: Cluster represented by {crepr.name} contains unrelated "
+                                f"definition {cd.name}")
+        if prev := d.previous:
+            if not prev.node.definition:
+                raise Exception(f"{fname}: Previous node of definition {d.name} is not a definition")
+        for ep in d.external_previous:
+            if not ep.node.definition:
+                raise Exception(f"{fname}: External dependency of definition {d.name} is "
+                                f"not a definition")
+        if ps := d.proof:
+            proofs += 1
             faithful = True
             before_states = set()
             for p in ps:
@@ -129,80 +109,63 @@ def process1(args, fname: Path):
                     before_states.add(outcome.before.id)
             for p in ps:
                 proof_steps += 1
-                if definition.status.which == graph_api_capnp.Definition.Status.original:
-                    original_proof_steps += 1
-                    if (p.tactic.which() == graph_api_capnp.ProofStep.Tactic.known
-                        and p.tactic.known.text == p.tactic.known.intermText):
-                        original_proof_steps_faithful += 1
-                    else:
-                        faithful = False
-                if p.tactic.which() == graph_api_capnp.ProofStep.Tactic.known:
-                    ident = p.tactic.known.ident
-                    file_base_tactics_text.add(p.tactic.known.baseText)
-                    file_base_tactics_intermtext.add(p.tactic.known.intermText)
+                if t := p.tactic:
+                    ident = t.ident
+                    file_base_tactics_text.add(t.base_text)
+                    file_base_tactics_intermtext.add(t.interm_text)
                 else:
                     ident = 0
                 file_tactics[ident] += 1
-                if definition.status.which() == graph_api_capnp.Definition.Status.original:
+                if isinstance(d.status, Definition.Original):
                     file_original_tactics[ident] += 1
+                    original_proof_steps += 1
+                    if (t := p.tactic) and t.text == t.interm_text:
+                            original_proof_steps_faithful += 1
+                    else:
+                        faithful = False
                 for outcome in p.outcomes:
                     for after in outcome.after:
                         if after.id not in before_states:
                             raise Exception(
-                                f"{fname}: After state {after} with tactic {p.tactic.text} "
-                                f"of definition {definition.name} does not have a corresponding "
+                                f"{fname}: After state {after} with tactic {p.tactic} "
+                                f"of definition {d.name} does not have a corresponding "
                                 f"before state")
-                    if (outcome.term.nodeIndex >=
-                        node_counts[data.local_to_global(graphid, outcome.term.depIndex)]):
+                    if not isinstance(outcome.term, Node):
                         raise Exception(f"{fname}: Term of outcome {outcome} of definition "
-                                        f"{definition.name} is out of bounds")
+                                        f"{d.name} is out of bounds")
                     for state in [outcome.before] + list(outcome.after):
-                        root_label = (data[data.local_to_global(graphid, state.root.depIndex)].graph
-                                      .nodes[state.root.nodeIndex].label.which)
-                        if root_label != graph_api_capnp.Graph.Node.Label.proofState:
+                        root_label = state.root.label
+                        if root_label.which != graph_api_capnp.Graph.Node.Label.proofState:
                             raise Exception(f"{fname}: root is proof state {state} is {root_label}")
-                        if len(state.context) != len(state.contextNames):
+                        if len(state._reader.context) != len(state._reader.contextNames):
                             raise Exception(f"{fname}: Length of context is different from length of"
                                             f"contextNames in proof state {state}")
-                        root_graphid = data.local_to_global(graphid, state.root.depIndex)
-                        root_graph = data[root_graphid].graph
-                        root_node = root_graph.nodes[state.root.nodeIndex]
-                        root_children = [(data.local_to_global(root_graphid,
-                                                               root_graph.edges[i].target.depIndex),
-                                         root_graph.edges[i].target.nodeIndex) for i in
-                                         range(root_node.childrenIndex,
-                                               root_node.childrenIndex+root_node.childrenCount)]
-                        for c in state.context:
-                            if (data.local_to_global(graphid, c.depIndex), c.nodeIndex) not in root_children:
+                        root_children = [child for _, child in state.root.children]
+                        for _, c in state.context:
+                            if c not in root_children:
                                 raise Exception(
-                                    f"{fname}: hyp {c} of state {state} in def {definition.name} is not "
+                                    f"{fname}: hyp {c} of state {state} in def {d.name} is not "
                                     f"reachable from the root")
-                            c_label = (data[data.local_to_global(graphid, c.depIndex)].graph
-                                      .nodes[c.nodeIndex].label.which)
-                            if c_label not in [graph_api_capnp.Graph.Node.Label.contextDef,
-                                               graph_api_capnp.Graph.Node.Label.contextAssum]:
+                            if c.label.which not in [graph_api_capnp.Graph.Node.Label.contextDef,
+                                                     graph_api_capnp.Graph.Node.Label.contextAssum]:
                                 raise Exception(
                                     f"{fname}: ctx {state.context} of a state {state} "
-                                    f"has the wrong node classification {c_label}")
+                                    f"has the wrong node classification {c.label}")
 
-                    file_tactic_arguments.setdefault(ident, len(outcome.tacticArguments))
-                    if file_tactic_arguments[ident] != len(outcome.tacticArguments):
+                    file_tactic_arguments.setdefault(ident, len(outcome.tactic_arguments))
+                    if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
                         raise Exception(f"{fname}: Tactic with two different argument lengths detected")
                     outcomes += 1
-                    if definition.status.which() == graph_api_capnp.Definition.Status.original:
+                    if isinstance(d.status, Definition.Original):
                         original_outcomes += 1
-                    for a in outcome.tacticArguments:
-                        if a.which == 'unresolvable':
+                    for a in outcome.tactic_arguments:
+                        if not a:
                             unresolvable += 1
-                        elif a.which == "term":
-                            if (a.term.nodeIndex >=
-                                node_counts[data.local_to_global(graphid, a.term.depIndex)]):
-                                raise Exception(f"{fname}: Argument of outcome {outcome} of definition "
-                                                f"{definition.name} is out of bounds")
                         else:
-                            raise Exception(f"{fname}: unknown tactical argument {a}")
-            proofs += 1
-            if definition.status.which == graph_api_capnp.Definition.Status.original:
+                            if not isinstance(a, Node):
+                                raise Exception(f"{fname}: Argument of outcome {outcome} of definition "
+                                                f"{d.name} is out of bounds")
+            if isinstance(d.status, Definition.Original):
                 original_proofs += 1
                 if faithful:
                     original_proofs_faithful += 1
