@@ -35,6 +35,7 @@ setuptools.setup(
                                'tests/prop4.txt']},
     install_requires=[
         'pycapnp',
+        'pyrsistent'
         'graphviz',
         'sanic[ext]==22.6.2',
         'Jinja2'],

@@ -1,11 +1,10 @@
 import argparse
 from multiprocessing import Pool
-import os
 from pathlib import Path
 from functools import partial
 from collections import Counter
 import math
-from pytact.data_reader import lowlevel_data_reader, lowlevel_to_highlevel, Definition, Node
+from pytact.data_reader import GlobalContextSets, lowlevel_data_reader, lowlevel_to_highlevel, Definition, Node
 import capnp
 capnp.remove_import_hook()
 import pytact.common
@@ -21,6 +20,8 @@ def open_dataset(dataset_path: Path):
     node_counts = [len(data[i].graph.nodes) for i in range(0, len(data.graph_files))]
     global hdata
     hdata = lowlevel_to_highlevel(data)
+    global global_contexts
+    global_contexts = GlobalContextSets.new_context().__enter__()
 
 def definition_direct_dependencies(d: Definition) -> set[Definition]:
     deps: set[Definition] = set()
@@ -87,117 +88,115 @@ def process1(args, fname: Path):
                         f"but Dataset.definitions has size {len(freader.definitions)}")
 
     hreader = hdata[fname]
-    for d in hreader.definitions:
-        if not d.node.definition:
-            raise Exception(f"{fname}: Node {d.node} should be a definition but is not")
+    with global_contexts.sub_context(lambda d: d.is_file_representative) as sub_global_contexts:
+        for d in hreader.definitions:
+            if not d.node.definition:
+                raise Exception(f"{fname}: Node {d.node} should be a definition but is not")
 
-        # Check correctness of Definition struct
-        match d.status:
-            case Definition.Original():
-                file_original_definitions += 1
-            case Definition.Discharged(original):
-                if not original.node.definition:
-                    raise Exception(f"{fname}: Discharged node of definition {d.name} "
-                                    f"is not a definition")
-            case Definition.Substituted(original):
-                if not original.node.definition:
-                    raise Exception(f"{fname}: Substituted node of definition {d.name} "
-                                    f"is not a definition")
+            # Check correctness of Definition struct
+            match d.status:
+                case Definition.Original():
+                    file_original_definitions += 1
+                case Definition.Discharged(original):
+                    if not original.node.definition:
+                        raise Exception(f"{fname}: Discharged node of definition {d.name} "
+                                        f"is not a definition")
+                case Definition.Substituted(original):
+                    if not original.node.definition:
+                        raise Exception(f"{fname}: Substituted node of definition {d.name} "
+                                        f"is not a definition")
 
-        direct_deps = definition_direct_dependencies(d)
-        for gc_elem in d.global_context:
-            direct_deps.discard(gc_elem)
-            if not direct_deps:
-                print("breaking")
-                break
-        if direct_deps:
-            raise Exception(f"{fname}: Definition {d.name} has dependencies {[d.name for d in direct_deps]}"
-                            f"which are not part of its global context")
+            direct_deps = definition_direct_dependencies(d)
+            global_context_set = sub_global_contexts.global_context_set(d)
+            for dd in direct_deps:
+                if dd not in global_context_set:
+                    raise Exception(f"{fname}: Definition {d.name} has dependency {dd.name} "
+                                    f"which are not part of its global context {global_context_set}")
 
-        crepr = d.cluster_representative
-        if d not in d.cluster:
-            raise Exception(f"{fname}: Cluster represented by {crepr.name}"
-                            f"does not contain {d.name}")
-        for cd in d.cluster:
-            if crepr != cd.cluster_representative:
-                raise Exception(f"{fname}: Cluster represented by {crepr.name} contains unrelated "
-                                f"definition {cd.name}")
-        if prev := d.previous:
-            if not prev.node.definition:
-                raise Exception(f"{fname}: Previous node of definition {d.name} is not a definition")
-        for ep in d.external_previous:
-            if not ep.node.definition:
-                raise Exception(f"{fname}: External dependency of definition {d.name} is "
-                                f"not a definition")
-        if ps := d.proof:
-            proofs += 1
-            faithful = True
-            before_states = set()
-            for p in ps:
-                for outcome in p.outcomes:
-                    before_states.add(outcome.before.id)
-            for p in ps:
-                proof_steps += 1
-                if t := p.tactic:
-                    ident = t.ident
-                    file_base_tactics_text.add(t.base_text)
-                    file_base_tactics_intermtext.add(t.interm_text)
-                else:
-                    ident = 0
-                file_tactics[ident] += 1
-                if isinstance(d.status, Definition.Original):
-                    file_original_tactics[ident] += 1
-                    original_proof_steps += 1
-                    if (t := p.tactic) and t.text == t.interm_text:
-                            original_proof_steps_faithful += 1
+            crepr = d.cluster_representative
+            if d not in d.cluster:
+                raise Exception(f"{fname}: Cluster represented by {crepr.name}"
+                                f"does not contain {d.name}")
+            for cd in d.cluster:
+                if crepr != cd.cluster_representative:
+                    raise Exception(f"{fname}: Cluster represented by {crepr.name} contains unrelated "
+                                    f"definition {cd.name}")
+            if prev := d.previous:
+                if not prev.node.definition:
+                    raise Exception(f"{fname}: Previous node of definition {d.name} is not a definition")
+            for ep in d.external_previous:
+                if not ep.node.definition:
+                    raise Exception(f"{fname}: External dependency of definition {d.name} is "
+                                    f"not a definition")
+            if ps := d.proof:
+                proofs += 1
+                faithful = True
+                before_states = set()
+                for p in ps:
+                    for outcome in p.outcomes:
+                        before_states.add(outcome.before.id)
+                for p in ps:
+                    proof_steps += 1
+                    if t := p.tactic:
+                        ident = t.ident
+                        file_base_tactics_text.add(t.base_text)
+                        file_base_tactics_intermtext.add(t.interm_text)
                     else:
-                        faithful = False
-                for outcome in p.outcomes:
-                    for after in outcome.after:
-                        if after.id not in before_states:
-                            raise Exception(
-                                f"{fname}: After state {after} with tactic {p.tactic} "
-                                f"of definition {d.name} does not have a corresponding "
-                                f"before state")
-                    if not isinstance(outcome.term, Node):
-                        raise Exception(f"{fname}: Term of outcome {outcome} of definition "
-                                        f"{d.name} is out of bounds")
-                    for state in [outcome.before] + list(outcome.after):
-                        root_label = state.root.label
-                        if root_label.which != graph_api_capnp.Graph.Node.Label.proofState:
-                            raise Exception(f"{fname}: root is proof state {state} is {root_label}")
-                        if len(state._reader.context) != len(state._reader.contextNames):
-                            raise Exception(f"{fname}: Length of context is different from length of"
-                                            f"contextNames in proof state {state}")
-                        root_children = [child for _, child in state.root.children]
-                        for _, c in state.context:
-                            if c not in root_children:
-                                raise Exception(
-                                    f"{fname}: hyp {c} of state {state} in def {d.name} is not "
-                                    f"reachable from the root")
-                            if c.label.which not in [graph_api_capnp.Graph.Node.Label.contextDef,
-                                                     graph_api_capnp.Graph.Node.Label.contextAssum]:
-                                raise Exception(
-                                    f"{fname}: ctx {state.context} of a state {state} "
-                                    f"has the wrong node classification {c.label}")
-
-                    file_tactic_arguments.setdefault(ident, len(outcome.tactic_arguments))
-                    if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
-                        raise Exception(f"{fname}: Tactic with two different argument lengths detected")
-                    outcomes += 1
+                        ident = 0
+                    file_tactics[ident] += 1
                     if isinstance(d.status, Definition.Original):
-                        original_outcomes += 1
-                    for a in outcome.tactic_arguments:
-                        if not a:
-                            unresolvable += 1
+                        file_original_tactics[ident] += 1
+                        original_proof_steps += 1
+                        if (t := p.tactic) and t.text == t.interm_text:
+                                original_proof_steps_faithful += 1
                         else:
-                            if not isinstance(a, Node):
-                                raise Exception(f"{fname}: Argument of outcome {outcome} of definition "
-                                                f"{d.name} is out of bounds")
-            if isinstance(d.status, Definition.Original):
-                original_proofs += 1
-                if faithful:
-                    original_proofs_faithful += 1
+                            faithful = False
+                    for outcome in p.outcomes:
+                        for after in outcome.after:
+                            if after.id not in before_states:
+                                raise Exception(
+                                    f"{fname}: After state {after} with tactic {p.tactic} "
+                                    f"of definition {d.name} does not have a corresponding "
+                                    f"before state")
+                        if not isinstance(outcome.term, Node):
+                            raise Exception(f"{fname}: Term of outcome {outcome} of definition "
+                                            f"{d.name} is out of bounds")
+                        for state in [outcome.before] + list(outcome.after):
+                            root_label = state.root.label
+                            if root_label.which != graph_api_capnp.Graph.Node.Label.proofState:
+                                raise Exception(f"{fname}: root is proof state {state} is {root_label}")
+                            if len(state._reader.context) != len(state._reader.contextNames):
+                                raise Exception(f"{fname}: Length of context is different from length of"
+                                                f"contextNames in proof state {state}")
+                            root_children = [child for _, child in state.root.children]
+                            for _, c in state.context:
+                                if c not in root_children:
+                                    raise Exception(
+                                        f"{fname}: hyp {c} of state {state} in def {d.name} is not "
+                                        f"reachable from the root")
+                                if c.label.which not in [graph_api_capnp.Graph.Node.Label.contextDef,
+                                                        graph_api_capnp.Graph.Node.Label.contextAssum]:
+                                    raise Exception(
+                                        f"{fname}: ctx {state.context} of a state {state} "
+                                        f"has the wrong node classification {c.label}")
+
+                        file_tactic_arguments.setdefault(ident, len(outcome.tactic_arguments))
+                        if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
+                            raise Exception(f"{fname}: Tactic with two different argument lengths detected")
+                        outcomes += 1
+                        if isinstance(d.status, Definition.Original):
+                            original_outcomes += 1
+                        for a in outcome.tactic_arguments:
+                            if not a:
+                                unresolvable += 1
+                            else:
+                                if not isinstance(a, Node):
+                                    raise Exception(f"{fname}: Argument of outcome {outcome} of definition "
+                                                    f"{d.name} is out of bounds")
+                if isinstance(d.status, Definition.Original):
+                    original_proofs += 1
+                    if faithful:
+                        original_proofs_faithful += 1
     if freader.representative != len(graph.nodes):
         if (graph.nodes[freader.representative].label.which() !=
             graph_api_capnp.Graph.Node.Label.definition):
@@ -294,8 +293,7 @@ def main():
         for tac, length in file_tactic_arguments.items():
             tactic_arguments.setdefault(tac, length)
             if tactic_arguments[tac] != length:
-                print(f'{fname}: Tactic with two different argument lengths detected')
-                raise Exception
+                raise Exception(f'{fname}: Tactic with two different argument lengths detected')
 
         unresolvable_total += unresolvable
 

@@ -14,15 +14,20 @@ dataset in order of preference:
 3. Contextmanager `file_dataset_reader(file)` provides low-level access to
    the Cap'n Proto structures of a single file. Using this is usually not
    advisable.
+
+Additionally, some indexing helpers are defined:
+- `GlobalContextSets` calculates and caches the global context of a definition
+  as a set, also caching intermediate results.
 """
 
 from __future__ import annotations
 import mmap
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
-from typing import Any, TypeAlias, Union, cast
+from typing import Any, Callable, TypeAlias, Union, cast
 from collections.abc import Iterable, Sequence, Generator
 from pathlib import Path
+from pyrsistent import s, PSet, m, PMap
 import capnp
 from pytact.common import graph_api_capnp
 
@@ -780,6 +785,12 @@ class Definition:
         else:
             return text
 
+    @property
+    def is_file_representative(self) -> bool:
+        """Returns true if this definition is the representative of the super-global context of it's file.
+        Se also `Dataset.representative`."""
+        return self._lreader[self._graph].representative == self.node.nodeid
+
 class Dataset:
     """The data corresponding to a single Coq source file. The data contains a representation of all definitions
     that have existed at any point throughout the compilation of the source file.
@@ -903,3 +914,78 @@ def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None
     """
     with lowlevel_data_reader(dataset_path) as lreader:
         yield lowlevel_to_highlevel(lreader)
+
+class GlobalContextSets:
+    """Lazily retrieve a the global context of a definition as a set, with memoization.
+
+    Because this class can allocate (large) amounts of memory, use it as a context-manager. To create a new
+    instance, and retrieve the context of a definition, use:
+    ```
+    with GlobalContextSets.new_context() as gcs:
+        gcs.global_context_set(my_definition)
+    ```
+    This context will be cached, as well as intermediate results (global contexts of other definitions) as
+    long as the context-set is in scope. Caching can be nested by using `sub_context`:
+    ```
+    with GlobalContextSets.new_context() as gcs:
+        gcs.global_context_set(my_definition)
+        with gcs.sub_context(lambda d:is_file_representative) as gcs_sub:
+            # gcs_sub remembers anything in the case of gcs
+            # caching is propagated to the parent cache only if the provided lambda evaluates to true
+            gcs_sub.global_context_set(my_definition2)
+    ```
+    """
+    def __init__(self, cache, parent: GlobalContextSets | None,
+                 should_propagate: Callable[[Definition], bool]):
+        """Do not call directly. Use `GlobalContextSets.new_context` and `GlobalContextSets.sub_context`."""
+        self.cache: PMap[Definition, Any] = cache
+        self.parent = parent
+        self.should_propagate = should_propagate
+
+    def _propagate(self, d: Definition, context: PSet):
+        self.cache = self.cache.set(d, context)
+        if self.should_propagate(d) and (parent := self.parent):
+            parent._propagate(d, context)
+
+    def _global_context_set(self, d: Definition) -> PSet:
+        try:
+            return self.cache[d]
+        except KeyError:
+            external_previous = list(d.external_previous)
+            if prev := d.previous:
+                new_set = self._global_context_set(prev).add(prev)
+            else:
+                if len(external_previous) > 0:
+                    ep = external_previous[0]
+                    new_set = self._global_context_set(ep).add(ep)
+                    external_previous = external_previous[1:]
+                else:
+                    new_set = s()
+            for ep in external_previous:
+                new_set = cast(PSet, new_set | self._global_context_set(ep).add(ep))
+            self._propagate(d, new_set)
+            return new_set
+
+    def global_context_set(self, d: Definition) -> PSet:
+        """Retrieve the global context of a definition, caching the result, and intermediate results."""
+        start = d.cluster_representative
+        context = self._global_context_set(start)
+        match start.kind:
+            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
+                context = context.add(start)
+        return context
+
+    @contextmanager
+    def sub_context(self, propagate: Callable[[Definition], bool]) -> Generator[GlobalContextSets, None, None]:
+        """Create a sub-context with a separate cache from it's parent, but sharing any info that was
+        already present in the parent's cache.
+
+        For any intermediate results for a definition `d` for which `propagate(d)` evaluates to true,
+        the result is propagated to the parent's cache."""
+        yield GlobalContextSets(self.cache, self, propagate)
+
+    @contextmanager
+    @staticmethod
+    def new_context() -> Generator[GlobalContextSets, None, None]:
+        """Crate a new caching context where global-context-set's can be retrieved and cached."""
+        yield GlobalContextSets(m(), None, lambda _: False)
