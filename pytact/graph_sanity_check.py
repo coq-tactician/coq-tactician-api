@@ -22,6 +22,24 @@ def open_dataset(dataset_path: Path):
     global hdata
     hdata = lowlevel_to_highlevel(data)
 
+def definition_direct_dependencies(d: Definition) -> set[Definition]:
+    deps: set[Definition] = set()
+    seen = set()
+    def recurse(node: Node):
+        if node in seen:
+            return
+        seen.add(node)
+        if d := node.definition:
+            deps.add(d)
+            return
+        for _, child in node.children:
+            recurse(child)
+
+    seen.add(d.node)
+    for _, child in d.node.children:
+        recurse(child)
+    return deps
+
 def process1(args, fname: Path):
     file_definitions = 0
     file_original_definitions = 0
@@ -85,6 +103,17 @@ def process1(args, fname: Path):
                 if not original.node.definition:
                     raise Exception(f"{fname}: Substituted node of definition {d.name} "
                                     f"is not a definition")
+
+        direct_deps = definition_direct_dependencies(d)
+        for gc_elem in d.global_context:
+            direct_deps.discard(gc_elem)
+            if not direct_deps:
+                print("breaking")
+                break
+        if direct_deps:
+            raise Exception(f"{fname}: Definition {d.name} has dependencies {[d.name for d in direct_deps]}"
+                            f"which are not part of its global context")
+
         crepr = d.cluster_representative
         if d not in d.cluster:
             raise Exception(f"{fname}: Cluster represented by {crepr.name}"
@@ -207,6 +236,10 @@ def main():
                        help='level of being verbose 0,1..')
 
     args = parser.parse_args()
+
+    import sys
+    sys.setrecursionlimit(10000)
+
     dataset_path = Path(args.dir).resolve()
 
     tactics = Counter()
@@ -233,7 +266,7 @@ def main():
 
     process1_partial = partial(process1, args)
     with Pool(args.jobs, open_dataset, [dataset_path]) as pool:
-        results = pool.map(process1_partial, file_list)
+        results = pool.map(process1_partial, file_list, chunksize=1)
 
     for res in results:
         (fname, nodes_count, edges_count,

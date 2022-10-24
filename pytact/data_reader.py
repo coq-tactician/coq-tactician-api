@@ -569,26 +569,26 @@ class Definition:
                 return count
         return Seq()
 
-    def __global_context(self, seen: set[Node]) -> Iterable[Definition]:
+    def _global_context(self, seen: set[Node]) -> Iterable[Definition]:
         if prev := self.previous:
             yield prev
-            yield from prev.__global_context(seen)
+            yield from prev._global_context(seen)
         for eprev in self.external_previous:
             if eprev.node not in seen:
                 yield eprev
-                yield from eprev.__global_context(seen)
+                yield from eprev._global_context(seen)
                 seen.add(eprev.node)
 
-    def __clustered_global_context(self, seen: set[Node]) -> Iterable[list[Definition]]:
+    def _clustered_global_context(self, seen: set[Node]) -> Iterable[list[Definition]]:
         if prev := self.previous:
             cluster = list(prev.cluster)
             yield cluster
-            yield from cluster[-1].__clustered_global_context(seen)
+            yield from cluster[-1]._clustered_global_context(seen)
         for eprev in self.external_previous:
             if eprev.node not in seen:
                 cluster = list(eprev.cluster)
                 yield cluster
-                yield from cluster[-1].__clustered_global_context(seen)
+                yield from cluster[-1]._clustered_global_context(seen)
                 seen.add(eprev.node)
 
     @property
@@ -599,7 +599,11 @@ class Definition:
         constructor or projection. Because those are mutually recursive objects, they reference themselves
         and are therefore part of their own global context.
         """
-        yield from self.cluster_representative.__global_context(set())
+        start = self.cluster_representative
+        match start.kind:
+            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
+                yield start
+        yield from start._global_context(set())
 
     @property
     def clustered_global_context(self) -> Iterable[list[Definition]]:
@@ -607,7 +611,11 @@ class Definition:
         mutually recursive cliques.
 
         The definition itself may be part of the first mutually recursive cluster."""
-        yield from self.cluster_representative.__clustered_global_context(set())
+        start_cluster = list(self.cluster)
+        match start_cluster[0].kind:
+            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
+                yield list(start_cluster)
+        yield from start_cluster[-1]._clustered_global_context(set())
 
     @dataclass
     class Original: pass
@@ -827,7 +835,7 @@ class Dataset:
         definitions from other files that are recursively `Require`'d."""
         if r := self.representative:
             yield r
-            yield from r.__global_context(set())
+            yield from r._global_context(set())
 
     @property
     def clustered_super_global_context(self) -> Iterable[list[Definition]]:
@@ -837,7 +845,7 @@ class Dataset:
         if r := self.representative:
             cluster = list(r.cluster)
             yield cluster
-            yield from cluster[-1].__clustered_global_context(set())
+            yield from cluster[-1]._clustered_global_context(set())
 
     @property
     def definitions(self) -> Sequence[Definition]:
