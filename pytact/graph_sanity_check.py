@@ -23,9 +23,10 @@ def open_dataset(dataset_path: Path):
     global global_contexts
     global_contexts = GlobalContextSets.new_context().__enter__()
 
-def definition_direct_dependencies(d: Definition) -> set[Definition]:
-    deps: set[Definition] = set()
-    seen = set()
+def node_dependencies(n: Node, deps: set[Definition] | None = None) -> set[Definition]:
+    if deps is None:
+        deps = set()
+    seen: set[Node] = set()
     def recurse(node: Node):
         if node in seen:
             return
@@ -36,9 +37,13 @@ def definition_direct_dependencies(d: Definition) -> set[Definition]:
         for _, child in node.children:
             recurse(child)
 
-    seen.add(d.node)
-    for _, child in d.node.children:
-        recurse(child)
+    recurse(n)
+    return deps
+
+def definition_dependencies(d: Definition):
+    deps = set()
+    for _, c in d.node.children:
+        node_dependencies(c, deps)
     return deps
 
 def process1(args, fname: Path):
@@ -106,12 +111,15 @@ def process1(args, fname: Path):
                         raise Exception(f"{fname}: Substituted node of definition {d.name} "
                                         f"is not a definition")
 
-            direct_deps = definition_direct_dependencies(d)
-            global_context_set = sub_global_contexts.global_context_set(d)
-            for dd in direct_deps:
-                if dd not in global_context_set:
-                    raise Exception(f"{fname}: Definition {d.name} has dependency {dd.name} "
-                                    f"which are not part of its global context {global_context_set}")
+            def check_in_global_context(s):
+                global_context = sub_global_contexts.global_context_set(d)
+                for dd in s:
+                    if dd not in global_context:
+                        raise Exception(f"{fname}: Definition {d.name} has dependency {dd.name} "
+                                        f"which is not part of its global context")
+
+            if not args.quick:
+                check_in_global_context(definition_dependencies(d))
 
             crepr = d.cluster_representative
             if d not in d.cluster:
@@ -158,13 +166,16 @@ def process1(args, fname: Path):
                                     f"{fname}: After state {after} with tactic {p.tactic} "
                                     f"of definition {d.name} does not have a corresponding "
                                     f"before state")
-                        if not isinstance(outcome.term, Node):
-                            raise Exception(f"{fname}: Term of outcome {outcome} of definition "
-                                            f"{d.name} is out of bounds")
+
+                        if not args.quick:
+                            check_in_global_context(node_dependencies(outcome.term))
                         for state in [outcome.before] + list(outcome.after):
                             root_label = state.root.label
                             if root_label.which != graph_api_capnp.Graph.Node.Label.proofState:
                                 raise Exception(f"{fname}: root is proof state {state} is {root_label}")
+
+                            if not args.quick:
+                                check_in_global_context(node_dependencies(state.root))
                             if len(state._reader.context) != len(state._reader.contextNames):
                                 raise Exception(f"{fname}: Length of context is different from length of"
                                                 f"contextNames in proof state {state}")
@@ -190,9 +201,8 @@ def process1(args, fname: Path):
                             if not a:
                                 unresolvable += 1
                             else:
-                                if not isinstance(a, Node):
-                                    raise Exception(f"{fname}: Argument of outcome {outcome} of definition "
-                                                    f"{d.name} is out of bounds")
+                                if not args.quick:
+                                    check_in_global_context(node_dependencies(a))
                 if isinstance(d.status, Definition.Original):
                     original_proofs += 1
                     if faithful:
@@ -229,6 +239,9 @@ def main():
                         type=int,
                         default=None,
                         help='number of parallel multiprocessing jobs to run')
+    parser.add_argument('--quick',
+                        action='store_true',
+                        help='skip the more expensive checks')
     parser.add_argument('--verbose',
                        type = int,
                        default = 0,
