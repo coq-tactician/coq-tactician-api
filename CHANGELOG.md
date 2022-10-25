@@ -2,6 +2,7 @@
 Changes to the Capn'proto format:
 - Upgraded magic id to v13
 - Added a backwards-compatible field `Dataset.moduleName`
+- Added a textual representation of hypothesis in `ProofState.contextText`.
 - Added the `ProofStateId` to `evar` nodes, which can be cross-referenced with `ProofState.id`.
 
 Changes to the graph:

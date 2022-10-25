@@ -242,10 +242,16 @@ struct ProofState {
   # been modified to use auto-generated names. Hence, tactics should not be concerned about the names of
   # the context.
 
-  text @4 :Text;
+  contextText @4 :List(Text);
+  # A textual representation of the type/definition of context nodes
+
+  conclusionText @5 :Text;
+  # A textual representation of the conclusion of the proof state.
+
+  text @6 :Text;
   # A textual representation of the proof state.
 
-  id @5 :ProofStateId;
+  id @7 :ProofStateId;
   # A unique identifier of the proof state. Any two proof states in a tactical proof that have an equal id
   # can morally be regarded to be 'the same' proof state.
   # IMPORTANT: Two proof states with the same id may still have different contents. This is because proof states

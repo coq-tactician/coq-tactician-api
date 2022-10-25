@@ -20,20 +20,22 @@ let with_depth f =
   Fun.protect ~finally:(fun () -> Topfmt.set_depth_boxes old)
     (fun () -> Topfmt.set_depth_boxes (Some 32); f ())
 
+let constr_str env evar_map t = Pp.string_of_ppcmds (Sexpr.format_oneline (
+    Printer.safe_pr_constr_env env evar_map t))
+
+let hyp_to_string_safe env evar_map =
+  let id_str id = Names.Id.to_string id.binder_name in
+  function
+  | Named.Declaration.LocalAssum (id, typ) ->
+    id_str id ^ " : " ^ constr_str env evar_map typ
+  | Named.Declaration.LocalDef (id, term, typ) ->
+    id_str id ^ " := " ^ constr_str env evar_map term ^ " : " ^ constr_str env evar_map typ
+
 (* Safe version of Learner_helper.proof_state_to_string *)
 let proof_state_to_string_safe (hyps, concl) env evar_map =
-  let open Context in
-  let constr_str t = Pp.string_of_ppcmds (Sexpr.format_oneline (
-      Printer.safe_pr_constr_env env evar_map t)) in
-  let goal = constr_str concl in
-  let id_str id = Names.Id.to_string id.binder_name in
+  let goal = constr_str env evar_map concl in
   let hyps = List.rev hyps in
-  let hyps = List.map (function
-      | Named.Declaration.LocalAssum (id, typ) ->
-        id_str id ^ " : " ^ constr_str typ
-      | Named.Declaration.LocalDef (id, term, typ) ->
-        id_str id ^ " := " ^ constr_str term ^ " : " ^ constr_str typ
-    ) hyps in
+  let hyps = List.map (hyp_to_string_safe env evar_map) hyps in
   String.concat ", " hyps ^ " |- " ^ goal
 
 type single_proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
@@ -541,8 +543,13 @@ end = struct
         let+ cont = with_evar evar root arr m in
         (* TODO: Look into what we should give as the evd here *)
         let ps_string = proof_state_to_string_safe (hyps, concl) env evd in
-        let context = Id.Map.bindings map in
-        { ps_string; root; context; evar }, cont in
+        let concl_string = constr_str env evd concl in
+        let context = OList.rev @@ OList.filter_map (fun hyp ->
+            let id = Named.Declaration.get_id hyp in
+            match Id.Map.find_opt id map with
+            | None -> None
+            | Some node -> Some { id; node; text = hyp_to_string_safe env evd hyp }) hyps in
+        { ps_string; concl_string; root; context; evar }, cont in
       let with_after_states after m =
         OList.fold_left (fun m (evd, _, st) ->
             let+ ps, (ls, res) = with_proof_state evd st m in
@@ -550,7 +557,7 @@ end = struct
           ) (let+ m = m in [], m) after in
       let+ (proof_states_after, (proof_state_before, arguments, term)) =
         with_after_states after @@
-        let* ctx, (subject, arguments, context, term) = with_named_context gen_constr before_hyps @@
+        let* ctx, (subject, arguments, map, term) = with_named_context gen_constr before_hyps @@
           let* subject = gen_constr before_concl
           and+ term = gen_constr term
           and+ map = lookup_named_map in
@@ -592,11 +599,16 @@ end = struct
                   )
                 | TOther -> return None
               ) args in
-          let context = Id.Map.bindings map in
-          subject, arguments, context, term in
+          subject, arguments, map, term in
         let+ root = mk_node ProofState ((ContextSubject, subject)::ctx) in
         let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
-        { ps_string; root; context; evar = before_evar }, arguments, term in
+        let concl_string = constr_str env before_sigma before_concl in
+        let context = OList.rev @@ OList.filter_map (fun hyp ->
+            let id = Named.Declaration.get_id hyp in
+            match Id.Map.find_opt id map with
+            | None -> None
+            | Some node -> Some { id; node; text = hyp_to_string_safe env before_sigma hyp }) before_hyps in
+        { ps_string; concl_string; root; context; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
     let+ outcomes = List.map gen_outcome outcomes in
     { tactic; outcomes }

@@ -32,20 +32,23 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
        Status.Substituted.dep_index_set_exn capnp_node @@ node_depindex n;
        Status.Substituted.node_index_set_int_exn capnp_node @@ node_local_index n);
     let write_proof arr proof =
-      let write_proof_state capnp_state { root; context; ps_string; evar } =
+      let write_proof_state capnp_state { root; context; ps_string; concl_string; evar } =
         let capnp_root = K.Builder.ProofState.root_init capnp_state in
         K.Builder.ProofState.Root.dep_index_set_exn capnp_root @@ node_depindex root;
         K.Builder.ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index root;
         let context_arr = K.Builder.ProofState.context_init capnp_state @@ List.length context in
-        List.iteri (fun i (_, arg) ->
+        List.iteri (fun i { node; _ } ->
             let arri = Capnp.Array.get context_arr i in
-            K.Builder.Node.dep_index_set_exn arri @@ node_depindex arg;
-            K.Builder.Node.node_index_set_int_exn arri @@ node_local_index arg
+            K.Builder.Node.dep_index_set_exn arri @@ node_depindex node;
+            K.Builder.Node.node_index_set_int_exn arri @@ node_local_index node
           ) context;
         if include_metadata then begin
           ignore(K.Builder.ProofState.context_names_set_list capnp_state
-                   (List.map (fun (id, _) -> Id.to_string id) context));
-          K.Builder.ProofState.text_set capnp_state ps_string
+                   (List.map (fun { id; _ } -> Id.to_string id) context));
+          ignore(K.Builder.ProofState.context_text_set_list capnp_state
+                   (List.map (fun { text; _ } -> text) context));
+          K.Builder.ProofState.text_set capnp_state ps_string;
+          K.Builder.ProofState.conclusion_text_set capnp_state concl_string
         end;
         K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in
       let write_outcome capnp { term; term_text; arguments; proof_state_before; proof_states_after } =

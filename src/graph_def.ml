@@ -45,10 +45,16 @@ type constant = Constant.t
                 [@printer fun fmt c -> fprintf fmt "%s" (Label.to_string @@ Constant.label c)][@@deriving show]
 type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@deriving show]
 
+type 'node context_item =
+  { id : Id.t
+  ; node : 'node
+  ; text : string }
+
 type 'node proof_state =
   { ps_string     : string
+  ; concl_string  : string
   ; root          : 'node
-  ; context       : (Id.t * 'node) list
+  ; context       : 'node context_item list
   ; evar          : Evar.t }
 
 type 'node outcome =
