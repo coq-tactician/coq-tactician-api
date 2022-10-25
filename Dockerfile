@@ -2,15 +2,15 @@ FROM coqorg/coq:8.11.2-ocaml-4.11.2-flambda
 
 MAINTAINER Vasily Pestun "pestun@ihes.fr"
 
-# conda + pythnon 3.9
+# conda + pythnon 3.10
 
 RUN curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o \
     Miniconda3-latest-Linux-x86_64.sh && sh Miniconda3-latest-Linux-x86_64.sh -b -f
 ENV HOME="/home/coq"
 ENV CONDA_EXE="${HOME}/miniconda3/bin/conda"
 
-RUN $CONDA_EXE create -n python3.9 python=3.9 -y
-ENV CONDA_PREFIX="${HOME}/miniconda3/envs/python3.9"
+RUN $CONDA_EXE create -n python3.10 python=3.10 -y
+ENV CONDA_PREFIX="${HOME}/miniconda3/envs/python3.10"
 ENV CONDA_PYTHON_EXE="${HOME}/miniconda3/bin/python"
 RUN echo 'PATH=$CONDA_PREFIX/bin:$PATH' >> .profile
 
