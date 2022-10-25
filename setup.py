@@ -30,6 +30,7 @@ setuptools.setup(
     python_requires='>=3.10',
     include_package_data=True,
     package_data = {'pytact': ['graph_api.capnp',
+                               'templates/visualizer.html',
                                'tests/TestReinforceStdin.v',
                                'tests/TestReinforceTcp.v',
                                'tests/prop4.txt']},

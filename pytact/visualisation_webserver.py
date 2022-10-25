@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from pathlib import Path
 import argparse
+import pkg_resources
 
 from pytact.data_reader import data_reader
 from pytact.graph_visualize_browse import (
@@ -26,6 +27,7 @@ def post_process(output: GraphVisualizationOutput, settings: Settings):
     return result
 
 app = Sanic("graph-visualizer")
+app.config.TEMPLATING_PATH_TO_TEMPLATES = pkg_resources.resource_filename('pytact', 'templates/')
 
 class SanicUrlMaker(UrlMaker):
 
