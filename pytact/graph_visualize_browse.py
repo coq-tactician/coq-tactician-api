@@ -5,7 +5,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from abc import ABC, abstractmethod
 from pathlib import Path
-from pytact.data_reader import Dataset, Definition, Node
+from pytact.data_reader import Dataset, Definition, Node, ProofState
 import html
 import capnp
 capnp.remove_import_hook()
@@ -40,6 +40,7 @@ class Settings:
     ignore_edges: list[int] = field(default_factory=lambda: [])
     unshare_nodes: list[int] = field(default_factory=lambda: [])
     show_trivial_evar_substs: bool = False
+    hide_proof_terms: bool = False
     show_edge_labels: bool = False
     order_edges: bool = False
     concentrate_edges: bool = False
@@ -65,6 +66,8 @@ class GraphVisualizationOutput:
     svg: bytes
     location: list[tuple[str, str]] # tuple[Name, URL]
     active_location: int
+    text: list[str] = field(default_factory=lambda: [])
+    popups: list[tuple[str, str]] = field(default_factory=lambda: []) # DOM id, text
 
 def camel2pascal_case(s: str) -> str:
     if s.islower():
@@ -103,6 +106,9 @@ def node_label_map(node: Node) -> tuple[str, str, str]:
             name = camel2pascal_case(str(label.which))
             return 'ellipse', name, name
 
+def truncate_string(data, maximum):
+    return data[:(maximum-2)] + '..' if len(data) > maximum else data
+
 def make_label(context, name):
     name_split = name.split('.')
     common = os.path.commonprefix([name_split, context.split('.')])
@@ -111,6 +117,10 @@ def make_label(context, name):
 def make_tooltip(d):
     return f"{camel2pascal_case(str(d.node.label.definition.which))} {d.name}"
 
+def render_proof_state_text(ps: ProofState):
+    return ('<br>'.join(ps.context_text) +
+            '<br>----------------------<br>' + ps.conclusion_text +
+            '<br><br>Raw: ' + ps.text)
 
 class GraphVisualizator:
     def __init__(self, data: GraphVisualizationData, url_maker: UrlMaker, settings: Settings = Settings()):
@@ -157,7 +167,7 @@ class GraphVisualizator:
         if not tooltip:
             tooltip = label
         url = None
-        if d := node.definition:
+        if node.definition:
             url = self.url_maker.definition(node.path, node.nodeid)
         dot.node(id, label, URL = url, shape = shape, tooltip = tooltip)
         return id
@@ -316,9 +326,13 @@ class GraphVisualizator:
         location = self.path2location(fname)
         ext_location = location
         label = "[not a definition]"
+        text = []
         proof = []
         if d := start.definition:
             label = d.name
+            text = [f"Type: {d.type_text}"]
+            if term := d.term_text:
+                text.append(f"Term: {term}")
             if d.proof:
                 proof = [("Proof", self.url_maker.proof(fname, definition))]
         ext_location = (
@@ -326,7 +340,7 @@ class GraphVisualizator:
             [(make_label(self.data[fname].module_name, label),
               self.url_maker.definition(fname, definition))] +
             proof)
-        return GraphVisualizationOutput(dot.pipe(), ext_location, len(location))
+        return GraphVisualizationOutput(dot.pipe(), ext_location, len(location), text)
 
     def proof(self, fname: Path, definition: int):
         node = self.data[fname].node_by_id(definition)
@@ -397,48 +411,85 @@ class GraphVisualizator:
         outcome = proof[stepi].outcomes[outcomei]
         seen = {}
 
-        def node_label_map_with_ctx_names(context: Sequence[tuple[str, Node]]):
-            mapping = {n: s for s, n in context}
+        def node_label_map_with_ctx_names(context: Sequence[Node],
+                                          context_text: Sequence[str]):
+            mapping = {n: s for n, s in zip(context, context_text)}
             def nlm(node: Node):
                 enum = graph_api_capnp.Graph.Node.Label
                 match node.label.which:
                     case enum.contextAssum:
-                        name = f"ContextAssum {mapping[node]}"
-                        return 'ellipse', name, name
+                        name = mapping[node]
+                        return 'ellipse', truncate_string(name, 20), f"ContextAssum {name}"
                     case enum.contextDef:
-                        name = f"ContextDef {mapping[node]}"
-                        return 'ellipse', name, name
+                        name = mapping[node]
+                        return 'ellipse', truncate_string(name, 20), f"ContextDef {name}"
                     case _:
                         return node_label_map(node)
             return nlm
 
+        popups = []
+
         with dot.subgraph(name='cluster_before') as dot2:
-            dot2.attr('graph', label="Before state")
             ps = outcome.before
+            dot2.attr('graph',
+                      label=f"Before state\n{truncate_string(ps.conclusion_text, 70)}",
+                      tooltip=f"Before state {ps.conclusion_text}",
+                      id='before-state')
+            popups.append(('before-state', render_proof_state_text(ps)))
             prefix = 'before'
             self.visualize_term(dot2, ps.root, depth=depth, prefix=prefix, before_prefix=prefix,
                                 maxNodes=maxNodes, seen=seen,
-                                node_label_map=node_label_map_with_ctx_names(ps.context))
+                                node_label_map=node_label_map_with_ctx_names(ps.context, ps.context_text))
+
+        with dot.subgraph(name='cluster_tactic') as dot2:
+            prefix = 'before'
+            tactic_text = 'unknown'
+            tactic_base_text = 'unknown'
+            if t := outcome.tactic:
+                tactic_text = t.text
+                tactic_base_text = (t.base_text.replace('__argument_marker__', '_')
+                                    .replace('private_constant_placeholder', '_'))
+            dot2.attr('graph', label=f"Tactic\n{tactic_text}")
+            dot2.node('tactic', label = tactic_base_text)
+            for i, arg in enumerate(outcome.tactic_arguments):
+                if arg == None:
+                    dot2.node(f"tactic-arg{i}", label=f"arg {i}: unknown")
+                else:
+                    id = self.visualize_term(dot2, arg, depth=depth, prefix=prefix, before_prefix=prefix,
+                                        maxNodes=maxNodes, seen=seen)
+                    dot2.node(f"tactic-arg{i}", label=f"arg {i}")
+                    dot2.edge(f"tactic-arg{i}", id)
+                dot2.edge('tactic', f"tactic-arg{i}")
+
 
         for ai, after in enumerate(outcome.after):
             with dot.subgraph(name='cluster_after' + str(ai)) as dot2:
-                dot2.attr('graph', label="After state " + str(ai))
+                dot2.attr('graph',
+                          label=f"After state {ai}\n{truncate_string(after.conclusion_text, 70)}",
+                          tooltip=f"After state {ai} {after.conclusion_text}",
+                          id=f'after-state{ai}')
+                popups.append((f'after-state{ai}', render_proof_state_text(after)))
                 prefix = f'after{ai}'
                 self.visualize_term(dot2, after.root, depth=depth, prefix=prefix, before_prefix=prefix,
                                     maxNodes=maxNodes, seen=seen,
-                                    node_label_map=node_label_map_with_ctx_names(after.context))
+                                    node_label_map=node_label_map_with_ctx_names(after.context, after.context_text))
 
-        with dot.subgraph(name='cluster_term') as dot2:
-            dot2.attr('graph', label="Proof term")
-            prefix = 'term'
-            proof_state_prefix = {after.id: f'after{ai}' for ai, after in enumerate(outcome.after)}
-            id = self.visualize_term(dot2, outcome.term, depth=depth, prefix=prefix, before_prefix='before',
-                                proof_state_prefix=proof_state_prefix,
-                                maxNodes=maxNodes, seen=seen)
-            # Sometimes the subgraph is completely empty because the term is contained in another subgraph.
-            # Therefore, we artificially add a extra root node
-            dot2.node('artificial-root', 'TermRoot')
-            dot2.edge('artificial-root', id)
+        if not self.settings.hide_proof_terms:
+            with dot.subgraph(name='cluster_term') as dot2:
+                dot2.attr('graph',
+                          label=f"Proof term\n{truncate_string(outcome.term_text, 70)}",
+                          tooltip=f"Proof term {outcome.term_text}",
+                          id='proof-term')
+                popups.append(('proof-term', outcome.term_text))
+                prefix = 'term'
+                proof_state_prefix = {after.id: f'after{ai}' for ai, after in enumerate(outcome.after)}
+                id = self.visualize_term(dot2, outcome.term, depth=depth, prefix=prefix, before_prefix='before',
+                                    proof_state_prefix=proof_state_prefix,
+                                    maxNodes=maxNodes, seen=seen)
+                # Sometimes the subgraph is completely empty because the term is contained in another subgraph.
+                # Therefore, we artificially add a extra root node
+                dot2.node('artificial-root', 'TermRoot')
+                dot2.edge('artificial-root', id)
 
         location = (self.path2location(fname) +
                     [(make_label(self.data[fname].module_name, d.name),
@@ -446,7 +497,7 @@ class GraphVisualizator:
                      ("Proof", self.url_maker.proof(fname, definition)),
                      (f"Step {stepi} outcome {outcomei}",
                       self.url_maker.outcome(fname, definition, stepi, outcomei))])
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
+        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1, [], popups)
 
     def folder(self, expand_path: Path) -> GraphVisualizationOutput:
         expand_parts = expand_path.parts
