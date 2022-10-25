@@ -176,11 +176,14 @@ def process1(args, fname: Path):
 
                             if not args.quick:
                                 check_in_global_context(node_dependencies(state.root))
-                            if len(state._reader.context) != len(state._reader.contextNames):
+                            if len(state.context) != len(state.context_names):
                                 raise Exception(f"{fname}: Length of context is different from length of"
-                                                f"contextNames in proof state {state}")
+                                                f"context_names in proof state {state}")
+                            if len(state.context) != len(state.context_text):
+                                raise Exception(f"{fname}: Length of context is different from length of"
+                                                f"context_text in proof state {state}")
                             root_children = [child for _, child in state.root.children]
-                            for _, c in state.context:
+                            for c in state.context:
                                 if c not in root_children:
                                     raise Exception(
                                         f"{fname}: hyp {c} of state {state} in def {d.name} is not "

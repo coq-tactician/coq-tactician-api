@@ -311,7 +311,7 @@ class ProofState:
                     root.nodeIndex, self._lreader)
 
     @property
-    def context(self) -> Sequence[tuple[str, Node]]:
+    def context(self) -> Sequence[Node]:
         """The local context of the proof state, given as a tuple of their original name as they appeared in the
         proof and the corresponding node.
 
@@ -325,19 +325,29 @@ class ProofState:
         graph = self._graph
         lreader = self._lreader
         context = self._reader.context
-        context_names = self._reader.contextNames
         count = len(context)
-        class Seq(Sequence[tuple[str, Node]]):
-            def __getitem__(self, index: int) -> tuple[str, Node]:
+        class Seq(Sequence[Node]):
+            def __getitem__(self, index: int) -> Node:
                 if index >= count:
                     raise IndexError()
                 n = context[index]
-                return (context_names[index],
-                        Node(lreader.local_to_global(graph, n.depIndex),
+                return (Node(lreader.local_to_global(graph, n.depIndex),
                              n.nodeIndex, lreader))
             def __len__(self) -> int:
                 return count
         return Seq()
+
+    @property
+    def context_names(self) -> Sequence[str]:
+        return self._reader.contextNames
+
+    @property
+    def context_text(self) -> Sequence[str]:
+        return self._reader.contextText
+
+    @property
+    def conclusion_text(self) -> str:
+        return self._reader.conclusionText
 
     @property
     def text(self) -> str:
