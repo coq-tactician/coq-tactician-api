@@ -907,7 +907,7 @@ class Dataset:
     @property
     def super_global_definitions(self) -> Iterable[Definition]:
         """All of the definitions present in the file that become available when this file is `Require`'d by
-        another file. This is a hybrid between `super_global_context` and `definition`."""
+        another file. This is a hybrid between `super_global_context` and `definitions`."""
         curr = self.representative
         while curr is not None:
             yield curr
@@ -917,7 +917,7 @@ class Dataset:
     def clustered_super_global_definitions(self) -> Iterable[list[Definition]]:
         """All of the definitions present in the file that become available when this file is `Require`'d by
         another file, clustered by mutually recursive definitions. This is a hybrid between
-        `clustered_super_global_context` and `clustered_definition`."""
+        `clustered_super_global_context` and `clustered_definitions`."""
         curr = self.representative
         while curr is not None:
             cluster = list(curr.cluster)
