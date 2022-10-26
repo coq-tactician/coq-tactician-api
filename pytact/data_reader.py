@@ -905,6 +905,26 @@ class Dataset:
                     seen.add(cd.node.nodeid)
 
     @property
+    def super_global_definitions(self) -> Iterable[Definition]:
+        """All of the definitions present in the file that become available when this file is `Require`'d by
+        another file. This is a hybrid between `super_global_context` and `definition`."""
+        curr = self.representative
+        while curr is not None:
+            yield curr
+            curr = curr.previous
+
+    @property
+    def clustered_super_global_definitions(self) -> Iterable[list[Definition]]:
+        """All of the definitions present in the file that become available when this file is `Require`'d by
+        another file, clustered by mutually recursive definitions. This is a hybrid between
+        `clustered_super_global_context` and `clustered_definition`."""
+        curr = self.representative
+        while curr is not None:
+            cluster = list(curr.cluster)
+            yield cluster
+            curr = cluster[-1].previous
+
+    @property
     def module_name(self) -> str:
         return self._reader.moduleName
 
