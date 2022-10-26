@@ -36,15 +36,15 @@ graph_api_capnp = capnp.load(graph_api_capnp())  # pyright: ignore
 
 T = TypeVar('T')
 class TupleLike(Sequence[T]):
-    def __item__(self, count : int, index_getter : Callable[[Any], T]):
-        super.__init__()
+    def __init__(self, count : int, index_getter : Callable[[int], T]):
+        super().__init__()
         self._count = count
         self._index_getter = index_getter
     def __getitem__(self, index: int) -> T:
-        if index >= count: raise IndexError()
+        if index >= self._count: raise IndexError()
         return self._index_getter(index)
     def __len__(self) -> int:
-        return _count
+        return self._count
 
 @contextmanager
 def file_dataset_reader(fname: Path) -> Generator[Any, None, None]:
@@ -686,9 +686,9 @@ class Definition:
         lreader = self._lreader
         class ProofStepSeq(TupleLike):
             def __init__(self, reader):
-                super.__init__(
+                super().__init__(
                     len(reader),
-                    lambda index: ProofStep(self._reader[index], graph, lreader)
+                    lambda index: ProofStep(reader[index], graph, lreader)
                 )
         # TODO: pycapnp does not seem to allow matching on graph_api_capnp.Definition.inductive,
         #       we should report this at some point. Alternative is to use the string.
@@ -850,8 +850,6 @@ class Dataset:
         Note that some of these nodes may not be part of the 'super-global' context. Those are definitions inside
         of sections or module functors.
         """
-        if not spine_only and across_files:
-            raise Exception("Options spine_only=False and across_files=True are incompatible")
         graph = self._graph
         lreader = self._lreader
         ds = self._reader.definitions
