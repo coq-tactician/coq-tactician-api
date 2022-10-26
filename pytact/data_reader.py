@@ -24,7 +24,7 @@ from __future__ import annotations
 import mmap
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
-from typing import Any, Callable, TypeAlias, Union, cast
+from typing import Any, Callable, TypeVar, TypeAlias, Union, cast
 from collections.abc import Iterable, Sequence, Generator
 from pathlib import Path
 from pyrsistent import s, PSet, m, PMap
@@ -33,6 +33,18 @@ from pytact.common import graph_api_capnp
 
 capnp.remove_import_hook()  # pyright: ignore
 graph_api_capnp = capnp.load(graph_api_capnp())  # pyright: ignore
+
+T = TypeVar('T')
+class TupleLike(Sequence[T]):
+    def __init__(self, count : int, index_getter : Callable[[int], T]):
+        super().__init__()
+        self._count = count
+        self._index_getter = index_getter
+    def __getitem__(self, index: int) -> T:
+        if index >= self._count: raise IndexError()
+        return self._index_getter(index)
+    def __len__(self) -> int:
+        return self._count
 
 @contextmanager
 def file_dataset_reader(fname: Path) -> Generator[Any, None, None]:
@@ -203,17 +215,12 @@ class Node:
         edges = lreader[self._graph].graph.edges
         start = node.childrenIndex
         count = node.childrenCount
-        class Seq(Sequence[tuple[Any, Node]]):
-            def __getitem__(self, index: int) -> tuple[Any, Node]:
-                if index >= count:
-                    raise IndexError()
-                edge = edges[start+index]
-                return (edge.label,
-                   Node(lreader.local_to_global(graph, edge.target.depIndex),
-                        edge.target.nodeIndex, lreader))
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        def get_item(index):
+            edge = edges[start+index]
+            return (edge.label,
+               Node(lreader.local_to_global(graph, edge.target.depIndex),
+                    edge.target.nodeIndex, lreader))
+        return TupleLike(count, get_item)
 
     @property
     def definition(self) -> Definition | None:
@@ -326,16 +333,11 @@ class ProofState:
         lreader = self._lreader
         context = self._reader.context
         count = len(context)
-        class Seq(Sequence[Node]):
-            def __getitem__(self, index: int) -> Node:
-                if index >= count:
-                    raise IndexError()
-                n = context[index]
-                return (Node(lreader.local_to_global(graph, n.depIndex),
-                             n.nodeIndex, lreader))
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        def get_item(index):
+            n = context[index]
+            return (Node(lreader.local_to_global(graph, n.depIndex),
+                         n.nodeIndex, lreader))
+        return TupleLike(count, get_item)
 
     @property
     def context_names(self) -> Sequence[str]:
@@ -405,14 +407,10 @@ class Outcome:
         lreader = self._lreader
         after = self._reader.after
         count = len(after)
-        class Seq(Sequence[ProofState]):
-            def __getitem__(self, index: int) -> ProofState:
-                if index >= count:
-                    raise IndexError()
-                return ProofState(after[index], graph, lreader)
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        return TupleLike(
+            count,
+            lambda index: ProofState(after[index], graph, lreader)
+        )
 
     @property
     def term(self) -> Node:
@@ -440,20 +438,15 @@ class Outcome:
         lreader = self._lreader
         args = self._reader.tacticArguments
         count = len(args)
-        class Seq(Sequence[Node | Unresolvable]):
-            def __getitem__(self, index: int) -> Node | Unresolvable:
-                if index >= count:
-                    raise IndexError()
-                arg = args[index]
-                match arg.which:
-                    case 'unresolvable':
-                        return None
-                    case 'term':
-                        return Node(lreader.local_to_global(graph, arg.term.depIndex),
-                                    arg.term.nodeIndex, lreader)
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        def get_index(index):
+            arg = args[index]
+            match arg.which:
+                case 'unresolvable':
+                    return None
+                case 'term':
+                    return Node(lreader.local_to_global(graph, arg.term.depIndex),
+                                arg.term.nodeIndex, lreader)
+        return TupleLike(count, get_index)
 
 class ProofStep:
     """A proof step is the execution of a single tactic on one or more proof states, producing a list of outcomes.
@@ -496,14 +489,10 @@ class ProofStep:
         tactic = self.tactic
         outcomes = self._reader.outcomes
         count = len(outcomes)
-        class Seq(Sequence[Outcome]):
-            def __getitem__(self, index: int) -> Outcome:
-                if index >= count:
-                    raise IndexError()
-                return Outcome(outcomes[index], tactic, graph, lreader)
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        return TupleLike(
+            count,
+            lambda index: Outcome(outcomes[index], tactic, graph, lreader)
+        )
 
 class Definition:
     """A definition of the CIC, which is either an constant, inductive, constructor, projection or section
@@ -574,15 +563,10 @@ class Definition:
         graph = self._graph
         eps = self._reader.externalPrevious
         count = len(eps)
-        class Seq(Sequence[Definition]):
-            def __getitem__(self, index: int) -> Definition:
-                if index >= count:
-                    raise IndexError()
-                depgraph = lreader.local_to_global(graph, eps[index])
-                return cast(Definition, Node(depgraph, lreader[depgraph].representative, lreader).definition)
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        def get_index(index):
+            depgraph = lreader.local_to_global(graph, eps[index])
+            return cast(Definition, Node(depgraph, lreader[depgraph].representative, lreader).definition)
+        return TupleLike(count, get_index)
 
     def _global_context(self, seen: set[Node]) -> Iterable[Definition]:
         if prev := self.previous:
@@ -700,16 +684,12 @@ class Definition:
         kind = self._reader
         graph = self._graph
         lreader = self._lreader
-        class Seq(Sequence[ProofStep]):
+        class ProofStepSeq(TupleLike):
             def __init__(self, reader):
-                self._reader = reader
-                self._count = len(reader)
-            def __getitem__(self, index: int) -> ProofStep:
-                if index >= self._count:
-                    raise IndexError()
-                return ProofStep(self._reader[index], graph, lreader)
-            def __len__(self) -> int:
-                return self._count
+                super().__init__(
+                    len(reader),
+                    lambda index: ProofStep(reader[index], graph, lreader)
+                )
         # TODO: pycapnp does not seem to allow matching on graph_api_capnp.Definition.inductive,
         #       we should report this at some point. Alternative is to use the string.
         match kind.which:
@@ -728,11 +708,11 @@ class Definition:
             case "manualConstant":
                 return Definition.ManualConstant()
             case "tacticalConstant":
-                return Definition.TacticalConstant(Seq(kind.tacticalConstant))
+                return Definition.TacticalConstant(ProofStepSeq(kind.tacticalConstant))
             case "manualSectionConstant":
                 return Definition.ManualConstant()
             case "tacticalSectionConstant":
-                return Definition.TacticalSectionConstant(Seq(kind.tacticalSectionConstant))
+                return Definition.TacticalSectionConstant(ProofStepSeq(kind.tacticalSectionConstant))
             case _:
                 assert False
 
@@ -827,14 +807,10 @@ class Dataset:
         dependencies = self._reader.dependencies
         # The first dependency is the file itself, which we do not want to expose here.
         count = len(dependencies) - 1
-        class Seq(Sequence[Path]):
-            def __getitem__(self, index: int) -> Path:
-                if index >= count:
-                    raise IndexError()
-                return Path(dependencies[index+1])
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        return TupleLike(
+            count,
+            lambda index: Path(dependencies[index+1])
+        )
 
     @property
     def representative(self) -> Definition | None:
@@ -878,14 +854,10 @@ class Dataset:
         lreader = self._lreader
         ds = self._reader.definitions
         count = len(ds)
-        class Seq(Sequence[Definition]):
-            def __getitem__(self, index: int) -> Definition:
-                if index >= count:
-                    raise IndexError()
-                return cast(Definition, Node(graph, ds[index], lreader).definition)
-            def __len__(self) -> int:
-                return count
-        return Seq()
+        return TupleLike(
+            count,
+            lambda index: cast(Definition, Node(graph, ds[index], lreader).definition)
+        )
 
     @property
     def clustered_definitions(self) -> Iterable[list[Definition]]:
