@@ -187,31 +187,31 @@ class GraphVisualizator:
         representative = dataset.representative
         module_name = dataset.module_name
 
-        def render_def(dot, d: Definition):
+        def render_def(dot2, d: Definition):
             label = make_label(module_name, d.name)
             if representative and representative.node == d.node:
                 label = "Representative: " + label
             tooltip = make_tooltip(d)
             match d.status:
                 case Definition.Original():
-                    id = self.render_node(dot, d.node, 'box', label, tooltip=tooltip)
+                    id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
                 case Definition.Discharged(target):
-                    id = self.render_node(dot, d.node, 'box', label, tooltip=tooltip)
+                    id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
                     dot.edge(id, repr(target.node),
                                 arrowtail="inv", dir="both", constraint="false", style="dashed")
                 case Definition.Substituted(target):
                     if d.node.path == target.node.path:
-                        id = self.render_node(dot, d.node, 'box', label, tooltip=tooltip)
+                        id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
                         dot.edge(id, str(target.node),
                                     arrowtail="odot", dir="both", constraint="false", style="dashed")
                     else:
-                        with dot.subgraph() as dot2:
-                            dot2.attr(rank='same')
-                            id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
-                            id2 = self.render_node(dot2, target.node, 'box',
+                        with dot2.subgraph() as dot3:
+                            dot3.attr(rank='same')
+                            id = self.render_node(dot3, d.node, 'box', label, tooltip=tooltip)
+                            id2 = self.render_node(dot3, target.node, 'box',
                                                    make_label(module_name, target.name),
                                                    tooltip=make_tooltip(target))
-                            dot2.edge(id, id2,
+                            dot.edge(id, id2,
                                       arrowtail="odot", dir="both", constraint="false", style="dashed")
 
         for cluster in dataset.clustered_definitions:
