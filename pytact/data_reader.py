@@ -30,6 +30,7 @@ from pathlib import Path
 from pyrsistent import s, PSet, m, PMap
 import capnp
 from pytact.common import graph_api_capnp
+import itertools
 
 capnp.remove_import_hook()  # pyright: ignore
 graph_api_capnp = capnp.load(graph_api_capnp())  # pyright: ignore
@@ -568,17 +569,9 @@ class Definition:
             return cast(Definition, Node(depgraph, lreader[depgraph].representative, lreader).definition)
         return TupleLike(count, get_index)
 
-    def global_context(self, across_files : bool = True, inclusive = False, seen : set[Node] = None) -> Iterable[Definition]:
-        """All of the definitions in the global context when this definition was created.
-
-        Note that this does not include this definition itself, except when the definition is a inductive,
-        constructor or projection. Because those are mutually recursive objects, they reference themselves
-        and are therefore part of their own global context.
-        """
-        d = self.cluster_representative
-        if seen is None: seen = set()
-
+    def _global_context(self, across_files : bool, inclusive, seen : set[Node]):
         # force inclusivity for recursive definitions
+        d = self.cluster_representative
         match d.kind:
             case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
                 inclusive = True
@@ -589,19 +582,43 @@ class Definition:
             if across_files:
                 for eprev in d.external_previous:
                     if eprev.node in seen: continue
-                    yield from eprev.global_context(
+                    yield from eprev._global_context(
                         inclusive = True,
                         across_files = True,
                         seen = seen,
                     )
-                    seen.add(eprev.node)
+                    seen.add(eprev.node)        
+    
+    def global_context(self, across_files : bool = True, inclusive = False) -> Iterable[Definition]:
+        """All of the definitions in the global context when this definition was created.
+
+        Note that this does not include this definition itself, except when the definition is a inductive,
+        constructor or projection. Because those are mutually recursive objects, they reference themselves
+        and are therefore part of their own global context.
+
+        Arguments:
+        * across_files -- if False, outputs only the definitions from the local file, default True
+        * inclusive -- if True, outputs also itself, default False
+        Note: if it is a self-recursive definition,
+        the inclusive argument is ignored, and considered as True
+        """
+        return self._global_context(
+            across_files = across_files,
+            inclusive = inclusive,
+            seen = set(),
+        )
 
     def clustered_global_context(self, across_files : bool = True, inclusive : bool = False) -> Iterable[list[Definition]]:
         """All of the definitions in the global context when this definition was created, clustered into
         mutually recursive cliques.
 
-        The definition itself may be part of the first mutually recursive cluster."""
-        return self._build_clusters(self.global_context(
+        Arguments:
+        * across_files -- if False, outputs only the definitions from the local file, default True
+        * inclusive -- if True, outputs also the cluster of itself, default False
+        Note: if it is a self-recursive definition,
+        the inclusive argument is ignored, and considered as True
+        """
+        return self._group_by_clusters(self.global_context(
             across_files = across_files,
             inclusive = inclusive,
         ))
@@ -772,14 +789,14 @@ class Definition:
         return self._lreader[self._graph].representative == self.node.nodeid
 
     @classmethod
-    def _build_clusters(cls, definitions : Iterable[Definition]):
-        seen : set[Node] = set()
-        for definition in definitions:
-            node = definition.node
-            if node in seen: continue
-            cluster = list(definition.cluster)
-            yield cluster
-            seen.update(cluster)
+    def _group_by_clusters(cls, definitions : Iterable[Definition]) -> Iterable[list[Definition]]:
+        return map(
+            lambda x: list(x[1]),
+            itertools.groupby(
+                definitions,
+                key = lambda d: d.cluster_representative.node,
+            )
+        )
 
 class Dataset:
     """The data corresponding to a single Coq source file. The data contains a representation of all definitions
@@ -831,6 +848,11 @@ class Dataset:
         """All of the definitions present in the file.
         Note that some of these nodes may not be part of the 'super-global' context. Those are definitions inside
         of sections or module functors.
+
+        Arguments:
+        * across_files -- if True, outputs also definitions from dependent files, default False
+        * spine_only -- if True, outputs only the definitions on the main spine, default False
+        Note: across_files = True is incompatible with spine_only = False
         """
         if across_files and not spine_only:
             raise Exception("Options across_files = True and spine_only = False are incompatible")
@@ -853,8 +875,13 @@ class Dataset:
         """All of the definitions present in the file, clustered by mutually recursive definitions.
         Note that some of these nodes may not be part of the 'super-global' context. Those are definitions inside
         of sections or module functors.
+
+        Arguments:
+        * across_files -- if True, outputs also definitions from dependent files, default False
+        * spine_only -- if True, outputs only the definitions on the main spine, default False
+        Note: across_files = True is incompatible with spine_only = False
         """
-        return Definition._build_clusters(
+        return Definition._group_by_clusters(
             self.definitions(
                 across_files = across_files,
                 spine_only = spine_only
