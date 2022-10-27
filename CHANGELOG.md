@@ -1,11 +1,15 @@
 # Unreleased
 
 Changes to the Capn'proto format:
-- The `proofState` node now had a unique identifier to distinquish existential variables that have the same
-  proof state but not the same identity.
 - All `evar` nodes are now properly resolved towards a `proofState` node, even when that proof state is
   never solved using a tactic but rather through unification. This changes makes the `undefProofState` node
   redundant, and as such it has been removed.
+- Moved the `ProofStateId` identifier of the `evar` node to the `proofState` node. This is a unique
+  identifier to distinquish existential variables that have the same proof state but not the same identity.
+
+Changes to the graph:
+- Proof states are now properly discharged at section end, instead of just a copy of the proof state
+  inside of the section
 
 # v13
 
