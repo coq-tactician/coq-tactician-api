@@ -27,6 +27,7 @@
     capnp-rpc-lwt
     lwt.unix
     ocamlgraph
+    xxhash
     ;__dep_extract_finish__
     coq-tactician.record-plugin)
  (preprocess (staged_pps ppx_deriving.show))

@@ -50,6 +50,7 @@ depends: [
   "capnp-rpc-lwt"
   "ppx_deriving"
   "ocamlgraph"
+  "xxhash"
   "dune" {>= "2.9"}
   "odoc" {with-doc}
   # These constraints are to work around
@@ -59,4 +60,5 @@ depends: [
 ]
 substs: [
   "src/graph_generator_learner.ml"
+  "theories/injection-flags-loader"
 ]

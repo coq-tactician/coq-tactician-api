@@ -1,5 +1,5 @@
 """
-packaging the python tests to coq-tactician-reinforce
+Python support for Tactician data
 """
 
 import setuptools
@@ -12,9 +12,7 @@ License :: OSI Approved :: MIT License
 Programming Language :: C
 Programming Language :: Python
 Programming Language :: Python :: 3
-Programming Language :: Python :: 3.8
 Programming Language :: Python :: 3 :: Only
-Programming Language :: Python :: Implementation :: CPython
 Topic :: Scientific/Engineering :: Artificial Intelligence
 Operating System :: POSIX :: Linux
 """
@@ -29,18 +27,24 @@ setuptools.setup(
     long_description='python interface to coq-tactician-reinforce',
     long_description_content_type='text/markdown',
     url='https://github.com/coq-tactician/coq-tactician-reinforce',
-    python_requires='>=3.7',
+    python_requires='>=3.10',
     include_package_data=True,
     package_data = {'pytact': ['graph_api.capnp',
+                               'templates/visualizer.html',
                                'tests/TestReinforceStdin.v',
                                'tests/TestReinforceTcp.v',
                                'tests/prop4.txt']},
-    install_requires=['pycapnp', 'graphviz', 'ptpython'],
+    install_requires=[
+        'pycapnp',
+        'pyrsistent',
+        'graphviz',
+        'sanic==22.6.2',
+        'sanic-ext==22.6.2',
+        'Jinja2'],
     entry_points={'console_scripts': [
                                       'pytact-server=pytact.fake_python_server:main',
                                       'pytact-check=pytact.graph_sanity_check:main',
-                                      'pytact-visualize=pytact.visualize_file:main',
-                                      'pytact-generate-index=pytact.visualize_file:generate_index',
+                                      'pytact-visualize=pytact.visualisation_webserver:main',
                                       'pytact-prover=pytact.prover:main'
                                       ]
                   },
