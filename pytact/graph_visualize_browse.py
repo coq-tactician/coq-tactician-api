@@ -286,7 +286,11 @@ class GraphVisualizator:
                 depth -= 1
             if depth >= 0:
                 if node.label.which == graph_api_capnp.Graph.Node.Label.evar:
-                    context_prefix = proof_state_prefix.get(node.label.evar, context_prefix)
+                    # Find the evar-id
+                    evarid = [c.label.proofState.value for _, c in node.children
+                              if c.label.which == graph_api_capnp.Graph.Node.Label.proofState][0]
+                    print(evarid)
+                    context_prefix = proof_state_prefix.get(evarid, context_prefix)
 
                 for edge, child in node.children:
                     if edge.raw in self.settings.ignore_edges:
