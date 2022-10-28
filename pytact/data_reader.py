@@ -608,7 +608,7 @@ class Definition:
             seen = set(),
         )
 
-    def clustered_global_context(self, across_files : bool = True, inclusive : bool = False) -> Iterable[Iterable[Definition]]:
+    def clustered_global_context(self, across_files : bool = True, inclusive : bool = False) -> Iterable[list[Definition]]:
         """All of the definitions in the global context when this definition was created, clustered into
         mutually recursive cliques.
 
@@ -789,9 +789,9 @@ class Definition:
         return self._lreader[self._graph].representative == self.node.nodeid
 
     @classmethod
-    def _group_by_clusters(cls, definitions : Iterable[Definition]) -> Iterable[Iterable[Definition]]:
+    def _group_by_clusters(cls, definitions : Iterable[Definition]) -> Iterable[list[Definition]]:
         return map(
-            lambda x: x[1],
+            lambda x: list(x[1]),
             itertools.groupby(
                 definitions,
                 key = lambda d: d.cluster_representative.node,
@@ -871,7 +871,7 @@ class Dataset:
                 lambda index: cast(Definition, Node(graph, ds[index], lreader).definition)
             )
 
-    def clustered_definitions(self, across_files = False, spine_only = False) -> Iterable[Iterable[Definition]]:
+    def clustered_definitions(self, across_files = False, spine_only = False) -> Iterable[list[Definition]]:
         """All of the definitions present in the file, clustered by mutually recursive definitions.
         Note that some of these nodes may not be part of the 'super-global' context. Those are definitions inside
         of sections or module functors.
