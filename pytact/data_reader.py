@@ -587,8 +587,9 @@ class Definition:
                         across_files = True,
                         seen = seen,
                     )
-                    seen.add(eprev.node)        
-    
+                    seen.add(eprev.node)
+            d = d.previous
+
     def global_context(self, across_files : bool = True, inclusive = False) -> Iterable[Definition]:
         """All of the definitions in the global context when this definition was created.
 
@@ -836,7 +837,7 @@ class Dataset:
         If the compilation unit does not contain any 'super'-global definitions this may be `None`.
 
         This is a low-level property.
-        Prefer to use `definitions(only_spine = True)` and `clustered_definitions(only_spine=True)`.
+        Prefer to use `definitions(spine_only = True)` and `clustered_definitions(spine_only=True)`.
         """
         representative = self._reader.representative
         if len(self._reader.graph.nodes) == representative:
@@ -857,6 +858,7 @@ class Dataset:
         if across_files and not spine_only:
             raise Exception("Options across_files = True and spine_only = False are incompatible")
         if spine_only:
+            if self.representative is None: return ()
             return self.representative.global_context(
                 inclusive = True,
                 across_files = across_files,
