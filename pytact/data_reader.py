@@ -30,6 +30,7 @@ from pathlib import Path
 from pyrsistent import s, PSet, m, PMap
 import capnp
 from pytact.common import graph_api_capnp
+import itertools
 
 capnp.remove_import_hook()  # pyright: ignore
 graph_api_capnp = capnp.load(graph_api_capnp())  # pyright: ignore
@@ -568,53 +569,60 @@ class Definition:
             return cast(Definition, Node(depgraph, lreader[depgraph].representative, lreader).definition)
         return TupleLike(count, get_index)
 
-    def _global_context(self, seen: set[Node]) -> Iterable[Definition]:
-        if prev := self.previous:
-            yield prev
-            yield from prev._global_context(seen)
-        for eprev in self.external_previous:
-            if eprev.node not in seen:
-                yield eprev
-                yield from eprev._global_context(seen)
-                seen.add(eprev.node)
+    def _global_context(self, across_files : bool, inclusive, seen : set[Node]):
+        # force inclusivity for recursive definitions
+        d = self.cluster_representative
+        match d.kind:
+            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
+                inclusive = True
+        
+        while d is not None:
+            if inclusive: yield d # skip first result if not inclusive
+            else: inclusive = True
+            if across_files:
+                for eprev in d.external_previous:
+                    if eprev.node in seen: continue
+                    yield from eprev._global_context(
+                        inclusive = True,
+                        across_files = True,
+                        seen = seen,
+                    )
+                    seen.add(eprev.node)
+            d = d.previous
 
-    def _clustered_global_context(self, seen: set[Node]) -> Iterable[list[Definition]]:
-        if prev := self.previous:
-            cluster = list(prev.cluster)
-            yield cluster
-            yield from cluster[-1]._clustered_global_context(seen)
-        for eprev in self.external_previous:
-            if eprev.node not in seen:
-                cluster = list(eprev.cluster)
-                yield cluster
-                yield from cluster[-1]._clustered_global_context(seen)
-                seen.add(eprev.node)
-
-    @property
-    def global_context(self) -> Iterable[Definition]:
+    def global_context(self, across_files : bool = True, inclusive = False) -> Iterable[Definition]:
         """All of the definitions in the global context when this definition was created.
 
         Note that this does not include this definition itself, except when the definition is a inductive,
         constructor or projection. Because those are mutually recursive objects, they reference themselves
         and are therefore part of their own global context.
-        """
-        start = self.cluster_representative
-        match start.kind:
-            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
-                yield start
-        yield from start._global_context(set())
 
-    @property
-    def clustered_global_context(self) -> Iterable[list[Definition]]:
+        Arguments:
+        * across_files -- if False, outputs only the definitions from the local file, default True
+        * inclusive -- if True, outputs also itself, default False
+        Note: if it is a self-recursive definition,
+        the inclusive argument is ignored, and considered as True
+        """
+        return self._global_context(
+            across_files = across_files,
+            inclusive = inclusive,
+            seen = set(),
+        )
+
+    def clustered_global_context(self, across_files : bool = True, inclusive : bool = False) -> Iterable[list[Definition]]:
         """All of the definitions in the global context when this definition was created, clustered into
         mutually recursive cliques.
 
-        The definition itself may be part of the first mutually recursive cluster."""
-        start_cluster = list(self.cluster)
-        match start_cluster[0].kind:
-            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
-                yield list(start_cluster)
-        yield from start_cluster[-1]._clustered_global_context(set())
+        Arguments:
+        * across_files -- if False, outputs only the definitions from the local file, default True
+        * inclusive -- if True, outputs also the cluster of itself, default False
+        Note: if it is a self-recursive definition,
+        the inclusive argument is ignored, and considered as True
+        """
+        return self._group_by_clusters(self.global_context(
+            across_files = across_files,
+            inclusive = inclusive,
+        ))
 
     @dataclass
     class Original: pass
@@ -781,6 +789,16 @@ class Definition:
         Se also `Dataset.representative`."""
         return self._lreader[self._graph].representative == self.node.nodeid
 
+    @classmethod
+    def _group_by_clusters(cls, definitions : Iterable[Definition]) -> Iterable[list[Definition]]:
+        return map(
+            lambda x: list(x[1]),
+            itertools.groupby(
+                definitions,
+                key = lambda d: d.cluster_representative.node,
+            )
+        )
+
 class Dataset:
     """The data corresponding to a single Coq source file. The data contains a representation of all definitions
     that have existed at any point throughout the compilation of the source file.
@@ -818,7 +836,8 @@ class Dataset:
         another file. The full global context can be obtained by following the `previous` node of definitions.
         If the compilation unit does not contain any 'super'-global definitions this may be `None`.
 
-        This is a low-level property. Prefer to use `super_global_context` and `clustered_super_global_context`.
+        This is a low-level property.
+        Prefer to use `definitions(spine_only = True)` and `clustered_definitions(spine_only=True)`.
         """
         representative = self._reader.representative
         if len(self._reader.graph.nodes) == representative:
@@ -826,75 +845,50 @@ class Dataset:
         else:
             return Node(self._graph, representative, self._lreader).definition
 
-    @property
-    def super_global_context(self) -> Iterable[Definition]:
-        """The a list of definitions that become available when this file is `Require`'d by another file, including
-        definitions from other files that are recursively `Require`'d."""
-        if r := self.representative:
-            yield r
-            yield from r._global_context(set())
-
-    @property
-    def clustered_super_global_context(self) -> Iterable[list[Definition]]:
-        """The list of definitions that become available when this file is `Require`'d by another file, including
-        definitions from other files that are recursively `Require`'d. This is clustered by mutually recursive
-        definitions."""
-        if r := self.representative:
-            cluster = list(r.cluster)
-            yield cluster
-            yield from cluster[-1]._clustered_global_context(set())
-
-    @property
-    def definitions(self) -> Sequence[Definition]:
+    def definitions(self, across_files = False, spine_only = False) -> Iterable[Definition]:
         """All of the definitions present in the file.
         Note that some of these nodes may not be part of the 'super-global' context. Those are definitions inside
         of sections or module functors.
-        """
-        graph = self._graph
-        lreader = self._lreader
-        ds = self._reader.definitions
-        count = len(ds)
-        return TupleLike(
-            count,
-            lambda index: cast(Definition, Node(graph, ds[index], lreader).definition)
-        )
 
-    @property
-    def clustered_definitions(self) -> Iterable[list[Definition]]:
+        Arguments:
+        * across_files -- if True, outputs also definitions from dependent files, default False
+        * spine_only -- if True, outputs only the definitions on the main spine, default False
+        Note: across_files = True is incompatible with spine_only = False
+        """
+        if across_files and not spine_only:
+            raise Exception("Options across_files = True and spine_only = False are incompatible")
+        if spine_only:
+            if self.representative is None: return ()
+            return self.representative.global_context(
+                inclusive = True,
+                across_files = across_files,
+            )
+        else:
+            graph = self._graph
+            lreader = self._lreader
+            ds = self._reader.definitions
+            count = len(ds)
+            return TupleLike(
+                count,
+                lambda index: cast(Definition, Node(graph, ds[index], lreader).definition)
+            )
+
+    def clustered_definitions(self, across_files = False, spine_only = False) -> Iterable[list[Definition]]:
         """All of the definitions present in the file, clustered by mutually recursive definitions.
         Note that some of these nodes may not be part of the 'super-global' context. Those are definitions inside
         of sections or module functors.
+
+        Arguments:
+        * across_files -- if True, outputs also definitions from dependent files, default False
+        * spine_only -- if True, outputs only the definitions on the main spine, default False
+        Note: across_files = True is incompatible with spine_only = False
         """
-        graph = self._graph
-        lreader = self._lreader
-        seen = set()
-        for nodeid in self._reader.definitions:
-            if not nodeid in seen:
-                d = cast(Definition, Node(graph, nodeid, lreader).definition)
-                cluster = list(d.cluster)
-                yield cluster
-                for cd in cluster:
-                    seen.add(cd.node.nodeid)
-
-    @property
-    def super_global_definitions(self) -> Iterable[Definition]:
-        """All of the definitions present in the file that become available when this file is `Require`'d by
-        another file. This is a hybrid between `super_global_context` and `definitions`."""
-        curr = self.representative
-        while curr is not None:
-            yield curr
-            curr = curr.previous
-
-    @property
-    def clustered_super_global_definitions(self) -> Iterable[list[Definition]]:
-        """All of the definitions present in the file that become available when this file is `Require`'d by
-        another file, clustered by mutually recursive definitions. This is a hybrid between
-        `clustered_super_global_context` and `clustered_definitions`."""
-        curr = self.representative
-        while curr is not None:
-            cluster = list(curr.cluster)
-            yield cluster
-            curr = cluster[-1].previous
+        return Definition._group_by_clusters(
+            self.definitions(
+                across_files = across_files,
+                spine_only = spine_only
+            )
+        )
 
     @property
     def module_name(self) -> str:
