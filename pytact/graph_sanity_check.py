@@ -94,7 +94,7 @@ def process1(args, fname: Path):
 
     hreader = hdata[fname]
     with global_contexts.sub_context(lambda d: d.is_file_representative) as sub_global_contexts:
-        for d in hreader.definitions:
+        for d in hreader.definitions():
             if not d.node.definition:
                 raise Exception(f"{fname}: Node {d.node} should be a definition but is not")
 
