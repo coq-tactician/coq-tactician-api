@@ -17,7 +17,7 @@ RUN echo 'PATH=$CONDA_PREFIX/bin:$PATH' >> .profile
 # apt-get level project dependencies
 
 RUN sudo apt-get update
-RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev
+RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev cmake build-essential
 
 COPY --chown=coq:coq . coq-tactician-reinforce
 
