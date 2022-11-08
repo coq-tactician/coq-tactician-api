@@ -1,3 +1,11 @@
+# distutils: language = c++
+# cython: c_string_type = str
+# cython: c_string_encoding = default
+# cython: embedsignature = True
+# cython: language_level = 3
+# distutils: libraries = capnpc capnp capnp-rpc
+# distutils: sources = pytact/graph_api.capnp.cpp
+
 """This module provides read access to dataset files of a Tactican Graph dataset.
 
 The dataset is mapped into memory using mmap, allowing random access to it's
@@ -18,25 +26,30 @@ dataset in order of preference:
 Additionally, some indexing helpers are defined:
 - `GlobalContextSets` calculates and caches the global context of a definition
   as a set, also caching intermediate results.
+- `definition_dependencies` and `node_dependencies` traverse the graph starting
+  from a node and return all direct, non-transitive definitions that node depends on.
 """
 
 from __future__ import annotations
-import mmap
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar, TypeAlias, Union, cast
 from collections.abc import Iterable, Sequence, Generator
 from pathlib import Path
-from pyrsistent import s, PSet, m, PMap
+from immutables import Map
+import pytact.graph_api_capnp_cython as apic
 import capnp
-from pytact.common import graph_api_capnp
+import pytact.graph_api_capnp as graph_api_capnp
+from capnp.includes.types cimport *
+from libcpp.vector cimport vector
+from libcpp.unordered_set cimport unordered_set
+from libcpp.stack cimport stack
+from pytact.graph_api_capnp_cython cimport *
+import mmap
 import itertools
 
-capnp.remove_import_hook()  # pyright: ignore
-graph_api_capnp = capnp.load(graph_api_capnp())  # pyright: ignore
-
 T = TypeVar('T')
-class TupleLike(Sequence[T]):
+class TupleLike():
     def __init__(self, count : int, index_getter : Callable[[int], T]):
         super().__init__()
         self._count = count
@@ -62,10 +75,15 @@ def file_dataset_reader(fname: Path) -> Generator[Any, None, None]:
         with memoryview(mm) as mv:
             with graph_api_capnp.Dataset.from_bytes(
                     mv, traversal_limit_in_words=2**64-1) as g:
-                yield g
+                yield apic.Dataset_Reader(g)
 
+cdef struct GraphIndex:
+    vector[C_Dataset_Reader] datasets
+    vector[C_Graph_Node_Reader_List] nodes
+    vector[C_Graph_EdgeTarget_Reader_List] edges
+    vector[vector[uint32_t]] local_to_global
 
-class LowlevelDataReader(Sequence[Any]):
+cdef class LowlevelDataReader:
     """A thin wrapper around the raw Cap'n Proto structures contained in a dataset directory.
 
     Every file in the directory is assigned an integer called a graph-id. This class is a
@@ -78,13 +96,16 @@ class LowlevelDataReader(Sequence[Any]):
     in the Cap'n Proto API file.
     """
 
-    graphid_by_filename: dict[Path, int]
+    cdef GraphIndex graph_index
+
+    cdef object graphs # : list[Dataset_Reader]
+    cdef readonly object graphid_by_filename # : dict[Path, int]
     """Map from filenames in the data directory to their graph-id's."""
 
-    graph_files: list[Path]
+    cdef readonly object graph_files # : list[Path]
     """Map's a graph-id to a filename. Inverse of `graphid_by_filename`."""
 
-    def __init__(self, dataset_path : Path, dataset: list[tuple[Path, Any]]):
+    def __cinit__(self, dataset_path : Path, dataset: list[tuple[Path, Dataset_Reader]]):
         """Do not call this initializer directly. Use `lowlevel_data_reader` instead."""
         # Basic, quick sanity check
         if not dataset:
@@ -97,10 +118,28 @@ class LowlevelDataReader(Sequence[Any]):
                     f"Path {dataset_path} doesn't appear to be the root of a dataset. "
                     f"File {dataset_path/f} suggests that the real root might be {real_root}")
 
-        self.__graphs = [g for _, g in dataset]
-        self.graphs_by_filename = {f: i for i, (f, _) in enumerate(dataset)}
+        self.graphs = [g for _, g in dataset]
+        self.graphid_by_filename = {f: i for i, (f, _) in enumerate(dataset)}
         self.graph_files = [f for f, _ in dataset]
-        self.__local_to_global = [[self.graphs_by_filename[Path(f)] for f in g.dependencies] for _, g in dataset]
+
+        cdef vector[C_Dataset_Reader] c_datasets
+        c_datasets.reserve(len(dataset))
+        for _, g in dataset:
+            c_datasets.push_back((<Dataset_Reader>g).source)
+
+
+        cdef vector[C_Graph_Node_Reader_List] c_nodes
+        c_nodes.reserve(len(dataset))
+        for d in c_datasets:
+            c_nodes.push_back(d.getGraph().getNodes())
+
+        cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
+        c_edges.reserve(len(dataset))
+        for d in c_datasets:
+            c_edges.push_back(d.getGraph().getEdges())
+
+        local_to_global = [[self.graphid_by_filename[Path(f)] for f in g.dependencies] for _, g in dataset]
+        self.graph_index = GraphIndex(c_datasets, c_nodes, c_edges, local_to_global)
 
     def local_to_global(self, graph: int, dep_index: int) -> int:
         """Convert dependency-index relative to a graph-id to a new graph-id.
@@ -110,14 +149,14 @@ class LowlevelDataReader(Sequence[Any]):
         where that node can be found then `local_to_global(graph, dep_index)` finds the graph-id
         of the file where the node is physically located.
         """
-        return self.__local_to_global[graph][dep_index]
+        return self.graph_index.local_to_global[graph][dep_index]
 
     def __getitem__(self, graph):
         """Retrieve the raw Cap'n Proto structures associated with a graph-id."""
-        return self.__graphs[graph]
+        return self.graphs[graph]
 
     def __len__(self) -> int:
-        return len(self.__graphs)
+        return len(self.graphs)
 
 @contextmanager
 def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, None, None]:
@@ -131,51 +170,66 @@ def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, No
         dataset = [(fname.relative_to(dataset_path),
                     stack.enter_context(file_dataset_reader(fname)))
                    for fname in fnames]
-        yield LowlevelDataReader(dataset_path, dataset)
-
+        # CAREFUL: LowlevelDataReader contains critical C++ structures that are not being
+        # tracked by the garbage collector. As soon as this object gets destroyed, those
+        # structures will also be destroyed, even if other objects still reference it.
+        # This variable assignment makes sure that the reader will exist until the end of
+        # the `with` block.
+        # If the Python runtime ever becomes clever and eliminates this variable, a different
+        # method of keeping the object around should be found.
+        dr = LowlevelDataReader(dataset_path, dataset)
+        yield dr
 
 ProofStateId = int
 TacticId = int
-GraphId = int
-NodeId = int
+ctypedef uint32_t GraphId
+ctypedef uint32_t NodeId
 NodeHash = int
 
-
-class Node:
+cdef class Node:
     """A node in the calculus of inductive construction graph.
 
     A node has a `label`, a unique `identity` and `children`. Some nodes are also
     a `Definition`.
     """
 
-    nodeid: NodeId
+    cdef GraphIndex *graph_index
+    cdef C_Graph_Node_Reader node
+
+    cdef readonly GraphId graph
+    """The id of the graph in which this node occurs. For lowlevel use only."""
+
+    cdef readonly NodeId nodeid
     """The local id of the node in the dataset. For lowlevel use only."""
 
-    def __init__(self, graph: GraphId, nodeid: NodeId, lreader: LowlevelDataReader):
-        self._lreader = lreader
-        self._graph = graph
-        self.nodeid = nodeid
-        self._node = lreader[graph].graph.nodes[nodeid]
+    @staticmethod
+    cdef init(GraphId graph, int nodeid, GraphIndex *graph_index):
+        cdef Node wrapper = Node.__new__(Node)
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        wrapper.nodeid = nodeid
+        wrapper.node = graph_index.nodes[graph][nodeid]
+        return wrapper
 
     def __repr__(self):
-        return f"node-{self._graph}-{self.nodeid}"
+        return f"node-{self.graph}-{self.nodeid}"
 
     def __eq__(self, other: Node) -> bool:
         """Physical equality of two nodes. Note that two nodes with a different physical equality
         may have the same `identity`. See `identity` for details.
         """
         if isinstance(other, Node):
-            return self._graph == other._graph and self.nodeid == other.nodeid
+            return self.graph == other.graph and self.nodeid == other.nodeid
         return False
 
     def __hash__(self):
         """A hash that is corresponds to physical equality, not to be confused by `identity`."""
-        return hash((self._graph, self.nodeid))
+        return (<uint64_t> self.graph) << 32 | self.nodeid
 
     @property
     def label(self) -> Any:
         """The label of the node, indicating it's function in the CIC graph."""
-        return self._node.label
+        return Graph_Node_Label_Reader.init(self.node.getLabel())
 
     @property
     def identity(self) -> NodeHash:
@@ -205,118 +259,122 @@ class Node:
         order of billions of nodes there is a non-trivial chance of a collision. (We consider this acceptable
         for machine learning purposes.)
         """
-        return self._node.identity
+        return self.node.getIdentity()
 
     @property
-    def children(self) -> Sequence[tuple[Any, Node]]:
-        """The children of a node, together with the labels of the edges towards the children."""
-        node = self._node
-        lreader = self._lreader
-        graph = self._graph
-        edges = lreader[self._graph].graph.edges
-        start = node.childrenIndex
-        count = node.childrenCount
-        def get_item(index):
-            edge = edges[start+index]
-            return (edge.label,
-               Node(lreader.local_to_global(graph, edge.target.depIndex),
-                    edge.target.nodeIndex, lreader))
-        return TupleLike(count, get_item)
+    def children(self) -> Sequence[tuple[int, Node]]:
+        """The children of a node, together with the labels of the edges towards the children.
+        Note that for efficiency purposes, the label is represented as an integer. The corresponding
+        enum of this integer is `graph_api_capnp.EdgeClassification`."""
+        node = self.node
+        graph_index = self.graph_index
+        graph = self.graph
+        return EdgeTarget_List.init(
+            graph_index.edges[graph], graph_index, graph,
+            node.getChildrenIndex(), node.getChildrenCount())
 
     @property
     def definition(self) -> Definition | None:
         """Some nodes in the CIC graph represent definitions. Such nodes contain extra information about the
         definition.
         """
-        if graph_api_capnp.Graph.Node.Label.definition == self.label.which:
-            return Definition(self, self.label.definition, self._graph, self._lreader)
+        label = self.node.getLabel()
+        if label.isDefinition():
+            return Definition.init(self, label.getDefinition(), self.graph, self.graph_index)
         else:
             return None
 
     @property
     def path(self) -> Path:
         """The physical location on disk in which this node can be found."""
-        return Path(self._lreader[self._graph].dependencies[0])
+        temp = self.graph_index.datasets[self.graph].getDependencies()[0]
+        return Path((<char*>temp.begin())[:temp.size()])
 
-class Tactic:
-    """A concrete tactic with it's parameters determined.
+cdef class EdgeTarget_List:
+    cdef GraphIndex *graph_index
+    cdef C_Graph_EdgeTarget_Reader_List edges
+    cdef GraphId graph
+    cdef uint32_t start
+    cdef uint16_t count
 
-    Somewhat counterintuitively, this class does not actually include these parameters. They can instead be
-    found in `Outcome.tactic_arguments`. The reason for this is that one tactic can run on multiple proof
-    states at the same time and for all of those proof states, the arguments may be resolved differently.
-    """
+    @staticmethod
+    cdef init(C_Graph_EdgeTarget_Reader_List edges, GraphIndex *graph_index,
+              GraphId graph, uint32_t start, uint16_t count):
+        cdef EdgeTarget_List wrapper = EdgeTarget_List.__new__(EdgeTarget_List)
+        wrapper.edges = edges
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        wrapper.start = start
+        wrapper.count = count
+        return wrapper
 
-    def __init__(self, reader):
-        self._reader = reader
+    def __getitem__(self, uint index):
+        if index >= self.count:
+            raise IndexError('Out of bounds')
+        cdef C_Graph_EdgeTarget_Reader edge = self.edges[self.start+index]
+        cdef C_Graph_EdgeTarget_Target_Reader target = edge.getTarget()
+        cdef GraphIndex *graph_index = self.graph_index
+        return (edge.getLabel(),
+                Node.init(graph_index.local_to_global[self.graph][target.getDepIndex()],
+                          target.getNodeIndex(), graph_index))
 
-    def __repr__(self) -> str:
-        return repr(self._reader)
+    def __len__(self):
+        return self.count
 
-    @property
-    def ident(self) -> TacticId:
-        """A hash representing the identity of a tactic without it's arguments. Due to the complexity of the syntax
-        trees of Coq's tactics, we do not currently encode the syntax tree. Instead, this hash is a representative
-        of the syntax tree of the tactic with all of it's arguments removed.
-        """
-        return self._reader.ident
+cdef class Node_List:
+    cdef GraphIndex *graph_index
+    cdef C_Node_Reader_List reader
+    cdef GraphId graph
 
-    @property
-    def text(self) -> str:
-        """The full text of the tactic including the full arguments. This does not currently correspond to
-        (ident, arguments) because in this dataset arguments do not include full terms, but only references to
-        definitions and local context elements.
-        """
-        return self._reader.text
+    @staticmethod
+    cdef init(C_Node_Reader_List reader, GraphIndex *graph_index, GraphId graph):
+        cdef Node_List wrapper = Node_List.__new__(Node_List)
+        wrapper.reader = reader
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        return wrapper
 
-    def __str__(self) -> str:
-        return self._reader.text
+    def __getitem__(self, uint index):
+        reader = self.reader
+        if index >= reader.size():
+            raise IndexError('Out of bounds')
+        node = reader[index]
+        graph_index = self.graph_index
+        return Node.init(graph_index.local_to_global[self.graph][node.getDepIndex()],
+                         node.getNodeIndex(), graph_index)
 
-    @property
-    def base_text(self) -> str:
-        """A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
-        Note, however, that this is both an under-approximation and an over-approximation. The reason is that tactic
-        printing is not 100% isomorphic to Coq's internal AST of tactics. Sometimes, different tactics get mapped to
-        the same text. Conversely, the same tactic may be mapped to different texts when identifiers are printed
-        using different partially-qualified names.
-        """
-        return self._reader.baseText
+    def __len__(self):
+        return self.reader.size()
 
-    @property
-    def interm_text(self) -> str:
-        """A textual representation that tries to come as close as possible to (ident, arguments).
-        It comes with the same caveats as `baseText`.
-        """
-        return self._reader.intermText
-
-    @property
-    def exact(self) -> bool:
-        """Indicates whether or not `ident` + `arguments` is faithfully reversible into the original "strictified"
-        tactic. Note that this does not necessarily mean that it represents exactly the tactic that was inputted by
-        the user. All tactics are modified to be 'strict' (meaning that tactics that have delayed variables in them
-        break). This flag measures the faithfulness of the representation w.r.t. the strict version of the tactic,
-        not the original tactic inputted by the user.
-        """
-        return self._reader.exact
-
-class ProofState:
+cdef class ProofState:
     """A proof state represents a particular point in the tactical proof of a constant."""
 
-    def __init__(self, reader, graph: GraphId, lreader: LowlevelDataReader):
-        self._reader = reader
-        self._graph = graph
-        self._lreader = lreader
+    cdef C_ProofState_Reader reader
+    cdef GraphId graph
+    cdef GraphIndex *graph_index
 
+    @staticmethod
+    cdef init(C_ProofState_Reader reader, GraphId graph, GraphIndex *graph_index):
+        cdef ProofState wrapper = ProofState.__new__(ProofState)
+        wrapper.reader = reader
+        wrapper.graph = graph
+        wrapper.graph_index = graph_index
+        return wrapper
+
+    @property
+    def lowlevel(self):
+        return ProofState_Reader.init(self.reader)
     def __repr__(self):
-        return repr(self._reader)
+        return repr(self.lowlevel)
 
     @property
     def root(self) -> Node:
         """The entry-point of the proof state, all nodes that are 'part of' the proof state are
         reachable from here."""
-        root = self._reader.root
-        lreader = self._lreader
-        return Node(lreader.local_to_global(self._graph, root.depIndex),
-                    root.nodeIndex, self._lreader)
+        root = self.reader.getRoot()
+        graph_index = self.graph_index
+        return Node.init(graph_index.local_to_global[self.graph][root.getDepIndex()],
+                         root.getNodeIndex(), graph_index)
 
     @property
     def context(self) -> Sequence[Node]:
@@ -330,35 +388,29 @@ class ProofState:
         hypothesis-generating tactics have been modified to use auto-generated names. Hence, tactics should
         not be concerned about the names of the context.
         """
-        graph = self._graph
-        lreader = self._lreader
-        context = self._reader.context
-        count = len(context)
-        def get_item(index):
-            n = context[index]
-            return (Node(lreader.local_to_global(graph, n.depIndex),
-                         n.nodeIndex, lreader))
-        return TupleLike(count, get_item)
+        return Node_List.init(self.reader.getContext(), self.graph_index, self.graph)
 
     @property
     def context_names(self) -> Sequence[str]:
-        return self._reader.contextNames
+        return String_List.init(self.reader.getContextNames())
 
     @property
     def context_text(self) -> Sequence[str]:
-        return self._reader.contextText
+        return String_List.init(self.reader.getContextText())
 
     @property
     def conclusion_text(self) -> str:
-        return self._reader.conclusionText
+        temp = self.reader.getConclusionText()
+        return (<char*>temp.begin())[:temp.size()]
 
     @property
     def text(self) -> str:
         """A textual representation of the proof state."""
-        return self._reader.text
+        temp = self.reader.getText()
+        return (<char*>temp.begin())[:temp.size()]
 
     def __str__(self) -> str:
-        return self._reader.text
+        return self.text
 
     @property
     def id(self) -> ProofStateId:
@@ -369,14 +421,69 @@ class ProofState:
                    can contain existential variables (represented by the `evar` node) that can be filled as a
                    side-effect by a tactic running on another proof state.
         """
-        return self._reader.id
+        return self.reader.getId()
+
+cdef class ProofState_List:
+    cdef GraphIndex *graph_index
+    cdef C_ProofState_Reader_List reader
+    cdef GraphId graph
+
+    @staticmethod
+    cdef init(C_ProofState_Reader_List reader, GraphIndex *graph_index, GraphId graph):
+        cdef ProofState_List wrapper = ProofState_List.__new__(ProofState_List)
+        wrapper.reader = reader
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        return wrapper
+
+    def __getitem__(self, uint index):
+        reader = self.reader
+        if index >= reader.size():
+            raise IndexError('Out of bounds')
+        return ProofState.init(reader[index], self.graph, self.graph_index)
+
+    def __len__(self):
+        return self.reader.size()
+
+cdef class Argument_List:
+    cdef GraphIndex *graph_index
+    cdef C_Argument_Reader_List reader
+    cdef GraphId graph
+
+    @staticmethod
+    cdef init(C_Argument_Reader_List reader, GraphIndex *graph_index, GraphId graph):
+        cdef Argument_List wrapper = Argument_List.__new__(Argument_List)
+        wrapper.reader = reader
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        return wrapper
+
+    def __getitem__(self, uint index):
+        reader = self.reader
+        if index >= reader.size():
+            raise IndexError('Out of bounds')
+        arg = reader[index]
+        if arg.isUnresolvable():
+            return None
+        elif arg.isTerm():
+            term = arg.getTerm()
+            graph_index = self.graph_index
+            return Node.init(graph_index.local_to_global[self.graph][term.getDepIndex()],
+                             term.getNodeIndex(), graph_index)
+        else: assert False
+
+    def __len__(self):
+        return self.reader.size()
 
 Unresolvable: TypeAlias = None
 Unknown: TypeAlias = None
-class Outcome:
+cdef class Outcome:
     """An outcome is the result of running a tactic on a proof state. A tactic may run on multiple proof states."""
 
-    tactic: Tactic | Unknown
+    cdef C_Outcome_Reader reader
+    cdef GraphId graph
+    cdef GraphIndex *graph_index
+    cdef readonly object tactic # : Tactic_Reader | Unknown
     """The tactic that generated the outcome. For it's arguments, see `tactic_arguments`
 
     Sometimes a tactic cannot or should not be recorded. In those cases, it is marked as 'unknown'.
@@ -384,34 +491,30 @@ class Outcome:
     happens for tactics that are known to be unsafe like `change_no_check`, `fix`, `cofix` and more.
     """
 
-    def __init__(self, reader, tactic: Tactic | Unknown, graph: GraphId, lreader: LowlevelDataReader):
-        self._reader = reader
-        self.tactic = tactic
-        self._graph = graph
-        self._lreader = lreader
+    @staticmethod
+    cdef init(C_Outcome_Reader reader, tactic: Tactic_Reader | Unknown, GraphId graph, GraphIndex *graph_index):
+        cdef Outcome wrapper = Outcome.__new__(Outcome)
+        wrapper.reader = reader
+        wrapper.tactic = tactic
+        wrapper.graph = graph
+        wrapper.graph_index = graph_index
+        return wrapper
 
+    @property
+    def lowlevel(self):
+        return Outcome_Reader.init(self.reader)
     def __repr__(self):
-        return repr(self._reader)
-
-    def __str__(self):
-        return str(self._reader)
+        return repr(self.lowlevel)
 
     @property
     def before(self) -> ProofState:
         """The proof state before the tactic execution."""
-        return ProofState(self._reader.before, self._graph, self._lreader)
+        return ProofState.init(self.reader.getBefore(), self.graph, self.graph_index)
 
     @property
     def after(self) -> Sequence[ProofState]:
         """The new proof states that were generated by the tactic."""
-        graph = self._graph
-        lreader = self._lreader
-        after = self._reader.after
-        count = len(after)
-        return TupleLike(
-            count,
-            lambda index: ProofState(after[index], graph, lreader)
-        )
+        return ProofState_List.init(self.reader.getAfter(), self.graph_index, self.graph)
 
     @property
     def term(self) -> Node:
@@ -419,14 +522,15 @@ class Outcome:
         hole (an `evar` node) for each of the after states. It may also refer to elements of the local context of
         the before state.
         """
-        term = self._reader.term
-        return Node(self._lreader.local_to_global(self._graph, term.depIndex),
-                    self._reader.term.nodeIndex, self._lreader)
+        term = self.reader.getTerm()
+        return Node.init(self.graph_index.local_to_global[self.graph][term.getDepIndex()],
+                         term.getNodeIndex(), self.graph_index)
 
     @property
     def term_text(self) -> str:
         """A textual representation of the proof term."""
-        return self._reader.termText
+        temp = self.reader.getTermText()
+        return (<char*>temp.begin())[:temp.size()]
 
     @property
     def tactic_arguments(self) -> Sequence[Node | Unresolvable]:
@@ -435,37 +539,59 @@ class Outcome:
         The node is the root of a graph representing an argument that is a term in the calculus of constructions.
         Sometimes, an argument is not resolvable to a term, in which case it is marked as `Unresolvable`.
         """
-        graph = self._graph
-        lreader = self._lreader
-        args = self._reader.tacticArguments
-        count = len(args)
-        def get_index(index):
-            arg = args[index]
-            match arg.which:
-                case 'unresolvable':
-                    return None
-                case 'term':
-                    return Node(lreader.local_to_global(graph, arg.term.depIndex),
-                                arg.term.nodeIndex, lreader)
-        return TupleLike(count, get_index)
+        graph = self.graph
+        graph_index = self.graph_index
+        args = self.reader.getTacticArguments()
+        return Argument_List.init(args, graph_index, graph)
 
-class ProofStep:
+cdef class Outcome_List:
+    cdef GraphIndex *graph_index
+    cdef C_Outcome_Reader_List reader
+    cdef GraphId graph
+    cdef object tactic
+
+    @staticmethod
+    cdef init(C_Outcome_Reader_List reader, object tactic, GraphIndex *graph_index, GraphId graph):
+        cdef Outcome_List wrapper = Outcome_List.__new__(Outcome_List)
+        wrapper.reader = reader
+        wrapper.tactic = tactic
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        return wrapper
+
+    def __getitem__(self, uint index):
+        reader = self.reader
+        if index >= reader.size():
+            raise IndexError('Out of bounds')
+        return Outcome.init(reader[index], self.tactic, self.graph, self.graph_index)
+
+    def __len__(self):
+        return self.reader.size()
+
+cdef class ProofStep:
     """A proof step is the execution of a single tactic on one or more proof states, producing a list of outcomes.
     """
 
-    def __init__(self, reader, graph: GraphId, lreader: LowlevelDataReader):
-        self._reader = reader
-        self._graph = graph
-        self._lreader = lreader
+    cdef C_ProofStep_Reader reader
+    cdef GraphId graph
+    cdef GraphIndex *graph_index
 
-    def __repr__(self):
-        return repr(self._reader)
-
-    def __str__(self):
-        return str(self._reader)
+    @staticmethod
+    cdef init(C_ProofStep_Reader reader, GraphId graph, GraphIndex *graph_index):
+        cdef ProofStep wrapper = ProofStep.__new__(ProofStep)
+        wrapper.reader = reader
+        wrapper.graph = graph
+        wrapper.graph_index = graph_index
+        return wrapper
 
     @property
-    def tactic(self) -> Tactic | Unknown:
+    def lowlevel(self):
+        return ProofStep_Reader.init(self.reader)
+    def __repr__(self):
+        return repr(self.lowlevel)
+
+    @property
+    def tactic(self) -> Tactic_Reader | Unknown:
         """The tactic that generated the proof step. Note that the arguments of the tactic can be found in the
         individual outcomes, because they may be different for each outcome.
 
@@ -473,48 +599,123 @@ class ProofStep:
         This currently happens with tactics that are run as a result of the `Proof with tac` construct and it
         happens for tactics that are known to be unsafe like `change_no_check`, `fix`, `cofix` and more.
         """
-        tactic = self._reader.tactic
-        match tactic.which:
-            case graph_api_capnp.ProofStep.Tactic.unknown:
-                return None
-            case graph_api_capnp.ProofStep.Tactic.known:
-                return Tactic(tactic.known)
+        tactic = self.reader.getTactic()
+        if tactic.isUnknown():
+            return None
+        elif tactic.isKnown():
+            return Tactic_Reader.init(tactic.getKnown())
+        else: assert False
 
     @property
     def outcomes(self) -> Sequence[Outcome]:
         """A list of transformations of proof states to other proof states, as executed by the tactic of the proof
         step
         """
-        graph = self._graph
-        lreader = self._lreader
-        tactic = self.tactic
-        outcomes = self._reader.outcomes
-        count = len(outcomes)
-        return TupleLike(
-            count,
-            lambda index: Outcome(outcomes[index], tactic, graph, lreader)
-        )
+        return Outcome_List.init(self.reader.getOutcomes(), self.tactic, self.graph_index, self.graph)
 
-class Definition:
+cdef class ProofStep_List:
+    cdef GraphIndex *graph_index
+    cdef C_ProofStep_Reader_List reader
+    cdef GraphId graph
+
+    @staticmethod
+    cdef init(C_ProofStep_Reader_List reader, GraphIndex *graph_index, GraphId graph):
+        cdef ProofStep_List wrapper = ProofStep_List.__new__(ProofStep_List)
+        wrapper.reader = reader
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        return wrapper
+
+    def __getitem__(self, uint index):
+        reader = self.reader
+        if index >= reader.size():
+            raise IndexError('Out of bounds')
+        return ProofStep.init(reader[index], self.graph, self.graph_index)
+
+    def __len__(self):
+        return self.reader.size()
+
+cdef class Representative_List:
+    cdef GraphIndex *graph_index
+    cdef C_Uint16_List reader
+    cdef GraphId graph
+
+    @staticmethod
+    cdef init(C_Uint16_List reader, GraphIndex *graph_index, GraphId graph):
+        cdef Representative_List wrapper = Representative_List.__new__(Representative_List)
+        wrapper.reader = reader
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        return wrapper
+
+    def __getitem__(self, uint index):
+        reader = self.reader
+        if index >= reader.size():
+            raise IndexError('Out of bounds')
+
+        graph_index = self.graph_index
+        depgraph = graph_index.local_to_global[self.graph][reader[index]]
+        return cast(Definition, Node.init(depgraph, graph_index.datasets[depgraph].getRepresentative(),
+                                          graph_index).definition)
+
+    def __len__(self):
+        return self.reader.size()
+
+@dataclass
+class Original: pass
+@dataclass
+class Discharged:
+    original: Definition
+@dataclass
+class Substituted:
+    original: Definition
+
+@dataclass
+class Inductive:
+    representative: Definition
+@dataclass
+class Constructor:
+    representative: Definition
+@dataclass
+class Projection:
+    representative: Definition
+@dataclass
+class ManualConstant: pass
+@dataclass
+class TacticalConstant:
+    proof: Sequence[ProofStep]
+@dataclass
+class ManualSectionConstant: pass
+@dataclass
+class TacticalSectionConstant:
+    proof: Sequence[ProofStep]
+
+cdef class Definition:
     """A definition of the CIC, which is either an constant, inductive, constructor, projection or section
     variable. Constants and section variables can have tactical proofs associated to them.
     """
 
-    node: Node
+    cdef C_Definition_Reader reader
+    cdef GraphId graph
+    cdef GraphIndex *graph_index
+    cdef readonly Node node
     """The node that is associated with this definition. It holds that `definition.node.definition == definition`.
     """
 
-    def __init__(self, node: Node, reader, graph: GraphId, lreader: LowlevelDataReader):
-        self.node = node
-        self._reader = reader
-        self._graph = graph
-        self._lreader = lreader
+    @staticmethod
+    cdef init(Node node, C_Definition_Reader reader, GraphId graph, GraphIndex *graph_index):
+        cdef Definition wrapper = Definition.__new__(Definition)
+        wrapper.node = node
+        wrapper.reader = reader
+        wrapper.graph = graph
+        wrapper.graph_index = graph_index
+        return wrapper
 
+    @property
+    def lowlevel(self):
+        return Definition_Reader.init(self.reader)
     def __repr__(self):
-        return repr(self._reader)
-
-    def __str__(self):
-        return str(self._reader)
+        return repr(self.lowlevel)
 
     def __eq__(self, other: Definition) -> bool:
         """Physical equality of two nodes. Note that two nodes with a different physical equality
@@ -533,7 +734,8 @@ class Definition:
         """The fully-qualified name of the definition. The name should be unique in a particular global context,
         but is not unique among different branches of the global in a dataset.
         """
-        return self._reader.name
+        temp = self.reader.getName()
+        return (<char*>temp.begin())[:temp.size()]
 
     @property
     def previous(self) -> Definition | None:
@@ -545,11 +747,11 @@ class Definition:
         must also be reachable through the chain of previous fields. An exception to this rule are mutually
         recursive definitions. Those nodes are placed into the global context in an arbitrary ordering.
         """
-        nodeid = self._reader.previous
-        if len(self._lreader[self._graph].graph.nodes) == nodeid:
+        nodeid = self.reader.getPrevious()
+        if self.graph_index.nodes[self.graph].size() == nodeid:
             return None
         else:
-            node = Node(self._graph, nodeid, self._lreader)
+            node = Node.init(self.graph, nodeid, self.graph_index)
             return node.definition
 
     @property
@@ -560,22 +762,14 @@ class Definition:
 
         Note that this is a lowlevel property. Prefer to use `global_context` or `clustered_global_context`.
         """
-        lreader = self._lreader
-        graph = self._graph
-        eps = self._reader.externalPrevious
-        count = len(eps)
-        def get_index(index):
-            depgraph = lreader.local_to_global(graph, eps[index])
-            return cast(Definition, Node(depgraph, lreader[depgraph].representative, lreader).definition)
-        return TupleLike(count, get_index)
+        return Representative_List.init(self.reader.getExternalPrevious(), self.graph_index, self.graph)
 
     def _global_context(self, across_files : bool, inclusive, seen : set[Node]):
         # force inclusivity for recursive definitions
         d = self.cluster_representative
-        match d.kind:
-            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
-                inclusive = True
-        
+        if isinstance(d.kind, (Inductive, Constructor, Projection)):
+            inclusive = True
+
         while d is not None:
             if inclusive: yield d # skip first result if not inclusive
             else: inclusive = True
@@ -624,14 +818,6 @@ class Definition:
             inclusive = inclusive,
         ))
 
-    @dataclass
-    class Original: pass
-    @dataclass
-    class Discharged:
-        original: Definition
-    @dataclass
-    class Substituted:
-        original: Definition
     @property
     def status(self) -> Original | Discharged | Substituted:
         """A definition is either
@@ -641,41 +827,21 @@ class Definition:
         (3) a definition that was obtained by performing some sort of module functor substitution.
         When a definition is not original, we cross-reference to the definition that it was derived from.
         """
-        status = self._reader.status
-        match status.which:
-            case graph_api_capnp.Definition.Status.original:
-                return Definition.Original()
-            case graph_api_capnp.Definition.Status.discharged:
-                return Definition.Discharged(
-                    cast(Definition, Node(self._graph, status.discharged,
-                                          self._lreader).definition))
-            case graph_api_capnp.Definition.Status.substituted:
-                return Definition.Substituted(
-                    cast(Definition,
-                         Node(self._lreader.local_to_global(self._graph, status.substituted.depIndex),
-                              status.substituted.nodeIndex, self._lreader).definition))
-            case _:
-                assert False
+        status = self.reader.getStatus()
+        if status.isOriginal():
+            return Original()
+        elif status.isDischarged():
+            return Discharged(
+                cast(Definition, Node.init(self.graph, status.getDischarged(),
+                                           self.graph_index).definition))
+        elif status.isSubstituted():
+            substituted = status.getSubstituted()
+            return Substituted(
+                cast(Definition,
+                     Node.init(self.graph_index.local_to_global[self.graph][substituted.getDepIndex()],
+                               substituted.getNodeIndex(), self.graph_index).definition))
+        else: assert False
 
-    @dataclass
-    class Inductive:
-        representatative: Definition
-    @dataclass
-    class Constructor:
-        representative: Definition
-    @dataclass
-    class Projection:
-        representative: Definition
-    @dataclass
-    class ManualConstant: pass
-    @dataclass
-    class TacticalConstant:
-        proof: Sequence[ProofStep]
-    @dataclass
-    class ManualSectionConstant: pass
-    @dataclass
-    class TacticalSectionConstant:
-        proof: Sequence[ProofStep]
     @property
     def kind(self) -> Union[Inductive, Constructor, Projection,
                             ManualConstant, TacticalConstant,
@@ -689,51 +855,38 @@ class Definition:
 
         The associated information is low-level. Prefer to use the properties `proof` and `cluster` to access them.
         """
-        kind = self._reader
-        graph = self._graph
-        lreader = self._lreader
-        class ProofStepSeq(TupleLike):
-            def __init__(self, reader):
-                super().__init__(
-                    len(reader),
-                    lambda index: ProofStep(reader[index], graph, lreader)
-                )
-        # TODO: pycapnp does not seem to allow matching on graph_api_capnp.Definition.inductive,
-        #       we should report this at some point. Alternative is to use the string.
-        match kind.which:
-            case "inductive":
-                return Definition.Inductive(
-                    cast(Definition, Node(self._graph, kind.inductive,
-                                          self._lreader).definition))
-            case "constructor":
-                return Definition.Inductive(
-                    cast(Definition, Node(self._graph, kind.constructor,
-                                          self._lreader).definition))
-            case "projection":
-                return Definition.Projection(
-                    cast(Definition, Node(self._graph, kind.projection,
-                                          self._lreader).definition))
-            case "manualConstant":
-                return Definition.ManualConstant()
-            case "tacticalConstant":
-                return Definition.TacticalConstant(ProofStepSeq(kind.tacticalConstant))
-            case "manualSectionConstant":
-                return Definition.ManualConstant()
-            case "tacticalSectionConstant":
-                return Definition.TacticalSectionConstant(ProofStepSeq(kind.tacticalSectionConstant))
-            case _:
-                assert False
+        kind = self.reader
+        graph = self.graph
+        graph_index = self.graph_index
+        if kind.isInductive():
+            return Inductive(
+                cast(Definition, Node.init(self.graph, kind.getInductive(),
+                                           self.graph_index).definition))
+        elif kind.isConstructor():
+            return Inductive(
+                cast(Definition, Node.init(self.graph, kind.getConstructor(),
+                                           self.graph_index).definition))
+        elif kind.isProjection():
+            return Projection(
+                cast(Definition, Node.init(self.graph, kind.getProjection(),
+                                           self.graph_index).definition))
+        elif kind.isManualConstant():
+            return ManualConstant()
+        elif kind.isTacticalConstant():
+            return TacticalConstant(ProofStep_List.init(kind.getTacticalConstant(), graph_index, graph))
+        elif kind.isManualSectionConstant():
+            return ManualConstant()
+        elif kind.isTacticalSectionConstant():
+            return TacticalSectionConstant(ProofStep_List.init(kind.getTacticalSectionConstant(), graph_index, graph))
+        else: assert False
 
     @property
     def proof(self) -> Sequence[ProofStep] | None:
         """An optional tactical proof that was used to create this definition."""
-        match self.kind:
-            case Definition.TacticalConstant(proof):
-                return proof
-            case Definition.TacticalSectionConstant(proof):
-                return proof
-            case _:
-                return None
+        kind = self.kind
+        if isinstance(kind, (TacticalConstant, TacticalSectionConstant)):
+            return kind.proof
+        else: return None
 
     @property
     def cluster_representative(self) -> Definition:
@@ -742,15 +895,10 @@ class Definition:
 
         This is a low-level property. Prefer to use the `cluster` property.
         """
-        match self.kind:
-            case Definition.Inductive(representative):
-                return representative
-            case Definition.Constructor(representative):
-                return representative
-            case Definition.Projection(representative):
-                return representative
-            case _:
-                return self
+        kind = self.kind
+        if isinstance(kind, (Inductive, Constructor, Projection)):
+            return kind.representative
+        else: return self
 
     @property
     def cluster(self) -> Iterable[Definition]:
@@ -770,15 +918,17 @@ class Definition:
     @property
     def type_text(self) -> str:
         """A textual representation of the type of this definition."""
-        return self._reader.typeText
+        temp = self.reader.getTypeText()
+        return (<char*>temp.begin())[:temp.size()]
 
     @property
     def term_text(self) -> str | None:
         """A textual representation of the body of this definition.
         For inductives, constructors, projections, section variables and axioms this is `None`.
         """
-        text = self._reader.termText
-        if not text:
+        temp = self.reader.getTermText()
+        cdef str text = (<char*>temp.begin())[:temp.size()]
+        if text == "":
             return None
         else:
             return text
@@ -787,48 +937,83 @@ class Definition:
     def is_file_representative(self) -> bool:
         """Returns true if this definition is the representative of the super-global context of it's file.
         Se also `Dataset.representative`."""
-        return self._lreader[self._graph].representative == self.node.nodeid
+        return self.graph_index.datasets[self.graph].getRepresentative() == self.node.nodeid
 
     @classmethod
     def _group_by_clusters(cls, definitions : Iterable[Definition]) -> Iterable[list[Definition]]:
-        return map(
-            lambda x: list(x[1]),
-            itertools.groupby(
-                definitions,
-                key = lambda d: d.cluster_representative.node,
-            )
-        )
+        definitions_it = iter(definitions)
+        while True:
+            try:
+                node = next(definitions_it)
+            except StopIteration:
+                return
+            rep = node.cluster_representative
+            n = rep
+            cluster = [n]
+            while n.previous and n.previous.cluster_representative == rep:
+                n = n.previous
+                cluster.append(n)
+                next(definitions_it)
+            yield cluster
 
-class Dataset:
+cdef class Dataset_Definition_List:
+    cdef GraphIndex *graph_index
+    cdef C_Uint32_List reader
+    cdef GraphId graph
+
+    @staticmethod
+    cdef init(C_Uint32_List reader, GraphIndex *graph_index, GraphId graph):
+        cdef Dataset_Definition_List wrapper = Dataset_Definition_List.__new__(Dataset_Definition_List)
+        wrapper.reader = reader
+        wrapper.graph_index = graph_index
+        wrapper.graph = graph
+        return wrapper
+
+    def __getitem__(self, uint index):
+        reader = self.reader
+        if index >= reader.size():
+            raise IndexError('Out of bounds')
+        return cast(Definition, Node.init(self.graph, reader[index], self.graph_index).definition)
+
+    def __len__(self):
+        return self.reader.size()
+
+cdef class Dataset:
     """The data corresponding to a single Coq source file. The data contains a representation of all definitions
     that have existed at any point throughout the compilation of the source file.
     """
 
-    filename: Path
+    cdef GraphIndex *graph_index
+    cdef GraphId graph
+    cdef C_Dataset_Reader reader
+    cdef readonly object filename # : Path
     """The physical file in which the data contained in this class can be found."""
 
-    def __init__(self, filename: Path, graph: GraphId, lreader: LowlevelDataReader):
-        self.filename = filename
-        self._graph = graph
-        self._reader = lreader[graph]
-        self._lreader = lreader
+    @staticmethod
+    cdef init(filename: Path, GraphId graph, GraphIndex *graph_index):
+        cdef Dataset wrapper = Dataset.__new__(Dataset)
+        wrapper.filename = filename
+        wrapper.graph = graph
+        wrapper.reader = graph_index.datasets[graph]
+        wrapper.graph_index = graph_index
+        return wrapper
 
+    @property
+    def lowlevel(self):
+        return Dataset_Reader.init(self.reader)
     def __repr__(self):
-        return repr(self._reader)
-
-    def __str__(self):
-        return str(self._reader)
+        return repr(self.lowlevel)
 
     @property
     def dependencies(self) -> Sequence[Path]:
         """A list of physical paths of data files that are direct dependencies of this file."""
-        dependencies = self._reader.dependencies
+        dependencies = self.reader.getDependencies()
         # The first dependency is the file itself, which we do not want to expose here.
-        count = len(dependencies) - 1
-        return TupleLike(
-            count,
-            lambda index: Path(dependencies[index+1])
-        )
+        count = dependencies.size() - 1
+        def get(index):
+            temp = dependencies[index+1]
+            return Path((<char*>temp.begin())[:temp.size()])
+        return TupleLike(count, get)
 
     @property
     def representative(self) -> Definition | None:
@@ -839,11 +1024,11 @@ class Dataset:
         This is a low-level property.
         Prefer to use `definitions(spine_only = True)` and `clustered_definitions(spine_only=True)`.
         """
-        representative = self._reader.representative
-        if len(self._reader.graph.nodes) == representative:
+        representative = self.reader.getRepresentative()
+        if self.reader.getGraph().getNodes().size() == representative:
             return None
         else:
-            return Node(self._graph, representative, self._lreader).definition
+            return Node.init(self.graph, representative, self.graph_index).definition
 
     def definitions(self, across_files = False, spine_only = False) -> Iterable[Definition]:
         """All of the definitions present in the file.
@@ -864,14 +1049,7 @@ class Dataset:
                 across_files = across_files,
             )
         else:
-            graph = self._graph
-            lreader = self._lreader
-            ds = self._reader.definitions
-            count = len(ds)
-            return TupleLike(
-                count,
-                lambda index: cast(Definition, Node(graph, ds[index], lreader).definition)
-            )
+            return Dataset_Definition_List.init(self.reader.getDefinitions(), self.graph_index, self.graph)
 
     def clustered_definitions(self, across_files = False, spine_only = False) -> Iterable[list[Definition]]:
         """All of the definitions present in the file, clustered by mutually recursive definitions.
@@ -892,16 +1070,17 @@ class Dataset:
 
     @property
     def module_name(self) -> str:
-        return self._reader.moduleName
+        temp = self.reader.getModuleName()
+        return (<char*>temp.begin())[:temp.size()]
 
     def node_by_id(self, nodeid: NodeId) -> Node:
         """Lookup a node inside of this file by it's local node-id. This is a low-level function."""
-        return Node(self._graph, nodeid, self._lreader)
+        return Node.init(self.graph, nodeid, self.graph_index)
 
-def lowlevel_to_highlevel(lreader: LowlevelDataReader) -> dict[Path, Dataset]:
+def lowlevel_to_highlevel(LowlevelDataReader lreader) -> dict[Path, Dataset]:
     """Convert a dataset initialized as a `LowLevelDataReader` into a high level interface."""
-    return {f: Dataset(f, g, lreader)
-            for f, g in lreader.graphs_by_filename.items()}
+    return {f: Dataset.init(f, g, &lreader.graph_index)
+            for f, g in lreader.graphid_by_filename.items()}
 
 @contextmanager
 def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None]:
@@ -934,7 +1113,7 @@ class GlobalContextSets:
     def __init__(self, cache, parent: GlobalContextSets | None,
                  should_propagate: Callable[[Definition], bool]):
         """Do not call directly. Use `GlobalContextSets.new_context` and `GlobalContextSets.sub_context`."""
-        self.cache: PMap[Definition, Any] = cache
+        self.cache: Map = cache
         self.parent = parent
         self.should_propagate = should_propagate
 
@@ -949,16 +1128,15 @@ class GlobalContextSets:
         except KeyError:
             external_previous = list(d.external_previous)
             if prev := d.previous:
-                new_set = self._global_context_set(prev).add(prev)
+                new_set = self._global_context_set(prev).set(prev, ())
+            elif len(external_previous) > 0:
+                ep = external_previous[0]
+                new_set = self._global_context_set(ep).set(ep, ())
+                external_previous = external_previous[1:]
             else:
-                if len(external_previous) > 0:
-                    ep = external_previous[0]
-                    new_set = self._global_context_set(ep).add(ep)
-                    external_previous = external_previous[1:]
-                else:
-                    new_set = s()
+                new_set = Map()
             for ep in external_previous:
-                new_set = cast(PSet, new_set | self._global_context_set(ep).add(ep))
+                new_set = new_set.update(self._global_context_set(ep)).set(ep, ())
             self._propagate(d, new_set)
             return new_set
 
@@ -966,9 +1144,8 @@ class GlobalContextSets:
         """Retrieve the global context of a definition, caching the result, and intermediate results."""
         start = d.cluster_representative
         context = self._global_context_set(start)
-        match start.kind:
-            case Definition.Inductive(_) | Definition.Constructor(_) | Definition.Projection(_):
-                context = context.add(start)
+        if isinstance(start.kind, (Inductive, Constructor, Projection)):
+            context = context.set(start, ())
         return context
 
     @contextmanager
@@ -984,4 +1161,54 @@ class GlobalContextSets:
     @staticmethod
     def new_context() -> Generator[GlobalContextSets, None, None]:
         """Crate a new caching context where global-context-set's can be retrieved and cached."""
-        yield GlobalContextSets(m(), None, lambda _: False)
+        yield GlobalContextSets(Map(), None, lambda _: False)
+
+cdef struct GlobalNode:
+    GraphId graphid
+    NodeId nodeid
+
+def node_dependencies(Node n, deps: set[Definition] | None = None) -> set[Definition]:
+    """Given a `Node` `n`, calculate the set of `Definition`'s that are directly reachable
+    from `n`. Transitively reachable definitions are not included.
+    """
+    cdef GraphIndex *graph_index = n.graph_index
+    cdef unordered_set[int64_t] seen
+    cdef stack[GlobalNode] stack
+    cdef GlobalNode current_node
+    cdef uint32_t children_index
+    cdef uint16_t children_limit
+
+    if deps is None:
+        deps = set()
+    stack.push(GlobalNode(n.graph, n.nodeid))
+    while not stack.empty():
+        current_node = stack.top()
+        stack.pop()
+        node_hash = (<uint64_t> current_node.graphid) << 32 | current_node.nodeid
+        if seen.find(node_hash) != seen.end():
+            continue
+        seen.insert(node_hash)
+        node_contents = graph_index.nodes[current_node.graphid][current_node.nodeid]
+        node_label = node_contents.getLabel()
+        if node_label.isDefinition():
+            deps.add(Node.init(current_node.graphid, current_node.nodeid, graph_index).definition)
+            continue
+        children_index = node_contents.getChildrenIndex()
+        children_limit = children_index + node_contents.getChildrenCount()
+        edges = graph_index.edges[current_node.graphid]
+        while children_index < children_limit:
+            edge_target = edges[children_index].getTarget()
+            child_graph = graph_index.local_to_global[current_node.graphid][edge_target.getDepIndex()]
+            child = GlobalNode(child_graph, edge_target.getNodeIndex())
+            stack.push(child)
+            children_index += 1
+    return deps
+
+def definition_dependencies(d: Definition):
+    """Given a `Definition` `d`, calculate the set of `Definition`'s that are directly reachable for `d`.
+    Transitively reachable definitions are not included nor is `d` itself.
+    """
+    deps = set()
+    for _, c in d.node.children:
+        node_dependencies(c, deps)
+    return deps

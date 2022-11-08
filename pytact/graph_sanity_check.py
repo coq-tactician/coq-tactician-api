@@ -4,12 +4,10 @@ from pathlib import Path
 from functools import partial
 from collections import Counter
 import math
-from pytact.data_reader import GlobalContextSets, lowlevel_data_reader, lowlevel_to_highlevel, Definition, Node
+from pytact.data_reader import GlobalContextSets, lowlevel_data_reader, lowlevel_to_highlevel, Definition, Node, Original, Substituted, Discharged, node_dependencies, definition_dependencies
+import pytact.graph_api_capnp_cython as apic
 import capnp
-capnp.remove_import_hook()
-import pytact.common
-graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+import pytact.graph_api_capnp as graph_api_capnp
 
 def open_dataset(dataset_path: Path):
     global ctx
@@ -23,28 +21,28 @@ def open_dataset(dataset_path: Path):
     global global_contexts
     global_contexts = GlobalContextSets.new_context().__enter__()
 
-def node_dependencies(n: Node, deps: set[Definition] | None = None) -> set[Definition]:
-    if deps is None:
-        deps = set()
-    seen: set[Node] = set()
-    def recurse(node: Node):
-        if node in seen:
-            return
-        seen.add(node)
-        if d := node.definition:
-            deps.add(d)
-            return
-        for _, child in node.children:
-            recurse(child)
+# def node_dependencies(n: Node, deps: set[Definition] | None = None) -> set[Definition]:
+#     if deps is None:
+#         deps = set()
+#     seen: set[Node] = set()
+#     stack = [n]
+#     while stack:
+#         node = stack.pop()
+#         if node in seen:
+#             continue
+#         seen.add(node)
+#         if d := node.definition:
+#             deps.add(d)
+#             continue
+#         for _, child in node.children:
+#             stack.append(child)
+#     return deps
 
-    recurse(n)
-    return deps
-
-def definition_dependencies(d: Definition):
-    deps = set()
-    for _, c in d.node.children:
-        node_dependencies(c, deps)
-    return deps
+# def definition_dependencies(d: Definition):
+#     deps = set()
+#     for _, c in d.node.children:
+#         node_dependencies(c, deps)
+#     return deps
 
 def process1(args, fname: Path):
     file_definitions = 0
@@ -63,7 +61,7 @@ def process1(args, fname: Path):
     original_proofs = 0
     original_proofs_faithful = 0
     unresolvable = 0
-    graphid = data.graphs_by_filename[fname]
+    graphid = data.graphid_by_filename[fname]
     freader = data[graphid]
     graph = freader.graph
     nodes_count = node_counts[graphid]
@@ -73,18 +71,19 @@ def process1(args, fname: Path):
 
     # Check correctness of Graph struct
     for n in graph.nodes:
-        if not (n.childrenIndex + n.childrenCount <= edges_count):
+        if not (n.children_index + n.children_count <= edges_count):
             raise Exception(f"{fname}: Children of node {n} are not valid indices of Graph.edges")
-        n = n.label
-        if (n.which() == graph_api_capnp.Graph.Node.Label.definition):
+        if n.label.is_definition:
             file_definitions += 1
 
     for t in graph.edges:
-        if t.target.depIndex >= dependency_count:
-            raise Exception(f"{fname}: target.depIndex {t.target.depIndex} "
+        target = t.target
+        dep_index = target.dep_index
+        if dep_index >= dependency_count:
+            raise Exception(f"{fname}: target.depIndex {t.target.dep_index} "
                   f"but len(g.dependencies) is {dependency_count} "
                   f"and g.dependencies = {freader.dependencies}")
-        if t.target.nodeIndex >= node_counts[data.local_to_global(graphid, t.target.depIndex)]:
+        if target.node_index >= node_counts[data.local_to_global(graphid, dep_index)]:
             raise Exception(f"{fname}: Reference for target {t} is out of bounds")
 
     # Check correctness of Dataset struct
@@ -94,19 +93,19 @@ def process1(args, fname: Path):
 
     hreader = hdata[fname]
     with global_contexts.sub_context(lambda d: d.is_file_representative) as sub_global_contexts:
-        for d in hreader.definitions:
+        for d in hreader.definitions():
             if not d.node.definition:
                 raise Exception(f"{fname}: Node {d.node} should be a definition but is not")
 
             # Check correctness of Definition struct
             match d.status:
-                case Definition.Original():
+                case Original():
                     file_original_definitions += 1
-                case Definition.Discharged(original):
+                case Discharged(original):
                     if not original.node.definition:
                         raise Exception(f"{fname}: Discharged node of definition {d.name} "
                                         f"is not a definition")
-                case Definition.Substituted(original):
+                case Substituted(original):
                     if not original.node.definition:
                         raise Exception(f"{fname}: Substituted node of definition {d.name} "
                                         f"is not a definition")
@@ -152,7 +151,7 @@ def process1(args, fname: Path):
                     else:
                         ident = 0
                     file_tactics[ident] += 1
-                    if isinstance(d.status, Definition.Original):
+                    if isinstance(d.status, Original):
                         file_original_tactics[ident] += 1
                         original_proof_steps += 1
                         if (t := p.tactic) and t.text == t.interm_text:
@@ -171,7 +170,7 @@ def process1(args, fname: Path):
                             check_in_global_context(node_dependencies(outcome.term))
                         for state in [outcome.before] + list(outcome.after):
                             root_label = state.root.label
-                            if root_label.which != graph_api_capnp.Graph.Node.Label.proofState:
+                            if not root_label.is_proof_state:
                                 raise Exception(f"{fname}: root is proof state {state} is {root_label}")
 
                             if not args.quick:
@@ -188,8 +187,7 @@ def process1(args, fname: Path):
                                     raise Exception(
                                         f"{fname}: hyp {c} of state {state} in def {d.name} is not "
                                         f"reachable from the root")
-                                if c.label.which not in [graph_api_capnp.Graph.Node.Label.contextDef,
-                                                        graph_api_capnp.Graph.Node.Label.contextAssum]:
+                                if not (c.label.is_context_def or c.label.is_context_assum):
                                     raise Exception(
                                         f"{fname}: ctx {state.context} of a state {state} "
                                         f"has the wrong node classification {c.label}")
@@ -198,7 +196,7 @@ def process1(args, fname: Path):
                         if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
                             raise Exception(f"{fname}: Tactic with two different argument lengths detected")
                         outcomes += 1
-                        if isinstance(d.status, Definition.Original):
+                        if isinstance(d.status, Original):
                             original_outcomes += 1
                         for a in outcome.tactic_arguments:
                             if not a:
@@ -206,16 +204,15 @@ def process1(args, fname: Path):
                             else:
                                 if not args.quick:
                                     check_in_global_context(node_dependencies(a))
-                if isinstance(d.status, Definition.Original):
+                if isinstance(d.status, Original):
                     original_proofs += 1
                     if faithful:
                         original_proofs_faithful += 1
     if freader.representative != len(graph.nodes):
-        if (graph.nodes[freader.representative].label.which() !=
-            graph_api_capnp.Graph.Node.Label.definition):
+        if not graph.nodes[freader.representative].label.is_definition:
             raise Exception(f"{fname}: Representative {freader.representative} is not a definition")
     for dep in freader.dependencies:
-        if Path(dep) not in data.graphs_by_filename:
+        if Path(dep) not in data.graphid_by_filename:
             raise Exception(f"{fname}: Dependency {dep} could not be found")
 
 
@@ -230,7 +227,7 @@ def entropy(d):
     n = sum(d.values())
     return -sum([(c / n) * math.log(c / n, 2) for c in d.values()])
 
-def main():
+def main2():
     parser = argparse.ArgumentParser(
         description = 'sanity of check of *.bin dataset with labelled_graph_api',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -282,6 +279,10 @@ def main():
     process1_partial = partial(process1, args)
     with Pool(args.jobs, open_dataset, [dataset_path]) as pool:
         results = pool.map(process1_partial, file_list, chunksize=1)
+    # file_list = file_list[280:360]
+    # print(file_list)
+    # open_dataset(dataset_path)
+    # results = [process1(args, f) for f in file_list]
 
     for res in results:
         (fname, nodes_count, edges_count,
@@ -340,6 +341,13 @@ def main():
         print("Tactics intermtext text:")
         for t in base_tactics_intermtext:
             print(t)
+
+def main():
+    # import pstats, cProfile
+    # cProfile.runctx("main2()", globals(), locals(), "Profile.prof")
+    # s = pstats.Stats("Profile.prof")
+    # s.strip_dirs().sort_stats("time").print_stats()
+    main2()
 
 if __name__ == '__main__':
     main()

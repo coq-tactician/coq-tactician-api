@@ -1,0 +1,63 @@
+[build-system]
+requires = [
+    "setuptools",
+    "wheel",
+    "Cython>=3.0.0a11",
+    "pycapnp @ git+ssh://git@github.com/capnproto/pycapnp#928dd1365286939fbed14aaf62e9f84884e28cb8", # TODO: upgrade
+    "Jinja2",
+    "inflection"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytact"
+version = '8.11.0.1.dev0'
+description = "Python interface to coq-tactician-reinforce"
+authors = [
+    {name = "Lasse Blaauwbroek", email = "lasse@blaauwbroek.eu"},
+    {name = "Vasily Pestun", email = "vasily.pestun@gmail.com"},
+    {name = "Miroslav Olšák", email = "mirek@olsak.net"},
+]
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT License"}
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: C",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: POSIX :: Linux"
+]
+dependencies = [
+    "pycapnp @ git+ssh://git@github.com/capnproto/pycapnp#928dd1365286939fbed14aaf62e9f84884e28cb8", # TODO: upgrade
+    "immutables",
+    "graphviz",
+    "sanic==22.6.2",
+    "sanic-ext==22.6.2",
+    "Jinja2"
+]
+
+[project.scripts]
+pytact-server = "pytact.fake_python_server:main"
+pytact-check = "pytact.graph_sanity_check:main"
+pytact-visualize = "pytact.visualisation_webserver:main"
+pytact-prover = "pytact.prover:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+pytact = [
+    "graph_api.capnp",
+    "templates/visualizer.html",
+    "tests/TestReinforceStdin.v",
+    "tests/TestReinforceTcp.v",
+    "tests/prop4.txt",
+    "data_reader.pyx",
+    "graph_api_capnp_cython.pyx",
+    "graph_api_capnp_cython.pxd",
+]
