@@ -17,7 +17,7 @@ def capnp2cython():
     source_time = os.path.getmtime(api_file)
     if target_time < source_time:
         print(subprocess.check_output(["capnpc", "-oc++", api_file]))
-        # subprocess.check_output(["capnpc", "-o./pytact/generate_api.py", api_file])
+        subprocess.check_output(["capnpc", "-o./pytact/generate_api.py", api_file])
 
         copyfile(api_file + '.c++', api_file + '.cpp')
 
