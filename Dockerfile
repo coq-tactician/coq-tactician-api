@@ -13,11 +13,13 @@ RUN $CONDA_EXE create -n python3.10 python=3.10 -y
 ENV CONDA_PREFIX="${HOME}/miniconda3/envs/python3.10"
 ENV CONDA_PYTHON_EXE="${HOME}/miniconda3/bin/python"
 RUN echo 'PATH=$CONDA_PREFIX/bin:$PATH' >> .profile
+RUN $CONDA_EXE activate python3.10
+RUN $CONDA_EXE -c conda-forge capnprot
 
 # apt-get level project dependencies
 
 RUN sudo apt-get update
-RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev cmake build-essential
+RUN sudo apt-get --yes install graphviz pkg-config libev-dev libxxhash-dev cmake build-essential
 
 COPY --chown=coq:coq . coq-tactician-reinforce
 
