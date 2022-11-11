@@ -13,8 +13,8 @@ capnp_executable = shutil.which("capnp")
 if not capnp_executable:
     raise ValueError("capnp executable not found")
 capnp_dir = os.path.dirname(capnp_executable)
-include_dir = [os.path.join(capnp_dir, "..", "include")]
-capnp.add_import_hook([include_dir])
+include_dir = [os.path.abspath(os.path.join(capnp_dir, "..", "include"))]
+capnp.add_import_hook(include_dir)
 import schema_capnp
 
 def cython_name(name):
