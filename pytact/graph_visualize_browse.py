@@ -55,10 +55,12 @@ class Settings:
 class GraphVisualizationData:
     data: dict[Path, Dataset]
     trans_deps: dict[Path, set[Path]] = field(init=False)
+    graphid2path: list[Path] = field(init=False)
 
     def __post_init__(self):
         self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
                                               for d in self.data.values()})
+        self.graphid2path = [d.filename for d in sorted(self.data.values(), key=lambda d: d.graph)]
 
 @dataclass
 class GraphVisualizationOutput:
@@ -122,6 +124,7 @@ class GraphVisualizator:
     def __init__(self, data: GraphVisualizationData, url_maker: UrlMaker, settings: Settings = Settings()):
         self.data = data.data
         self.trans_deps = data.trans_deps
+        self.graphid2path = data.graphid2path
         self.url_maker = url_maker
         self.settings = settings
         self.node_counter = 0
@@ -164,7 +167,7 @@ class GraphVisualizator:
             tooltip = label
         url = None
         if node.definition:
-            url = self.url_maker.definition(node.path, node.nodeid)
+            url = self.url_maker.definition(self.graphid2path[node.graph], node.nodeid)
         dot.node(id, label, URL = url, shape = shape, tooltip = tooltip)
         return id
 
@@ -196,7 +199,7 @@ class GraphVisualizator:
                     dot.edge(id, repr(target.node),
                                 arrowtail="inv", dir="both", constraint="false", style="dashed")
                 case Substituted(target):
-                    if d.node.path == target.node.path:
+                    if d.node.graph == target.node.graph:
                         id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
                         dot.edge(id, str(target.node),
                                     arrowtail="odot", dir="both", constraint="false", style="dashed")
@@ -234,7 +237,7 @@ class GraphVisualizator:
                     lhead = "cluster_"+target
                 dot.edge(str(cluster[-1].node), target, lhead = lhead, ltail = ltail)
             for fi in cluster[-1].external_previous:
-                fid = self.render_file_node(dot, fi.node.path)
+                fid = self.render_file_node(dot, self.graphid2path[fi.node.graph])
                 dot.edge(str(cluster[-1].node), fid, ltail = ltail)
 
         location = self.path2location(fname)

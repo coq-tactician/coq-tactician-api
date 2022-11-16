@@ -78,9 +78,9 @@ def file_dataset_reader(fname: Path) -> Generator[Any, None, None]:
                 yield apic.Dataset_Reader(g)
 
 cdef struct GraphIndex:
-    vector[C_Dataset_Reader] datasets
     vector[C_Graph_Node_Reader_List] nodes
     vector[C_Graph_EdgeTarget_Reader_List] edges
+    vector[uint32_t] representatives
     vector[vector[uint32_t]] local_to_global
 
 cdef class LowlevelDataReader:
@@ -122,24 +122,20 @@ cdef class LowlevelDataReader:
         self.graphid_by_filename = {f: i for i, (f, _) in enumerate(dataset)}
         self.graph_files = [f for f, _ in dataset]
 
-        cdef vector[C_Dataset_Reader] c_datasets
-        c_datasets.reserve(len(dataset))
-        for _, g in dataset:
-            c_datasets.push_back((<Dataset_Reader>g).source)
-
-
         cdef vector[C_Graph_Node_Reader_List] c_nodes
         c_nodes.reserve(len(dataset))
-        for d in c_datasets:
-            c_nodes.push_back(d.getGraph().getNodes())
-
         cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
         c_edges.reserve(len(dataset))
-        for d in c_datasets:
+        cdef vector[uint32_t] c_representatives
+        c_representatives.reserve(len(dataset))
+        for _, g in dataset:
+            d = (<Dataset_Reader>g).source
+            c_nodes.push_back(d.getGraph().getNodes())
             c_edges.push_back(d.getGraph().getEdges())
+            c_representatives.push_back(d.getRepresentative())
 
         local_to_global = [[self.graphid_by_filename[Path(f)] for f in g.dependencies] for _, g in dataset]
-        self.graph_index = GraphIndex(c_datasets, c_nodes, c_edges, local_to_global)
+        self.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, local_to_global)
 
     def local_to_global(self, graph: int, dep_index: int) -> int:
         """Convert dependency-index relative to a graph-id to a new graph-id.
@@ -283,12 +279,6 @@ cdef class Node:
             return Definition.init(self, label.getDefinition(), self.graph, self.graph_index)
         else:
             return None
-
-    @property
-    def path(self) -> Path:
-        """The physical location on disk in which this node can be found."""
-        temp = self.graph_index.datasets[self.graph].getDependencies()[0]
-        return Path((<char*>temp.begin())[:temp.size()])
 
 cdef class EdgeTarget_List:
     cdef GraphIndex *graph_index
@@ -655,7 +645,7 @@ cdef class Representative_List:
 
         graph_index = self.graph_index
         depgraph = graph_index.local_to_global[self.graph][reader[index]]
-        return cast(Definition, Node.init(depgraph, graph_index.datasets[depgraph].getRepresentative(),
+        return cast(Definition, Node.init(depgraph, graph_index.representatives[depgraph],
                                           graph_index).definition)
 
     def __len__(self):
@@ -691,7 +681,7 @@ class TacticalSectionConstant:
     proof: Sequence[ProofStep]
 
 cdef class Definition:
-    """A definition of the CIC, which is either an constant, inductive, constructor, projection or section
+    """A definition of the CIC, which is either a constant, inductive, constructor, projection or section
     variable. Constants and section variables can have tactical proofs associated to them.
     """
 
@@ -937,7 +927,7 @@ cdef class Definition:
     def is_file_representative(self) -> bool:
         """Returns true if this definition is the representative of the super-global context of it's file.
         Se also `Dataset.representative`."""
-        return self.graph_index.datasets[self.graph].getRepresentative() == self.node.nodeid
+        return self.graph_index.representatives[self.graph] == self.node.nodeid
 
     @classmethod
     def _group_by_clusters(cls, definitions : Iterable[Definition]) -> Iterable[list[Definition]]:
@@ -984,18 +974,18 @@ cdef class Dataset:
     """
 
     cdef GraphIndex *graph_index
-    cdef GraphId graph
+    cdef readonly GraphId graph
     cdef C_Dataset_Reader reader
     cdef readonly object filename # : Path
     """The physical file in which the data contained in this class can be found."""
 
     @staticmethod
-    cdef init(filename: Path, GraphId graph, GraphIndex *graph_index):
+    cdef init(filename: Path, GraphId graph, LowlevelDataReader lreader):
         cdef Dataset wrapper = Dataset.__new__(Dataset)
         wrapper.filename = filename
         wrapper.graph = graph
-        wrapper.reader = graph_index.datasets[graph]
-        wrapper.graph_index = graph_index
+        wrapper.reader = (<Dataset_Reader> lreader.graphs[graph]).source
+        wrapper.graph_index = &lreader.graph_index
         return wrapper
 
     @property
@@ -1079,7 +1069,7 @@ cdef class Dataset:
 
 def lowlevel_to_highlevel(LowlevelDataReader lreader) -> dict[Path, Dataset]:
     """Convert a dataset initialized as a `LowLevelDataReader` into a high level interface."""
-    return {f: Dataset.init(f, g, &lreader.graph_index)
+    return {f: Dataset.init(f, g, lreader)
             for f, g in lreader.graphid_by_filename.items()}
 
 @contextmanager
