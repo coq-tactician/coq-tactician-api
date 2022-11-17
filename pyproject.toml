@@ -3,7 +3,7 @@ requires = [
     "setuptools",
     "wheel",
     "Cython>=3.0.0a11",
-    "pycapnp @ git+https://git@github.com/capnproto/pycapnp#928dd1365286939fbed14aaf62e9f84884e28cb8", # TODO: upgrade
+    "pycapnp @ git+https://git@github.com/capnproto/pycapnp@928dd1365286939fbed14aaf62e9f84884e28cb8", # TODO: upgrade
     "Jinja2",
     "inflection"]
 build-backend = "setuptools.build_meta"
@@ -33,7 +33,7 @@ classifiers = [
     "Operating System :: POSIX :: Linux"
 ]
 dependencies = [
-    "pycapnp @ git+https://git@github.com/capnproto/pycapnp#928dd1365286939fbed14aaf62e9f84884e28cb8", # TODO: upgrade
+    "pycapnp @ git+https://git@github.com/capnproto/pycapnp@928dd1365286939fbed14aaf62e9f84884e28cb8", # TODO: upgrade
     "immutables",
     "graphviz",
     "sanic==22.6.2",
