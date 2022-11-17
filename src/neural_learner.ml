@@ -2,7 +2,6 @@ open Ltac_plugin
 open Tactician_ltac1_record_plugin
 open Tactic_learner
 open Names
-open Graph_capnp_generator
 open Graph_extractor
 open Graph_def
 open Tacexpr
@@ -48,16 +47,19 @@ let executable_option = declare_string_option ~name:"Executable" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
-type path = Local | Global
-module PathSet = Set.Make(struct type t = path let compare = compare end)
-
-module G = GlobalGraph(PathSet)
-module CICGraph = struct
-  type node' = path * (bool * int)
-  include CICGraphMonad(G)
+type location = Local | Global
+module Hashable = struct
+  type t = location
+  let hash _ = XXHasher.with_state @@ fun h -> h
 end
-module GB = GraphBuilder(CICGraph)
-module CapnpGraphWriter = CapnpGraphWriter(struct type nonrec path = path end)(G)
+
+(* module G = Graph_generator_learner.GlobalCICGraph(Hashable) *)
+module G = Graph_generator_learner.GlobalHashedCICGraph(Hashable)
+module CICGraphMonad = struct
+  include CICGraphMonad(G)
+  type node' = node
+end
+module GB = GraphBuilder(CICGraphMonad)
 
 exception NoSuchTactic
 exception UnknownLocalArgument
@@ -82,19 +84,28 @@ let find_local_argument context_map =
     | Some x -> x
 
 let find_global_argument
-    CICGraph.{ section_nodes; definition_nodes = { constants; inductives; constructors; projections }; _ } =
+    CICGraphMonad.{ section_nodes; definition_nodes = { constants; inductives; constructors; projections }; _ } =
   let open Tactic_one_variable in
-  let map = Cmap.fold (fun c (_, (_, (_, node))) m -> Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
+  let map = Cmap.fold (fun c (_, n) m ->
+      let (_, (_, node)), _ = G.lower n in
+      Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
       constants Int.Map.empty in
-  let map = Indmap.fold (fun c (_, (_, (_, node))) m -> Int.Map.add node (TRef (GlobRef.IndRef c)) m)
+  let map = Indmap.fold (fun c (_, n) m ->
+      let (_, (_, node)), _ = G.lower n in
+      Int.Map.add node (TRef (GlobRef.IndRef c)) m)
       inductives map in
-  let map = Constrmap.fold (fun c (_, (_, (_, node))) m -> Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
+  let map = Constrmap.fold (fun c (_, n) m ->
+      let (_, (_, node)), _ = G.lower n in
+      Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
       constructors map in
-  let map = ProjMap.fold (fun c (_, (_, (_, node))) m ->
+  let map = ProjMap.fold (fun c (_, n) m ->
+      let (_, (_, node)), _ = G.lower n in
       (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
       Int.Map.add node (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
       projections map in
-  let map = Id.Map.fold (fun c (_, (_, node)) m -> Int.Map.add node (TRef (GlobRef.VarRef c)) m)
+  let map = Id.Map.fold (fun c n m ->
+      let (_, (_, node)), _ = G.lower n in
+      Int.Map.add node (TRef (GlobRef.VarRef c)) m)
       section_nodes map in
   fun id ->
     match Int.Map.find_opt id map with
@@ -144,10 +155,10 @@ let connect_socket my_socket =
   Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
 
 let connect_stdin () =
-  Feedback.msg_notice Pp.(str "starting proving server with connection through their stdin");
+  Feedback.msg_debug Pp.(str "starting proving server with connection through their stdin");
   let my_socket, other_socket = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   let mode = if textmode_option () then "text" else "graph" in
-  Feedback.msg_notice Pp.(str "using textmode option" ++ str mode);
+  Feedback.msg_debug Pp.(str "using textmode option" ++ str mode);
   let pid =
     if CString.is_empty @@ executable_option () then
       Unix.create_process
@@ -167,24 +178,34 @@ let connect_stdin () =
   Unix.close other_socket;
   connection
 
-let connect_tcpip ip_addr port =
-  Feedback.msg_notice Pp.(str "connecting to proving server on" ++ ws 1 ++ str ip_addr ++ ws 1 ++ int port);
-  Feedback.msg_notice Pp.(str "tcp option " ++ str (tcp_option ()));
-  let my_socket =  Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-  let server_addr = Unix.ADDR_INET (Unix.inet_addr_of_string ip_addr, port) in
-  (try
-     Unix.connect my_socket server_addr;
-     Feedback.msg_notice Pp.(str "connected to python server");
-   with
-   | Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> CErrors.user_err Pp.(str "connection to proving server refused")
-   | ex ->
-     Unix.close my_socket;
-     CErrors.user_err Pp.(str "exception caught, closing connection to prover")
-  );
-  let (read_context, write_context) as connection = connect_socket my_socket in
+let pp_addr Unix.{ ai_addr; ai_canonname; _ } =
+  let open Pp in
+  (match ai_addr with
+   | Unix.ADDR_INET (addr, port) -> str (Unix.string_of_inet_addr addr) ++ str ":" ++ int port
+   | Unix.ADDR_UNIX s -> str "Unix domain " ++ str s) ++ str " " ++
+  str "(canonical: " ++ str ai_canonname ++ str ")"
+
+let connect_tcpip host port =
+  Feedback.msg_debug Pp.(str "connecting to proving server on" ++ ws 1 ++ str host ++ str ":" ++ str port);
+  let addrs = Unix.(getaddrinfo host port [AI_SOCKTYPE SOCK_STREAM; AI_CANONNAME]) in
+  if addrs = [] then
+    CErrors.user_err Pp.(str "Could not resolve address" ++ ws 1 ++ str host ++ str ":" ++ str port);
+  let rec connect = function
+    | [] -> CErrors.user_err Pp.(str "Connection to proving server refused at addresses" ++ fnl () ++
+                                 prlist_with_sep fnl pp_addr addrs)
+    | addr::addrs ->
+      let my_socket =  Unix.(socket addr.ai_family addr.ai_socktype addr.ai_protocol) in
+      (try
+         Feedback.msg_debug Pp.(str "Attempting to connect to" ++ ws 1 ++ pp_addr addr);
+         Unix.(connect my_socket addr.ai_addr);
+         Feedback.msg_debug Pp.(str "connected to python server");
+         my_socket
+       with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
+  let socket = connect addrs in
+  let (read_context, write_context) as connection = connect_socket socket in
   Declaremods.append_end_library_hook (fun () ->
       drain read_context write_context;
-      Unix.close my_socket;
+      Unix.close socket;
     );
   connection
 
@@ -198,7 +219,7 @@ let get_connection =
           connect_stdin ()
         else
           let addr = Str.split (Str.regexp ":") (tcp_option()) in
-          connect_tcpip (List.nth addr 0) (int_of_string (List.nth addr 1)) in
+          connect_tcpip (List.nth addr 0) (List.nth addr 1) in
       connection := Some c;
       c
     | Some c -> c
@@ -225,7 +246,7 @@ let init_predict_text rc wc =
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
 let populate_global_context_info tacs env ctacs cgraph cdefinitions =
-  let G.{ paths=_; def_count; node_count; edge_count; defs; nodes; edges }, state =
+  let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
     let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
@@ -237,8 +258,8 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
         let c = MutInd.make1 @@ MutInd.canonical c in
         Mindset.add c m) Mindset.empty minductives in
     let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
-    let open Monad_util.WithMonadNotations(CICGraph) in
-    let open Monad.Make(CICGraph) in
+    let open Monad_util.WithMonadNotations(CICGraphMonad) in
+    let open Monad.Make(CICGraphMonad) in
 
     let open GB in
     let env_extra = Id.Map.empty, Cmap.empty in
@@ -248,7 +269,8 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraph.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater G.builder_nil Global in
+      CICGraphMonad.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater
+        (G.HashMap.create 100) G.builder_nil Global in
     builder, state in
 
   let tacs = List.fold_left (fun map tac ->
@@ -266,18 +288,26 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
       Api.Builder.AbstractTactic.parameters_set_exn arri params)
     (TacticMap.bindings tacs);
 
-  let node_index_transform (def, i) =
+  let node_local_index (_, (def, i)) =
     if def then i else def_count + i in
-  CapnpGraphWriter.write_graph cgraph (fun _ -> 0) node_index_transform
-    (def_count + node_count) edge_count (AList.append defs nodes) edges;
+  let node_hash n = snd @@ G.transform_node_type n in
+  let node_label n = fst @@ G.transform_node_type n in
+  Graph_capnp_generator.write_graph
+    ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
+    ~node_dep_index:(fun _ -> 0) ~node_local_index
+    ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges cgraph;
 
   let definitions =
-    let f (_, (_, (_, (def, n)))) = assert def; Stdint.Uint32.of_int n in
+    let f (_, (_, n)) =
+      let (_, (def, n)), _ = G.lower n in
+      assert def; Stdint.Uint32.of_int n in
     (List.map f @@ Cmap.bindings state.definition_nodes.constants) @
     (List.map f @@ Indmap.bindings state.definition_nodes.inductives) @
     (List.map f @@ Constrmap.bindings state.definition_nodes.constructors) @
     (List.map f @@ ProjMap.bindings state.definition_nodes.projections) @
-    (List.map (fun (_, (_, (def, n))) -> assert def; Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
+    (List.map (fun (_, n) ->
+         let (_, (def, n)), _ = G.lower n in
+         assert def; Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
   in
   ignore(cdefinitions definitions);
   state, tacs
@@ -352,8 +382,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let concl = proof_state_goal ps in
     let hyps = List.map (map_named term_repr) hyps in
     let concl = term_repr concl in
-    let open CICGraph in
-    let open Monad_util.WithMonadNotations(CICGraph) in
+    let open CICGraphMonad in
+    let open Monad_util.WithMonadNotations(CICGraphMonad) in
     let* hyps, (concl, map) = with_named_context env (Id.Map.empty, Cmap.empty) hyps @@
       let* map = lookup_named_map in
       let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
@@ -397,29 +427,45 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
+    let module Node = Api.Builder.Node in
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Prediction = Api.Reader.PredictionProtocol.Prediction in
     let module Response = Api.Reader.PredictionProtocol.Response in
     let request = Request.init_root () in
     let predict = Request.predict_init request in
-    let updater =
-      let open Monad_util.WithMonadNotations(CICGraph) in
-      let+ root, context_map = gen_proof_state env ps in
-      snd root, context_map in
-    let (_, (root, context_map)), G.{ paths=_; def_count; node_count; edge_count; defs; nodes; edges } =
-      CICGraph.run ~include_opaque:false ~state updater G.builder_nil Local in
-    let node_index_transform (def, i) =
+    let updater = gen_proof_state env ps in
+    let (_, (root, context_map)), { def_count; node_count; edge_count; defs; nodes; edges } =
+      CICGraphMonad.run ~include_opaque:false ~state updater
+        (G.HashMap.create 100) G.builder_nil Local in
+    let node_local_index (_, (def, i)) =
       if def then i else def_count + i in
-    let context_map = Id.Map.map (fun (p, n) -> p, node_index_transform n) context_map in
+    let context_map = Id.Map.map (fun n ->
+        let (p, n), _ = G.lower n in
+        p, node_local_index (p, n)) context_map in
     let context_range = List.map (fun (_, (_, n)) -> n) @@
       Id.Map.bindings context_map in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
-    CapnpGraphWriter.write_graph graph (function | Local -> 0 | Global -> 1) node_index_transform
-      (def_count + node_count) edge_count (AList.append defs nodes) edges;
+
+    let node_dep_index (p, _) = match p with
+      | Local -> 0
+      | Global -> 1 in
+    let node_hash n = snd @@ G.transform_node_type n in
+    let node_label n = fst @@ G.transform_node_type n in
+    Graph_capnp_generator.write_graph
+      ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
+      ~node_dep_index ~node_local_index
+      ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph;
     let state = Request.Predict.state_init predict in
-    ProofState.root_set_int_exn state @@ node_index_transform root;
-    let _ = ProofState.context_set_list state (List.map Stdint.Uint32.of_int context_range) in
+    let capnp_root = ProofState.root_init state in
+    ProofState.Root.dep_index_set_exn capnp_root @@ node_dep_index @@ fst @@ G.lower root;
+    ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index @@ fst @@ G.lower root;
+    let context_arr = ProofState.context_init state @@ List.length context_range in
+    List.iteri (fun i arg ->
+        let arri = Capnp.Array.get context_arr i in
+        Node.dep_index_set_exn arri @@ node_dep_index (Local, arg);
+        Node.node_index_set_int_exn arri arg
+      ) context_range;
     match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->

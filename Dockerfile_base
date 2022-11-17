@@ -20,7 +20,7 @@ RUN echo 'PATH=$CONDA_PREFIX/bin:$PATH' >> .profile
 # apt-get level project dependencies
 
 RUN sudo apt-get update
-RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev
+RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev
 
 # opam level project dependencies
 

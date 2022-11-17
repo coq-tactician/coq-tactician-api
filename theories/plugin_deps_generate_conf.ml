@@ -21,7 +21,7 @@ let start_watermark = Str.regexp ".*;__dep_extract_start__.*"
 let finish_watermark = Str.regexp ".*;__dep_extract_finish__.*"
 
 (* list of hardlinked libraries to coq *)
-let core_linked = ["unix"] 
+let core_linked = ["unix"; "str"] 
 
 (* list of package with bugs in META:  https://github.com/ocaml/Zarith/issues/102 *)
 let bad_meta_pkg_list = ["zarith"]   
