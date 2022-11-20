@@ -502,9 +502,15 @@ struct PredictionProtocol {
 
         definitions @2 :List(NodeIndex);
         # The list of definitions that are currently in the global context.
+        # TODO: With the introduction of `representative` this is redundant. Consider removing.
 
         logAnnotation @3 :Text;
         # An annotation containing file and line information on where Coq is currently processing.
+
+        representative @10 :NodeIndex;
+        # Points to the last definition of the global context. All other definitions can be accessed by following
+        # the `Definition.previous` chain starting from this definition. If the global context is empty
+        # this is equal to `len(graph.nodes)`.
       }
       predict :group {
         # Request a list of tactic predictions given the graph of a proof state.
@@ -522,6 +528,8 @@ struct PredictionProtocol {
         tactics @7 :List(AbstractTactic);
         graph @8 :Graph;
         definitions @9 :List(NodeIndex);
+        # TODO: With the introduction of `representative` this is redundant. Consider removing.
+        representative @11 :NodeIndex;
       }
     }
   }

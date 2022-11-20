@@ -88,8 +88,10 @@ def graph_initialize_loop(r, s):
     while init is not None:
         print('---------------- New prediction context -----------------')
         with online_data_initialize(PredictionProtocol_Request_Initialize_Reader(init.initialize)) as base:
-            for d in base.definitions:
-                print(d.name)
+            for cluster in base.clustered_definitions:
+                print('cluster:')
+                for d in cluster:
+                    print(f'    {d.name}')
             for t in base.tactics:
                 print(t)
             print(base.log_annotation)

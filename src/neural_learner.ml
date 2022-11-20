@@ -245,7 +245,7 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-let populate_global_context_info tacs env ctacs cgraph cdefinitions =
+let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentative =
   let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
@@ -310,6 +310,12 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions =
          assert def; Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
   in
   ignore(cdefinitions definitions);
+
+  let representative = match state.previous with
+    | None -> def_count + node_count
+    | Some i -> node_local_index @@ fst @@ G.transform_node_type @@ G.lower i in
+  crepresentative(representative);
+
   state, tacs
 
 let init_predict rc wc tacs env =
@@ -321,7 +327,8 @@ let init_predict rc wc tacs env =
   let state, tacs = populate_global_context_info tacs env
     (Request.Initialize.tactics_init init)
     (Request.Initialize.graph_init init)
-    (Request.Initialize.definitions_set_list init) in
+    (Request.Initialize.definitions_set_list init)
+    (Request.Initialize.representative_set_int_exn init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -341,7 +348,8 @@ let check_neural_alignment () =
   let state, tacs = populate_global_context_info !last_model env
       (Request.CheckAlignment.tactics_init init)
       (Request.CheckAlignment.graph_init init)
-      (Request.CheckAlignment.definitions_set_list init) in
+      (Request.CheckAlignment.definitions_set_list init)
+      (Request.CheckAlignment.representative_set_int_exn init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->

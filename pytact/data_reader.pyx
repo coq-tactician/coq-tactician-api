@@ -1094,7 +1094,7 @@ cdef class OnlineDataReader:
         c_nodes.push_back(initialize.getGraph().getNodes())
         cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
         c_edges.push_back(initialize.getGraph().getEdges())
-        cdef vector[uint32_t] c_representatives = [initialize.getGraph().getNodes().size()]
+        cdef vector[uint32_t] c_representatives = [initialize.getRepresentative()]
 
         local_to_global = [[0]]
         wrapper.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, local_to_global)
@@ -1117,11 +1117,31 @@ cdef class OnlineDataReader:
         return (<char*>temp.begin())[:temp.size()]
 
     @property
+    def representative(self) -> Definition | None:
+        """The last definition in the global context. All other definitions can be accessed by following
+        the `Definition.previous` chain starting from this definitions.
+
+        This is a low-level property.
+        Prefer to use `definitions` and `clustered_definitions`.
+        """
+        representative = self.initialize.getRepresentative()
+        if self.initialize.getGraph().getNodes().size() == representative:
+            return None
+        else:
+            return Node.init(0, representative, &self.graph_index).definition
+
+    @property
     def definitions(self) -> Iterable[Definition]:
         """The list of definitions that are currently in the global context.
         """
-        return Dataset_Definition_List.init(self.initialize.getDefinitions(),
-                                            &self.graph_index, 0)
+        if self.representative is None: return ()
+        return self.representative.global_context(inclusive = True)
+
+    @property
+    def clustered_definitions(self) -> Iterable[list[Definition]]:
+        """All of the definitions present in the global context, clustered by mutually recursive definitions.
+        """
+        return Definition._group_by_clusters(self.definitions)
 
 @contextmanager
 def online_data_initialize(PredictionProtocol_Request_Initialize_Reader initialize) -> Generator[OnlineDataReader, None, None]:
