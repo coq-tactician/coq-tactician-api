@@ -494,10 +494,17 @@ struct PredictionProtocol {
       initialize :group {
         # Start a context for making tactical predictions for proof search. The context includes the tactics
         # that are currently available, the definitions that are available.
+
         tactics @0 :List(AbstractTactic);
+        # A list of tactics that Coq currently knows about.
+
         graph @1 :Graph;
+
         definitions @2 :List(NodeIndex);
+        # The list of definitions that are currently in the global context.
+
         logAnnotation @3 :Text;
+        # An annotation containing file and line information on where Coq is currently processing.
       }
       predict :group {
         # Request a list of tactic predictions given the graph of a proof state.

@@ -1080,6 +1080,87 @@ def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None
     with lowlevel_data_reader(dataset_path) as lreader:
         yield lowlevel_to_highlevel(lreader)
 
+cdef class OnlineDataReader:
+
+    cdef GraphIndex graph_index
+    cdef C_PredictionProtocol_Request_Initialize_Reader initialize
+
+    @staticmethod
+    cdef init(C_PredictionProtocol_Request_Initialize_Reader initialize):
+        cdef OnlineDataReader wrapper = OnlineDataReader.__new__(OnlineDataReader)
+
+        wrapper.initialize = initialize
+        cdef vector[C_Graph_Node_Reader_List] c_nodes
+        c_nodes.push_back(initialize.getGraph().getNodes())
+        cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
+        c_edges.push_back(initialize.getGraph().getEdges())
+        cdef vector[uint32_t] c_representatives = [initialize.getGraph().getNodes().size()]
+
+        local_to_global = [[0]]
+        wrapper.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, local_to_global)
+        return wrapper
+
+    def local_to_global(self, graph: int, dep_index: int) -> int:
+        return self.graph_index.local_to_global[graph][dep_index]
+
+    @property
+    def tactics(self):
+        """A list of tactics that Coq currently knows about.
+        """
+        return AbstractTactic_Reader_List.init(self.initialize.getTactics())
+
+    @property
+    def log_annotation(self):
+        """An annotation containing file and line information on where Coq is currently processing.
+        """
+        temp = self.initialize.getLogAnnotation()
+        return (<char*>temp.begin())[:temp.size()]
+
+    @property
+    def definitions(self) -> Iterable[Definition]:
+        """The list of definitions that are currently in the global context.
+        """
+        return Dataset_Definition_List.init(self.initialize.getDefinitions(),
+                                            &self.graph_index, 0)
+
+@contextmanager
+def online_data_initialize(PredictionProtocol_Request_Initialize_Reader initialize) -> Generator[OnlineDataReader, None, None]:
+    """Given a new initialization message sent by Coq, construct a `OnlineDataReader` object. This can be used
+    to inspect the definitions and tactics currently available. Additionally, using `online_data_predict` it can
+    be combined with a subsequent prediction request received from Coq to build a `ProofState`.
+    """
+    # CAREFUL: OnlineDataReader contains critical C++ structures that are not being
+    # tracked by the garbage collector. As soon as this object gets destroyed, those
+    # structures will also be destroyed, even if other objects still reference it.
+    # This variable assignment makes sure that the reader will exist until the end of
+    # the `with` block.
+    # If the Python runtime ever becomes clever and eliminates this variable, a different
+    # method of keeping the object around should be found.
+    dr = OnlineDataReader.init(initialize.source)
+    yield dr
+
+@contextmanager
+def online_data_predict(OnlineDataReader base,
+                        PredictionProtocol_Request_Predict_Reader predict) -> Generator[ProofState, None, None]:
+    """Given a `OnlineDataReader` instance constructed through `online_data_initialize`, and a prediction message
+    sent by Coq, construct a `ProofState` object that represents the current proof state in Coq.
+    """
+    # CAREFUL: This contains critical C++ structures that are not being
+    # tracked by the garbage collector. As soon as this object gets destroyed, those
+    # structures will also be destroyed, even if other objects still reference it.
+    # This variable assignment makes sure that the reader will exist until the end of
+    # the `with` block.
+    # If the Python runtime ever becomes clever and eliminates this variable, a different
+    # method of keeping the object around should be found.A
+    # This makes a copy
+    cdef C_PredictionProtocol_Request_Predict_Reader p = predict.source
+    cdef GraphIndex graph_index = base.graph_index
+    graph_index.nodes.push_back(p.getGraph().getNodes())
+    graph_index.edges.push_back(p.getGraph().getEdges())
+    graph_index.representatives.push_back(p.getGraph().getNodes().size())
+    graph_index.local_to_global = [[0], [1, 0]]
+    yield ProofState.init(predict.source.getState(), 1, &graph_index)
+
 class GlobalContextSets:
     """Lazily retrieve a the global context of a definition as a set, with memoization.
 

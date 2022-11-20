@@ -1,17 +1,12 @@
-import os
-import sys
-import logging
-
+import inflection
 import graphviz
+from pytact.data_reader import ProofState, Node
 
 # Load the cap'n proto library, and the communication specification in 'graph_api.capnp'
 import capnp
-capnp.remove_import_hook()
+import pytact.graph_api_capnp as graph_api_capnp
 
-import pytact.common
-
-graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+# TODO: Clean up and unify all the functions below
 
 arrow_heads = [ "dot", "inv", "odot", "invdot", "invodot" ]
 edge_arrow_map = {}
@@ -20,6 +15,49 @@ for group in graph_api_capnp.groupedEdges:
     for sort in group.conflatable:
         edge_arrow_map[sort] = arrow_heads[count]
         count += 1
+
+edge_arrow_map2 = {e.raw : arrow for (e, arrow) in edge_arrow_map.items()}
+
+def visualize_proof_state(state: ProofState):
+
+    dot = graphviz.Digraph()
+    dot.attr('graph', ordering="out")
+
+    seen = set()
+    nodes_left = 100
+
+    print("visualizing")
+
+    def recurse(node: Node, depth):
+        nonlocal seen
+        nonlocal nodes_left
+
+        id = str(node)
+        print(id)
+        if id in seen:
+            return id
+        seen.add(id)
+        nodes_left -= 1
+        if nodes_left < 0:
+            id = 'trunc' + str(nodes_left)
+            dot.node(id, 'truncated')
+            return id
+
+        if d := node.definition:
+            label = d.name
+        else:
+            label = inflection.camelize(str(node.label.which).split('.')[1].lower())
+        dot.node(id, label=label)
+        if node.definition:
+            depth -= 1
+        if depth >= 0:
+            for edge, child in node.children:
+                cid = recurse(child, depth)
+                dot.edge(id, cid, arrowtail=edge_arrow_map2[edge], dir="both")
+        return id
+    recurse(state.root, 0)
+
+    dot.render(filename='python_graph', view=False, cleanup=True)
 
 def visualize(graph, state, showLabel = False, graph1 = None,
               filename='python_graph', cleanup=True):
@@ -40,7 +78,7 @@ def visualize(graph, state, showLabel = False, graph1 = None,
         for edge in list(graph.edges)[value.childrenIndex:value.childrenIndex+value.childrenCount]:
             if graph1 != None and edge.target.depIndex == 1:
                 target = '1#'+str(edge.target.nodeIndex)
-                dot.node(target, "Global:" + str(graph1.nodes[edge.target.nodeIndex].label.definition.hash)
+                dot.node(target, "Global:"
                          + str(graph1.nodes[edge.target.nodeIndex].label.definition.name))
             else:
                 target = str(edge.target.nodeIndex)
