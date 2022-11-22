@@ -46,7 +46,7 @@ def visualize_proof_state(state: ProofState):
         if d := node.definition:
             label = d.name
         else:
-            label = inflection.camelize(str(node.label.which).split('.')[1].lower())
+            label = inflection.camelize(str(node.label.which.name.lower()))
         dot.node(id, label=label)
         if node.definition:
             depth -= 1
