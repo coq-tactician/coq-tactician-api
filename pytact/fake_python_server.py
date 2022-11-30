@@ -5,7 +5,7 @@ import pytact.graph_visualize as gv
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
 from pytact.data_reader import online_definitions_initialize, online_data_predict
-from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Initialize_Reader, PredictionProtocol_Request_Predict_Reader, PredictionProtocol_Request_CheckAlignment_Reader
+from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Reader
 
 def text_prediction_loop(r, s):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
@@ -36,11 +36,11 @@ def text_prediction_loop(r, s):
 
 def prediction_loop(definitions, tactics, incoming_messages, capnp_socket):
     for msg in incoming_messages:
-        msg_type = msg.which()
-        if msg_type == "predict":
+        cython_msg = PredictionProtocol_Request_Reader(msg)
+        if cython_msg.is_predict:
             with online_data_predict(
                     definitions,
-                    PredictionProtocol_Request_Predict_Reader(msg.predict)) as proof_state:
+                    cython_msg.predict) as proof_state:
                 gv.visualize_proof_state(proof_state)
                 singleArgs = [t.ident for t in tactics if t.parameters == 0]
                 preds = [{'tactic': {'ident': t}, 'arguments': [], 'confidence': 0.5} for t in singleArgs]
@@ -71,17 +71,17 @@ def prediction_loop(definitions, tactics, incoming_messages, capnp_socket):
 def graph_initialize_loop(incoming_messages, capnp_socket):
     msg = next(incoming_messages, None)
     while msg is not None:
-        msg_type = msg.which()
-        if msg_type == "predict":
+        cython_msg = PredictionProtocol_Request_Reader(msg)
+        if cython_msg.is_predict:
             raise Exception('Predict message received without a preceding initialize message')
-        elif msg_type == "synchronize":
+        elif cython_msg.is_synchronize:
             print(msg)
             response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
             print(response)
             response.write_packed(capnp_socket)
             msg = next(incoming_messages, None)
-        elif msg_type == "checkAlignment":
-            cython_check_alignment = PredictionProtocol_Request_CheckAlignment_Reader(msg.checkAlignment)
+        elif cython_msg.is_check_alignment:
+            cython_check_alignment = cython_msg.check_alignment
             with online_definitions_initialize(
                     cython_check_alignment.graph,
                     cython_check_alignment.representative) as definitions:
@@ -96,9 +96,9 @@ def graph_initialize_loop(incoming_messages, capnp_socket):
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
                 response.write_packed(capnp_socket)
                 msg = next(incoming_messages, None)
-        elif msg_type == "initialize":
+        elif cython_msg.is_initialize:
             print('---------------- New prediction context -----------------')
-            cython_init = PredictionProtocol_Request_Initialize_Reader(msg.initialize)
+            cython_init = cython_msg.initialize
             with online_definitions_initialize(cython_init.graph, cython_init.representative) as definitions:
                 for cluster in definitions.clustered_definitions:
                     print('cluster:')
