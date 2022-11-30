@@ -1,8 +1,8 @@
+from collections.abc import Iterable
 import sys
 import socket
 import argparse
 import signal
-from typing import Generator, Iterator
 import pytact.graph_visualize as gv
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
@@ -116,7 +116,7 @@ def graph_initialize_loop(incoming_messages, capnp_socket):
         import time
         time.sleep(1)
 
-def capnp_reader(socket: socket.socket) -> Generator:
+def capnp_reader(socket: socket.socket) -> Iterable:
     """
     Extract a stream of `PredictionProtocol_Request_Reader` messages from a socket.
 
