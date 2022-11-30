@@ -129,14 +129,14 @@ def capnp_reader(socket: socket.socket) -> Generator:
     """
     reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
         socket, traversal_limit_in_words=2**64-1)
-    signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+    prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
     msg = next(reader, None)
-    signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+    signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
     while msg is not None:
         yield PredictionProtocol_Request_Reader(msg)
-        signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+        prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
         msg = next(reader, None)
-        signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+        signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
 
 def run_session(args, capnp_socket):
     incoming_messages = capnp_reader(capnp_socket)
