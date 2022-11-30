@@ -1,5 +1,6 @@
 import sys
 import socket
+import argparse
 import pytact.graph_visualize as gv
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
@@ -115,17 +116,47 @@ def graph_initialize_loop(incoming_messages, capnp_socket):
         import time
         time.sleep(1)
 
-def main():
-    capnp_socket = socket.socket(fileno=sys.stdin.fileno())
+def run_session(args, capnp_socket):
     incoming_messages = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
         capnp_socket,
         traversal_limit_in_words=2**64-1)
-    if sys.argv[1] == 'text':
+    if args.mode == 'text':
         print('Python server running in text mode')
         text_prediction_loop(incoming_messages, capnp_socket)
-    elif sys.argv[1] == 'graph':
+    elif args.mode == 'graph':
         print('Python server running in graph mode')
         graph_initialize_loop(incoming_messages, capnp_socket)
+    else:
+        raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description = 'Example python server capable of communicating with Coq',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument('mode',
+                        type=str,
+                        help='"graph" to communicate in graph-mode, "text" to communicate in text-mode')
+    parser.add_argument('--tcp',
+                        type = int,
+                        default = 0,
+                        help='Run in tcp mode instead of stdin mode on the specified port.')
+    args = parser.parse_args()
+
+    if args.tcp != 0:
+        addr = ('localhost', args.tcp)
+        server_sock = socket.create_server(addr)
+        try:
+            while True:
+                capnp_socket, remote_addr = server_sock.accept()
+                print(f"coq client connected {remote_addr}")
+                run_session(args, capnp_socket)
+        finally:
+            print(f'closing the server on port {addr[1]}')
+            server_sock.close()
+    else:
+        capnp_socket = socket.socket(fileno=sys.stdin.fileno())
+        run_session(args, capnp_socket)
 
 if __name__ == '__main__':
     main()
