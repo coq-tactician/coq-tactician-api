@@ -2,16 +2,14 @@ from dataclasses import asdict
 from pathlib import Path
 import argparse
 import pkg_resources
+import inflection
 
 from pytact.data_reader import data_reader
 from pytact.graph_visualize_browse import (
-    GraphVisualizationData, GraphVisualizator, UrlMaker, Settings, GraphVisualizationOutput, camel2pascal_case)
+    GraphVisualizationData, GraphVisualizator, UrlMaker, Settings, GraphVisualizationOutput)
 
 import capnp
-capnp.remove_import_hook()
-import pytact.common
-graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+import pytact.graph_api_capnp as graph_api_capnp
 
 from sanic import Sanic
 from sanic_ext import validate
@@ -20,9 +18,9 @@ def post_process(output: GraphVisualizationOutput, settings: Settings):
     result = asdict(output)
     result['settings'] = settings
     result['svg'] = result['svg'].decode("utf-8").split('\n', 3)[-1]
-    result['edge_labels'] = [(v, camel2pascal_case(name)) for (name, v) in
+    result['edge_labels'] = [(v, inflection.camelize(name)) for (name, v) in
                              graph_api_capnp.EdgeClassification.schema.enumerants.items()]
-    result['node_labels'] = [(v, camel2pascal_case(name)) for (v, name) in
+    result['node_labels'] = [(v, inflection.camelize(name)) for (v, name) in
                              enumerate(list(graph_api_capnp.Graph.Node.Label.schema.union_fields))]
     return result
 
