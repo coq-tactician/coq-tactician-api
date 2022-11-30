@@ -1,6 +1,8 @@
 import sys
 import socket
 import argparse
+import signal
+from typing import Generator, Iterator
 import pytact.graph_visualize as gv
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
@@ -36,11 +38,10 @@ def text_prediction_loop(r, s):
 
 def prediction_loop(definitions, tactics, incoming_messages, capnp_socket):
     for msg in incoming_messages:
-        cython_msg = PredictionProtocol_Request_Reader(msg)
-        if cython_msg.is_predict:
+        if msg.is_predict:
             with online_data_predict(
                     definitions,
-                    cython_msg.predict) as proof_state:
+                    msg.predict) as proof_state:
                 gv.visualize_proof_state(proof_state)
                 singleArgs = [t.ident for t in tactics if t.parameters == 0]
                 preds = [{'tactic': {'ident': t}, 'arguments': [], 'confidence': 0.5} for t in singleArgs]
@@ -71,55 +72,74 @@ def prediction_loop(definitions, tactics, incoming_messages, capnp_socket):
 def graph_initialize_loop(incoming_messages, capnp_socket):
     msg = next(incoming_messages, None)
     while msg is not None:
-        cython_msg = PredictionProtocol_Request_Reader(msg)
-        if cython_msg.is_predict:
+        if msg.is_predict:
             raise Exception('Predict message received without a preceding initialize message')
-        elif cython_msg.is_synchronize:
+        elif msg.is_synchronize:
             print(msg)
             response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
             print(response)
             response.write_packed(capnp_socket)
             msg = next(incoming_messages, None)
-        elif cython_msg.is_check_alignment:
-            cython_check_alignment = cython_msg.check_alignment
+        elif msg.is_check_alignment:
+            check_alignment = msg.check_alignment
             with online_definitions_initialize(
-                    cython_check_alignment.graph,
-                    cython_check_alignment.representative) as definitions:
+                    check_alignment.graph,
+                    check_alignment.representative) as definitions:
                 for cluster in definitions.clustered_definitions:
                     print('cluster:')
                     for d in cluster:
                         print(f'    {d.name}')
-                for t in cython_check_alignment.tactics:
+                for t in check_alignment.tactics:
                     print(t)
-                alignment = {'unalignedTactics': [ t.ident for t in cython_check_alignment.tactics],
+                alignment = {'unalignedTactics': [ t.ident for t in check_alignment.tactics],
                              'unalignedDefinitions': [d.node.nodeid for d in definitions.definitions]}
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
                 response.write_packed(capnp_socket)
                 msg = next(incoming_messages, None)
-        elif cython_msg.is_initialize:
+        elif msg.is_initialize:
             print('---------------- New prediction context -----------------')
-            cython_init = cython_msg.initialize
-            with online_definitions_initialize(cython_init.graph, cython_init.representative) as definitions:
+            init = msg.initialize
+            with online_definitions_initialize(init.graph, init.representative) as definitions:
                 for cluster in definitions.clustered_definitions:
                     print('cluster:')
                     for d in cluster:
                         print(f'    {d.name}')
-                for t in cython_init.tactics:
+                for t in init.tactics:
                     print(t)
-                print(cython_init.log_annotation)
+                print(init.log_annotation)
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
                 print(response)
                 response.write_packed(capnp_socket)
-                msg = prediction_loop(definitions, cython_init.tactics, incoming_messages, capnp_socket)
+                msg = prediction_loop(definitions, init.tactics, incoming_messages, capnp_socket)
         else:
             raise Exception("Capnp protocol error")
         import time
         time.sleep(1)
 
+def capnp_reader(socket: socket.socket) -> Generator:
+    """
+    Extract a stream of `PredictionProtocol_Request_Reader` messages from a socket.
+
+    This also takes care of disabling python's sigkill signal handler while waiting for new messages.
+    Without this, the reader will block and can't be killed with Cntl+C
+    until it receives a message.
+
+    See the following upstream capnp issue for further explanations:
+    https://github.com/capnproto/capnproto/issues/1542
+    """
+    reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
+        socket, traversal_limit_in_words=2**64-1)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+    msg = next(reader, None)
+    signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+    while msg is not None:
+        yield PredictionProtocol_Request_Reader(msg)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+        msg = next(reader, None)
+        signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+
 def run_session(args, capnp_socket):
-    incoming_messages = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
-        capnp_socket,
-        traversal_limit_in_words=2**64-1)
+    incoming_messages = capnp_reader(capnp_socket)
     if args.mode == 'text':
         print('Python server running in text mode')
         text_prediction_loop(incoming_messages, capnp_socket)
