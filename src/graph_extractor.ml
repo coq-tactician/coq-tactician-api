@@ -684,13 +684,19 @@ end = struct
 
       (* We have to ensure that all dependencies of the inductive are written away before
          we generate the inductive itself. This is needed, because we want all elements of
-         the mutually recursive definition cluster to be adjacent in the global context *)
-      let dependencies = Definition_order.mutinductive_in_order_traverse env GlobRef.Set.empty
-        (fun c set -> GlobRef.Set.add (GlobRef.ConstRef c) set)
-        (fun m set -> GlobRef.Set.add (GlobRef.IndRef (m, 0)) set)
-        (fun id set -> GlobRef.Set.add (GlobRef.VarRef id) set) m in
-      List.iter (fun r -> map (fun _ -> ()) @@ gen_globref r) @@
-      GlobRef.Set.elements dependencies >>
+         the mutually recursive definition cluster to be adjacent in the global context.
+         We only do this when we are still following definitions though, because otherwise
+         we get dangling definition nodes. *)
+      let* follow_defs = lookup_def_depth in
+      (match follow_defs with
+      | Some follow_defs when follow_defs > 0 ->
+        let dependencies = Definition_order.mutinductive_in_order_traverse env GlobRef.Set.empty
+            (fun c set -> GlobRef.Set.add (GlobRef.ConstRef c) set)
+            (fun m set -> GlobRef.Set.add (GlobRef.IndRef (m, 0)) set)
+            (fun id set -> GlobRef.Set.add (GlobRef.VarRef id) set) m in
+        List.iter (fun r -> map (fun _ -> ()) @@ gen_globref r) @@
+        GlobRef.Set.elements dependencies
+      | _ -> return ()) >>
 
       with_empty_contexts @@
       let ({ mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
