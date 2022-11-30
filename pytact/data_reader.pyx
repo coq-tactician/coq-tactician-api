@@ -1080,21 +1080,23 @@ def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None
     with lowlevel_data_reader(dataset_path) as lreader:
         yield lowlevel_to_highlevel(lreader)
 
-cdef class OnlineDataReader:
+cdef class OnlineDefinitionsReader:
 
     cdef GraphIndex graph_index
-    cdef C_PredictionProtocol_Request_Initialize_Reader initialize
+    cdef C_Graph_Reader graph
+    cdef uint32_t representative_int
 
     @staticmethod
-    cdef init(C_PredictionProtocol_Request_Initialize_Reader initialize):
-        cdef OnlineDataReader wrapper = OnlineDataReader.__new__(OnlineDataReader)
+    cdef init(C_Graph_Reader graph, uint32_t representative):
+        cdef OnlineDefinitionsReader wrapper = OnlineDefinitionsReader.__new__(OnlineDefinitionsReader)
 
-        wrapper.initialize = initialize
+        wrapper.graph = graph
+        wrapper.representative_int = representative
         cdef vector[C_Graph_Node_Reader_List] c_nodes
-        c_nodes.push_back(initialize.getGraph().getNodes())
+        c_nodes.push_back(graph.getNodes())
         cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
-        c_edges.push_back(initialize.getGraph().getEdges())
-        cdef vector[uint32_t] c_representatives = [initialize.getRepresentative()]
+        c_edges.push_back(graph.getEdges())
+        cdef vector[uint32_t] c_representatives = [representative]
 
         local_to_global = [[0]]
         wrapper.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, local_to_global)
@@ -1104,19 +1106,6 @@ cdef class OnlineDataReader:
         return self.graph_index.local_to_global[graph][dep_index]
 
     @property
-    def tactics(self):
-        """A list of tactics that Coq currently knows about.
-        """
-        return AbstractTactic_Reader_List.init(self.initialize.getTactics())
-
-    @property
-    def log_annotation(self):
-        """An annotation containing file and line information on where Coq is currently processing.
-        """
-        temp = self.initialize.getLogAnnotation()
-        return (<char*>temp.begin())[:temp.size()]
-
-    @property
     def representative(self) -> Definition | None:
         """The last definition in the global context. All other definitions can be accessed by following
         the `Definition.previous` chain starting from this definitions.
@@ -1124,8 +1113,8 @@ cdef class OnlineDataReader:
         This is a low-level property.
         Prefer to use `definitions` and `clustered_definitions`.
         """
-        representative = self.initialize.getRepresentative()
-        if self.initialize.getGraph().getNodes().size() == representative:
+        representative = self.representative_int
+        if self.graph.getNodes().size() == representative:
             return None
         else:
             return Node.init(0, representative, &self.graph_index).definition
@@ -1144,25 +1133,25 @@ cdef class OnlineDataReader:
         return Definition._group_by_clusters(self.definitions)
 
 @contextmanager
-def online_data_initialize(PredictionProtocol_Request_Initialize_Reader initialize) -> Generator[OnlineDataReader, None, None]:
-    """Given a new initialization message sent by Coq, construct a `OnlineDataReader` object. This can be used
-    to inspect the definitions and tactics currently available. Additionally, using `online_data_predict` it can
+def online_definitions_initialize(Graph_Reader graph, uint32_t representative) -> Generator[OnlineDefinitionsReader, None, None]:
+    """Given a new initialization message sent by Coq, construct a `OnlineDefinitiosnReader` object. This can be used
+    to inspect the definitions currently available. Additionally, using `online_data_predict` it can
     be combined with a subsequent prediction request received from Coq to build a `ProofState`.
     """
-    # CAREFUL: OnlineDataReader contains critical C++ structures that are not being
+    # CAREFUL: OnlineDefinitionsReader contains critical C++ structures that are not being
     # tracked by the garbage collector. As soon as this object gets destroyed, those
     # structures will also be destroyed, even if other objects still reference it.
     # This variable assignment makes sure that the reader will exist until the end of
     # the `with` block.
     # If the Python runtime ever becomes clever and eliminates this variable, a different
     # method of keeping the object around should be found.
-    dr = OnlineDataReader.init(initialize.source)
+    dr = OnlineDefinitionsReader.init(graph.source, representative)
     yield dr
 
 @contextmanager
-def online_data_predict(OnlineDataReader base,
+def online_data_predict(OnlineDefinitionsReader base,
                         PredictionProtocol_Request_Predict_Reader predict) -> Generator[ProofState, None, None]:
-    """Given a `OnlineDataReader` instance constructed through `online_data_initialize`, and a prediction message
+    """Given a `OnlineDefinitionsReader` instance constructed through `online_data_initialize`, and a prediction message
     sent by Coq, construct a `ProofState` object that represents the current proof state in Coq.
     """
     # CAREFUL: This contains critical C++ structures that are not being

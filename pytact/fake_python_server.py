@@ -3,8 +3,8 @@ import socket
 import pytact.graph_visualize as gv
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
-from pytact.data_reader import online_data_initialize, online_data_predict
-from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Initialize_Reader, PredictionProtocol_Request_Predict_Reader
+from pytact.data_reader import online_definitions_initialize, online_data_predict
+from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Initialize_Reader, PredictionProtocol_Request_Predict_Reader, PredictionProtocol_Request_CheckAlignment_Reader
 
 def text_prediction_loop(r, s):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
@@ -33,25 +33,25 @@ def text_prediction_loop(r, s):
         else:
             raise Exception("Capnp protocol error")
 
-def prediction_loop(init, r, s):
+def prediction_loop(definitions, tactics, r, s):
     for msg in r:
         msg_type = msg.which()
         if msg_type == "predict":
-            with online_data_predict(init, PredictionProtocol_Request_Predict_Reader(msg.predict)) as proof_state:
+            with online_data_predict(definitions, PredictionProtocol_Request_Predict_Reader(msg.predict)) as proof_state:
                 gv.visualize_proof_state(proof_state)
-                singleArgs = [t.ident for t in init.tactics if t.parameters == 0]
+                singleArgs = [t.ident for t in tactics if t.parameters == 0]
                 preds = [{'tactic': {'ident': t}, 'arguments': [], 'confidence': 0.5} for t in singleArgs]
                 if len(proof_state.context) > 0:
-                    oneArg = [t.ident for t in init.tactics if t.parameters == 1]
+                    oneArg = [t.ident for t in tactics if t.parameters == 1]
                     hyp_node = proof_state.context[0]
                     preds2 = [
                         {'tactic': {'ident': t},
                          'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node}}],
                          'confidence': 0.5} for t in oneArg ]
                     preds += preds2
-                for d in init.definitions:
+                for d in definitions.definitions:
                     if d.name == "Coq.Init.Logic.I":
-                        oneArg = [t.ident for t in init.tactics if t.parameters == 1]
+                        oneArg = [t.ident for t in tactics if t.parameters == 1]
                         preds2 = [
                             {'tactic': {'ident': t },
                              'arguments': [{'term' : {'depIndex': 1, 'nodeIndex': d.node.nodeid}}],
@@ -68,11 +68,18 @@ def prediction_loop(init, r, s):
             print(response)
             response.write_packed(s)
         elif msg_type == "checkAlignment":
-            print(msg)
-            alignment = {'unalignedTactics': [ t.ident for t in msg.checkAlignment.tactics],
-                         'unalignedDefinitions': list(msg.checkAlignment.definitions)}
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-            response.write_packed(s)
+            cython_check_alignment = PredictionProtocol_Request_CheckAlignment_Reader(msg.checkAlignment)
+            with online_definitions_initialize(cython_check_alignment.graph, cython_check_alignment.representative) as definitions:
+                for cluster in definitions.clustered_definitions:
+                    print('cluster:')
+                    for d in cluster:
+                        print(f'    {d.name}')
+                for t in cython_check_alignment.tactics:
+                    print(t)
+                alignment = {'unalignedTactics': [ t.ident for t in msg.checkAlignment.tactics],
+                            'unalignedDefinitions': [d.node.nodeid for d in definitions.definitions]}
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+                response.write_packed(s)
         elif msg_type == "initialize":
             return msg
         else:
@@ -87,18 +94,19 @@ def graph_initialize_loop(r, s):
     }).as_reader()
     while init is not None:
         print('---------------- New prediction context -----------------')
-        with online_data_initialize(PredictionProtocol_Request_Initialize_Reader(init.initialize)) as base:
-            for cluster in base.clustered_definitions:
+        cython_init = PredictionProtocol_Request_Initialize_Reader(init.initialize)
+        with online_definitions_initialize(cython_init.graph, cython_init.representative) as definitions:
+            for cluster in definitions.clustered_definitions:
                 print('cluster:')
                 for d in cluster:
                     print(f'    {d.name}')
-            for t in base.tactics:
+            for t in cython_init.tactics:
                 print(t)
-            print(base.log_annotation)
+            print(cython_init.log_annotation)
             response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
             print(response)
             response.write_packed(s)
-            init = prediction_loop(base, r, s)
+            init = prediction_loop(definitions, cython_init.tactics, r, s)
         import time
         time.sleep(1)
 
