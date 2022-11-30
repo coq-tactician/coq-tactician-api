@@ -5,13 +5,12 @@ from collections import defaultdict
 from collections.abc import Sequence
 from abc import ABC, abstractmethod
 from pathlib import Path
-from pytact.data_reader import Dataset, Definition, Node, ProofState
+from pytact.data_reader import Dataset, Definition, Node, ProofState, Original, Discharged, Substituted
 import html
+import inflection
 import capnp
-capnp.remove_import_hook()
-import pytact.common
-graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+import pytact.graph_api_capnp as graph_api_capnp
+import pytact.graph_api_capnp_cython as apic
 
 class UrlMaker(ABC):
 
@@ -56,10 +55,12 @@ class Settings:
 class GraphVisualizationData:
     data: dict[Path, Dataset]
     trans_deps: dict[Path, set[Path]] = field(init=False)
+    graphid2path: list[Path] = field(init=False)
 
     def __post_init__(self):
         self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
                                               for d in self.data.values()})
+        self.graphid2path = [d.filename for d in sorted(self.data.values(), key=lambda d: d.graph)]
 
 @dataclass
 class GraphVisualizationOutput:
@@ -69,41 +70,38 @@ class GraphVisualizationOutput:
     text: list[str] = field(default_factory=lambda: [])
     popups: list[tuple[str, str]] = field(default_factory=lambda: []) # DOM id, text
 
-def camel2pascal_case(s: str) -> str:
-    if s.islower():
-        return s
-    else:
-        return s[0].capitalize()+s[1:]
-
 def node_label_map(node: Node) -> tuple[str, str, str]:
-    enum = graph_api_capnp.Graph.Node.Label
+    enum = apic.Graph_Node_Label_Which
     label = node.label
     if d := node.definition:
         name = d.name
-        return 'box', name.split('.')[-1], f"{camel2pascal_case(str(node.label.definition.which))} {d.name}"
+        return (
+            'box', name.split('.')[-1],
+            f"{inflection.camelize(str(node.label.definition.which).split('.')[1].lower())} {d.name}"
+        )
     match label.which:
-        case enum.sortProp:
+        case enum.SORT_PROP:
             return 'ellipse', 'Prop', 'SortProp'
-        case enum.sortSProp:
+        case enum.SORT_S_PROP:
             return 'ellipse', 'SProp', 'SortSProp'
-        case enum.sortSet:
+        case enum.SORT_SET:
             return 'ellipse', 'Set', 'SortSet'
-        case enum.sortType:
+        case enum.SORT_TYPE:
             return 'ellipse', 'Type', 'SortType'
-        case enum.rel:
+        case enum.REL:
             return 'circle', '↑', 'rel'
-        case enum.prod:
+        case enum.PROD:
             return 'circle', '∀', 'prod'
-        case 'lambda':
+        case enum.LAMBDA:
             return 'circle', 'λ', 'lambda'
-        case enum.letIn:
+        case enum.LET_IN:
             return 'ellipse', 'let', 'LetIn'
-        case enum.app:
+        case enum.APP:
             return 'circle', '@', 'app'
-        case enum.caseBranch:
+        case enum.CASE_BRANCH:
             return 'ellipse', 'branch', 'CaseBranch'
         case _:
-            name = camel2pascal_case(str(label.which))
+            name = inflection.camelize(str(label.which).split('.')[1].lower())
             return 'ellipse', name, name
 
 def truncate_string(data, maximum):
@@ -115,7 +113,7 @@ def make_label(context, name):
     return '.'.join(name_split[len(common):])
 
 def make_tooltip(d):
-    return f"{camel2pascal_case(str(d.node.label.definition.which))} {d.name}"
+    return f"{inflection.camelize(str(d.node.label.definition.which).split('.')[1].lower())} {d.name}"
 
 def render_proof_state_text(ps: ProofState):
     return ('<br>'.join(ps.context_text) +
@@ -126,6 +124,7 @@ class GraphVisualizator:
     def __init__(self, data: GraphVisualizationData, url_maker: UrlMaker, settings: Settings = Settings()):
         self.data = data.data
         self.trans_deps = data.trans_deps
+        self.graphid2path = data.graphid2path
         self.url_maker = url_maker
         self.settings = settings
         self.node_counter = 0
@@ -135,7 +134,7 @@ class GraphVisualizator:
         edge_arrow_map = {}
         for group in graph_api_capnp.groupedEdges:
             for i, sort in enumerate(group.conflatable):
-                edge_arrow_map[sort] = arrow_heads[i]
+                edge_arrow_map[sort.raw] = arrow_heads[i]
         self.edge_arrow_map = edge_arrow_map
 
     def url_for_path(self, r: Path):
@@ -168,7 +167,7 @@ class GraphVisualizator:
             tooltip = label
         url = None
         if node.definition:
-            url = self.url_maker.definition(node.path, node.nodeid)
+            url = self.url_maker.definition(self.graphid2path[node.graph], node.nodeid)
         dot.node(id, label, URL = url, shape = shape, tooltip = tooltip)
         return id
 
@@ -193,14 +192,14 @@ class GraphVisualizator:
                 label = "Representative: " + label
             tooltip = make_tooltip(d)
             match d.status:
-                case Definition.Original():
+                case Original():
                     id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
-                case Definition.Discharged(target):
+                case Discharged(target):
                     id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
                     dot.edge(id, repr(target.node),
                                 arrowtail="inv", dir="both", constraint="false", style="dashed")
-                case Definition.Substituted(target):
-                    if d.node.path == target.node.path:
+                case Substituted(target):
+                    if d.node.graph == target.node.graph:
                         id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
                         dot.edge(id, str(target.node),
                                     arrowtail="odot", dir="both", constraint="false", style="dashed")
@@ -214,7 +213,7 @@ class GraphVisualizator:
                             dot.edge(id, id2,
                                       arrowtail="odot", dir="both", constraint="false", style="dashed")
 
-        for cluster in dataset.clustered_definitions:
+        for cluster in dataset.clustered_definitions():
 
             start = str(cluster[0].node)
             ltail = None
@@ -238,7 +237,7 @@ class GraphVisualizator:
                     lhead = "cluster_"+target
                 dot.edge(str(cluster[-1].node), target, lhead = lhead, ltail = ltail)
             for fi in cluster[-1].external_previous:
-                fid = self.render_file_node(dot, fi.node.path)
+                fid = self.render_file_node(dot, self.graphid2path[fi.node.graph])
                 dot.edge(str(cluster[-1].node), fid, ltail = ltail)
 
         location = self.path2location(fname)
@@ -289,7 +288,7 @@ class GraphVisualizator:
                     context_prefix = proof_state_prefix.get(node.label.evar, context_prefix)
 
                 for edge, child in node.children:
-                    if edge.raw in self.settings.ignore_edges:
+                    if edge in self.settings.ignore_edges:
                         continue
                     if child.label.which == graph_api_capnp.Graph.Node.Label.evarSubst:
                         substs = [s for _, s in child.children]
@@ -298,14 +297,14 @@ class GraphVisualizator:
                     cid = recurse(child, depth,
                                     before_prefix if edge == graph_api_capnp.EdgeClassification.evarSubstTerm
                                     else context_prefix)
-                    edge_name = camel2pascal_case(str(edge))
+                    edge_name = inflection.camelize(str(apic.EdgeClassification(edge)).split('.')[1].lower())
                     if self.settings.show_edge_labels:
                         label = edge_name
                     else:
                         label = ""
                     dot.edge(dot_id, cid, label=label, tooltip=edge_name, labeltooltip=edge_name,
                                 arrowtail=self.edge_arrow_map[edge], dir="both")
-            if node.label.which.raw in self.settings.unshare_nodes:
+            if node.label.which_raw in self.settings.unshare_nodes:
                 del seen[id]
             return dot_id
         id = recurse(start, depth, before_prefix)
@@ -452,7 +451,7 @@ class GraphVisualizator:
             dot2.attr('graph', label=f"Tactic\n{tactic_text}")
             dot2.node('tactic', label = tactic_base_text)
             for i, arg in enumerate(outcome.tactic_arguments):
-                if arg == None:
+                if arg is None:
                     dot2.node(f"tactic-arg{i}", label=f"arg {i}: unknown")
                 else:
                     id = self.visualize_term(dot2, arg, depth=depth, prefix=prefix, before_prefix=prefix,
