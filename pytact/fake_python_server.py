@@ -9,30 +9,34 @@ import pytact.graph_api_capnp as graph_api_capnp
 from pytact.data_reader import online_definitions_initialize, online_data_predict
 from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Reader
 
-def text_prediction_loop(r, s):
+def text_prediction_loop(incoming_messages, capnp_socket):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
-    for g in r:
-        msg_type = g.which()
-        if msg_type == "predict":
-            print(g.predict.state.text)
+    for msg in incoming_messages:
+        if msg.is_predict:
+            print(msg.predict.state.text)
             preds = [
                 {'tacticText': t,
                  'confidence': 0.5} for t in tactics ]
             response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
             print(response)
-            response.write_packed(s)
+            response.write_packed(capnp_socket)
             import time
             time.sleep(1)
-        elif msg_type == "synchronize":
-            print(g)
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=g.synchronize)
+        elif msg.is_synchronize:
+            print(msg)
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
             print(response)
-            response.write_packed(s)
-        elif msg_type == "initialize":
-            print(g)
+            response.write_packed(capnp_socket)
+        elif msg.is_initialize:
+            print(msg)
             response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
             print(response)
-            response.write_packed(s)
+            response.write_packed(capnp_socket)
+        elif msg.is_check_alignment:
+            alignment = {'unalignedTactics': [],
+                            'unalignedDefinitions': []}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+            response.write_packed(capnp_socket)
         else:
             raise Exception("Capnp protocol error")
 
