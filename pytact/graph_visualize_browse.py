@@ -77,7 +77,7 @@ def node_label_map(node: Node) -> tuple[str, str, str]:
         name = d.name
         return (
             'box', name.split('.')[-1],
-            f"{inflection.camelize(str(node.label.definition.which).split('.')[1].lower())} {d.name}"
+            f"{inflection.camelize(node.label.definition.which.name.lower())} {d.name}"
         )
     match label.which:
         case enum.SORT_PROP:
@@ -101,7 +101,7 @@ def node_label_map(node: Node) -> tuple[str, str, str]:
         case enum.CASE_BRANCH:
             return 'ellipse', 'branch', 'CaseBranch'
         case _:
-            name = inflection.camelize(str(label.which).split('.')[1].lower())
+            name = inflection.camelize(label.which.name.lower())
             return 'ellipse', name, name
 
 def truncate_string(data, maximum):
@@ -113,7 +113,7 @@ def make_label(context, name):
     return '.'.join(name_split[len(common):])
 
 def make_tooltip(d):
-    return f"{inflection.camelize(str(d.node.label.definition.which).split('.')[1].lower())} {d.name}"
+    return f"{inflection.camelize(d.node.label.definition.which.name.lower())} {d.name}"
 
 def render_proof_state_text(ps: ProofState):
     return ('<br>'.join(ps.context_text) +
@@ -297,7 +297,7 @@ class GraphVisualizator:
                     cid = recurse(child, depth,
                                     before_prefix if edge == graph_api_capnp.EdgeClassification.evarSubstTerm
                                     else context_prefix)
-                    edge_name = inflection.camelize(str(apic.EdgeClassification(edge)).split('.')[1].lower())
+                    edge_name = inflection.camelize(apic.EdgeClassification(edge).name.lower())
                     if self.settings.show_edge_labels:
                         label = edge_name
                     else:
