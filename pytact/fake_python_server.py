@@ -34,7 +34,7 @@ def text_prediction_loop(incoming_messages, capnp_socket):
             response.write_packed(capnp_socket)
         elif msg.is_check_alignment:
             alignment = {'unalignedTactics': [],
-                            'unalignedDefinitions': []}
+                         'unalignedDefinitions': []}
             response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
             response.write_packed(capnp_socket)
         else:

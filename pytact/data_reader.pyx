@@ -1256,7 +1256,7 @@ def node_dependencies(Node n, deps: set[Definition] | None = None) -> set[Defini
     cdef stack[GlobalNode] stack
     cdef GlobalNode current_node
     cdef uint32_t children_index
-    cdef uint16_t children_limit
+    cdef uint32_t children_limit
 
     if deps is None:
         deps = set()
@@ -1274,7 +1274,7 @@ def node_dependencies(Node n, deps: set[Definition] | None = None) -> set[Defini
             deps.add(Node.init(current_node.graphid, current_node.nodeid, graph_index).definition)
             continue
         children_index = node_contents.getChildrenIndex()
-        children_limit = children_index + node_contents.getChildrenCount()
+        children_limit = children_index + (<uint32_t> node_contents.getChildrenCount())
         edges = graph_index.edges[current_node.graphid]
         while children_index < children_limit:
             edge_target = edges[children_index].getTarget()
@@ -1284,7 +1284,7 @@ def node_dependencies(Node n, deps: set[Definition] | None = None) -> set[Defini
             children_index += 1
     return deps
 
-def definition_dependencies(d: Definition):
+def definition_dependencies(d: Definition) -> set[Definition]:
     """Given a `Definition` `d`, calculate the set of `Definition`'s that are directly reachable for `d`.
     Transitively reachable definitions are not included nor is `d` itself.
     """
