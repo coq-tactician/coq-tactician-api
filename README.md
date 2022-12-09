@@ -45,7 +45,7 @@ To install the Python component of this repository, make sure that you have a vi
 command `pip install .` from the root of this repository.
 
 To install the OCaml component of this repository, make sure that you have the appropriate switch activated and
-run the command `opam install . --yes` from the root of this repository.
+run the command `opam install . --no-depexts --yes` from the root of this repository.
 
 If you want maximum performance, it is recommended that you use an OCaml version with `flambda` enabled. On newer versions of Opam you can achieve this by installing `ocaml-option-flambda`.
 
