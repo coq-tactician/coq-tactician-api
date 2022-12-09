@@ -31,7 +31,7 @@ To create the virtualenv, run
 ```
 python -m venv <desired-location-of-virtualenv>`
 ```
-To activate the virtualenv run `source <location-of-virtualenv>`.
+To activate the virtualenv run `source <location-of-virtualenv>/bin/activate`.
 
 For the OCaml side, if you've never run Opam before, initialize it by running `opam init`. Then, create a switch
 with the appropriate software repositories:
