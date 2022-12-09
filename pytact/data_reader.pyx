@@ -225,7 +225,7 @@ cdef class Node:
     @property
     def label(self) -> Any:
         """The label of the node, indicating it's function in the CIC graph."""
-        return Graph_Node_Label_Reader.init(self.node.getLabel())
+        return Graph_Node_Label_Reader.init(self.node.getLabel(), None)
 
     @property
     def identity(self) -> NodeHash:
@@ -353,7 +353,7 @@ cdef class ProofState:
 
     @property
     def lowlevel(self):
-        return ProofState_Reader.init(self.reader)
+        return ProofState_Reader.init(self.reader, None)
     def __repr__(self):
         return repr(self.lowlevel)
 
@@ -382,11 +382,11 @@ cdef class ProofState:
 
     @property
     def context_names(self) -> Sequence[str]:
-        return String_List.init(self.reader.getContextNames())
+        return String_List.init(self.reader.getContextNames(), None)
 
     @property
     def context_text(self) -> Sequence[str]:
-        return String_List.init(self.reader.getContextText())
+        return String_List.init(self.reader.getContextText(), None)
 
     @property
     def conclusion_text(self) -> str:
@@ -492,7 +492,7 @@ cdef class Outcome:
 
     @property
     def lowlevel(self):
-        return Outcome_Reader.init(self.reader)
+        return Outcome_Reader.init(self.reader, None)
     def __repr__(self):
         return repr(self.lowlevel)
 
@@ -576,7 +576,7 @@ cdef class ProofStep:
 
     @property
     def lowlevel(self):
-        return ProofStep_Reader.init(self.reader)
+        return ProofStep_Reader.init(self.reader, None)
     def __repr__(self):
         return repr(self.lowlevel)
 
@@ -593,7 +593,7 @@ cdef class ProofStep:
         if tactic.isUnknown():
             return None
         elif tactic.isKnown():
-            return Tactic_Reader.init(tactic.getKnown())
+            return Tactic_Reader.init(tactic.getKnown(), None)
         else: assert False
 
     @property
@@ -703,7 +703,7 @@ cdef class Definition:
 
     @property
     def lowlevel(self):
-        return Definition_Reader.init(self.reader)
+        return Definition_Reader.init(self.reader, None)
     def __repr__(self):
         return repr(self.lowlevel)
 
@@ -990,7 +990,7 @@ cdef class Dataset:
 
     @property
     def lowlevel(self):
-        return Dataset_Reader.init(self.reader)
+        return Dataset_Reader.init(self.reader, None)
     def __repr__(self):
         return repr(self.lowlevel)
 

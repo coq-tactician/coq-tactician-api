@@ -74,33 +74,39 @@ cdef extern from "capnp/list.h":
 
 cdef class {{ c.cython_name }}_Reader:
     cdef C_{{ c.cython_name }}_Reader source
+    cdef object root
     @staticmethod
-    cdef init(C_{{ c.cython_name }}_Reader source)
+    cdef init(C_{{ c.cython_name }}_Reader source, object root)
 {%- endfor %}
 
 cdef class Uint16_List:
     cdef C_Uint16_List source
+    cdef object root
     @staticmethod
-    cdef init(C_Uint16_List source)
+    cdef init(C_Uint16_List source, object root)
 
 cdef class Uint32_List:
     cdef C_Uint32_List source
+    cdef object root
     @staticmethod
-    cdef init(C_Uint32_List source)
+    cdef init(C_Uint32_List source, object root)
 
 cdef class Uint64_List:
     cdef C_Uint64_List source
+    cdef object root
     @staticmethod
-    cdef init(C_Uint64_List source)
+    cdef init(C_Uint64_List source, object root)
 
 cdef class String_List:
     cdef C_String_List source
+    cdef object root
     @staticmethod
-    cdef init(C_String_List source)
+    cdef init(C_String_List source, object root)
 
 {%- for c in classes_lists %}
 cdef class {{ c.cython_name }}_List:
     cdef C_{{ c.cython_name }}_List source
+    cdef object root
     @staticmethod
-    cdef init(C_{{ c.cython_name }}_List source)
+    cdef init(C_{{ c.cython_name }}_List source, object root)
 {%- endfor %}

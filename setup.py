@@ -9,12 +9,14 @@ from Cython.Build import cythonize
 def capnp2cython():
 
     api_file = "pytact/graph_api.capnp"
-    cython_file = api_file.replace('.', '_')+'_cython.pyx'
+    cython_file_pyx = api_file.replace('.', '_')+'_cython.pyx'
+    cython_file_pxd = api_file.replace('.', '_')+'_cython.pxd'
+    template_files = ["pytact/templates/capnp_cython.pyx", "pytact/templates/capnp_cython.pxd"]
 
     # Poor man's make
     target_time = min([(os.path.getmtime(f) if os.path.exists(f) else 0) for f in
-                        [api_file+'.c++', api_file+'.cpp', api_file+'.h', cython_file]])
-    source_time = os.path.getmtime(api_file)
+                        [api_file+'.c++', api_file+'.cpp', api_file+'.h', cython_file_pyx, cython_file_pxd]])
+    source_time = max([os.path.getmtime(f) for f in [api_file] + template_files])
     if target_time < source_time:
         print(subprocess.check_output(["capnpc", "-oc++", api_file]))
         subprocess.check_output(["capnpc", "-o./pytact/generate_api.py", api_file])
@@ -25,7 +27,7 @@ def capnp2cython():
     return cythonize([
         Extension(
             name = "pytact.graph_api_capnp_cython",
-            sources = [cython_file],
+            sources = [cython_file_pyx],
             extra_compile_args=["-O3"],
             include_dirs=[capnp_loc]
         ),
