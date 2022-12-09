@@ -111,7 +111,7 @@ At this point, you have the following commands available which will interact wit
 ## Reinforcement interaction
 
 Finally, the command `Reinforce.` will initiate a reinforcement session. An example of this is available in
-[tests/ReinforceTest.v](theories/ReinforceTest.v).
+[pytact/tests/ReinforceStdin.v](ReinforceStdin.v).
 To do this, you need to have a python client running. An example is available in the `pytact-prover` executable.
 To see how it works, run
 ```
