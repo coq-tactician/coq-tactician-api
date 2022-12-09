@@ -54,7 +54,7 @@ def prediction_loop(definitions, tactics, incoming_messages, capnp_socket):
                     hyp_node = proof_state.context[0]
                     preds2 = [
                         {'tactic': {'ident': t},
-                         'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node}}],
+                         'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node.nodeid}}],
                          'confidence': 0.5} for t in oneArg ]
                     preds += preds2
                 for d in definitions.definitions:
