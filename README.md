@@ -1,4 +1,4 @@
-# Reinforcement learning for Tactician
+# A Graph -and Text-based machine learning interface for Tactician
 
 ## Prerequisites
 
