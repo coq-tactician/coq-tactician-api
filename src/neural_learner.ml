@@ -269,7 +269,7 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraphMonad.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater
+      CICGraphMonad.run_empty ~include_opaque:true ~def_truncate:(truncate_option ()) updater
         (G.HashMap.create 100) G.builder_nil Global in
     builder, state in
 
@@ -375,8 +375,10 @@ let check_neural_alignment () =
                   | TOther -> Pp.mt ())
                 unaligned_defs) in
       Feedback.msg_notice Pp.(
-          str "There are " ++ int (List.length unaligned_tacs) ++ str " unaligned tactics and " ++
-          int (List.length unaligned_defs) ++ str " unaligned definitions." ++
+          str "There are " ++ int (List.length unaligned_tacs) ++ str "/" ++
+          int (Array.length @@ Request.CheckAlignment.tactics_get_array init) ++ str " unaligned tactics and " ++
+          int (List.length unaligned_defs) ++ str "/" ++
+          int (Array.length @@ Request.CheckAlignment.definitions_get_array init) ++ str " unaligned definitions." ++
           tacs_msg ++ defs_msg
         )
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
