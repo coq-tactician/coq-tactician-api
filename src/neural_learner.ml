@@ -356,9 +356,10 @@ let check_neural_alignment () =
     let response = Response.of_message response in
     match Response.get response with
     | Response.Alignment alignment ->
+      let find_global_argument = find_global_argument state in
       let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs @@ Stdint.Uint64.to_int t) @@
         Response.Alignment.unaligned_tactics_get_list alignment in
-      let unaligned_defs = List.map (fun d -> find_global_argument state @@ Stdint.Uint32.to_int d) @@
+      let unaligned_defs = List.map (fun d -> find_global_argument @@ Stdint.Uint32.to_int d) @@
         Response.Alignment.unaligned_definitions_get_list alignment in
       let tacs_msg = if CList.is_empty unaligned_tacs then Pp.mt () else
           Pp.(fnl () ++ str "Unaligned tactics: " ++ fnl () ++
