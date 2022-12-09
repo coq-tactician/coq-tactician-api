@@ -36,7 +36,7 @@ To activate the virtualenv run `source <location-of-virtualenv>/bin/activate`.
 For the OCaml side, if you've never run Opam before, initialize it by running `opam init`. Then, create a switch
 with the appropriate software repositories:
 ```
-opam switch create tactician --empty --repos=custom-archive=https://github.com/LasseBlaauwbroek/custom-archive.git,coq-extra-dev=https://coq.inria.fr/opam/extra-dev,coq-core-dev=https://coq.inria.fr/opam/core-dev,coq-released=https://coq.inria.fr/opam/released,default
+opam switch create tactician --empty --repos=custom-archive=git+https://github.com/LasseBlaauwbroek/custom-archive.git,coq-extra-dev=https://coq.inria.fr/opam/extra-dev,coq-core-dev=https://coq.inria.fr/opam/core-dev,coq-released=https://coq.inria.fr/opam/released,default
 ```
 Make sure to follow any printed instructions regarding `eval $(opam env)` to activate the switch.
 
