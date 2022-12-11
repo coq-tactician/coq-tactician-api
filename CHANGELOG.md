@@ -1,3 +1,8 @@
+# v14
+Changes to the graph:
+- Delay the generation of primitive projections until after an inductive definition is fully processed
+  by the graph sharing algorithm. This prevents some subtle bugs.
+
 # v13
 Changes to the Capn'proto format:
 - Upgraded magic id to v13
