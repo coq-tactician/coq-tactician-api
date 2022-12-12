@@ -269,7 +269,7 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraphMonad.run_empty ~include_opaque:true ~def_truncate:(truncate_option ()) updater
+      CICGraphMonad.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater
         (G.HashMap.create 100) G.builder_nil Global in
     builder, state in
 

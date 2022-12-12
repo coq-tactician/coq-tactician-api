@@ -133,7 +133,7 @@ struct Graph {
     #    alpha-equivalent.
     #
     # The identity of a node is used to perform partial graph-sharing. That is, two nodes with the same
-    # identity are merged when the graph is generated. There are two reasons why two nodes with the same
+    # identity are merged when the graph is generated. There are three reasons why two nodes with the same
     # semantic identity might have a different physical identity:
     # 1. Nodes are only merged when the first node exists in the same graph as the second node, or exists
     #    in a dependent graph. Hence, nodes originating from developments that do not depend on each other
@@ -142,6 +142,12 @@ struct Graph {
     # 2. Two definition nodes with the same name and body have the same identity. But if they occur in
     #    different global contexts, these nodes are physically different to ensure the integrity of their
     #    global contexts.
+    # 3. For definitions with an opaque proof, the sub-graph that represents this opaque proof is ignored
+    #    while calculating the identity. Morally we defend this decision with the concept that opaque proofs
+    #    are invisible in Coq (proof irrelevance) and two constants with different proofs might as well be
+    #    considered equal. Practically speaking, this is done so that one can compare the identity of a
+    #    definition in a dataset quickly to a identity of a live definition during Coq interaction without
+    #    having to produce the entire graph of opaque proofs (which tend to be large).
     #
     # Beware that the identity is currently a 64 bit field. For datasets that have graphs of size in the
     # order of billions of nodes there is a non-trivial chance of a collision. (We consider this acceptable

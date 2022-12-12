@@ -2,6 +2,9 @@
 Changes to the graph:
 - Delay the generation of primitive projections until after an inductive definition is fully processed
   by the graph sharing algorithm. This prevents some subtle bugs.
+- While calculating the hash of nodes, children reachable through a `constOpaqueDef` edge are now ignored.
+  This allows us to compare hashes of definitions between the dataset and new definitions in Coq without
+  having to calculate the full graph of opaque proof terms (which tends to be rather large).
 
 # v13
 Changes to the Capn'proto format:

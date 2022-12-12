@@ -549,7 +549,7 @@ module type CICHasherType = sig
   val update_int      : int -> state -> state
   val update_string   : string -> state -> state
   val update_node_label : physical:bool -> node_label -> state -> state
-  val update_edge_label : physical:bool -> edge_label -> state -> state
+  val update_edge     : physical:bool -> edge_label -> t -> state -> state
   val compare         : t -> t -> int
   val hash            : t -> int (* Conversion to an integer is allowed to be lossy (cause collisions) *)
   val equal           : t -> t -> bool
@@ -670,6 +670,11 @@ module CICHasher
     | EvarSubstTerm -> u 40
     | EvarSubstTarget -> u 41
     | EvarSubject -> u 42
+  let update_edge ~physical el n state =
+    (* Ignore children when they are an opaque proof. *)
+    match el with
+    | ConstOpaqueDef -> update_edge_label ~physical el state
+    | _ -> update n @@ update_edge_label ~physical el state
 end
 
 (** `GraphHasher` is a module functor that transforms any `GraphMonadType` into another
@@ -809,7 +814,7 @@ module GraphHasher
               H.update_node_label ~physical label @@ H.update_int (curr_depth - depth) state
           | Binder ({ hash; _ }, { seen = true; final = true; _ }) -> which hash
         in
-        H.update n @@ H.update_edge_label ~physical el state
+        H.update_edge ~physical el n state
       ) state ch in
     let final ~physical = H.with_state @@ fun state ->
       H.update_node_label ~physical nl @@ hashes ~physical state in
