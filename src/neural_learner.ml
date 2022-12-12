@@ -456,8 +456,12 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let context_map = Id.Map.map (fun n ->
         let (p, n), _ = G.lower n in
         p, node_local_index (p, n)) context_map in
-    let context_range = List.map (fun (_, (_, n)) -> n) @@
-      Id.Map.bindings context_map in
+    let context_range = List.rev @@ List.filter_map (fun hyp ->
+        let id = Context.Named.Declaration.get_id hyp in
+        match Id.Map.find_opt id context_map with
+        | None -> None
+        | Some (_, n) -> Some n
+      ) @@ TS.proof_state_hypotheses ps in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
 
