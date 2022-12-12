@@ -43,6 +43,7 @@ class Settings:
     show_edge_labels: bool = False
     order_edges: bool = False
     concentrate_edges: bool = False
+    show_non_anonymized_tactics: bool = False
 
     def __post_init__(self):
         if not self.no_defaults:
@@ -367,7 +368,10 @@ class GraphVisualizator:
             with dot.subgraph(name='cluster_' + str(i)) as dot2:
                 dot2.attr('graph', labelloc="b", style="rounded")
                 if tactic := step.tactic:
-                    tactic_text = tactic.text
+                    if self.settings.show_non_anonymized_tactics:
+                        tactic_text = tactic.text_non_anonymous
+                    else:
+                        tactic_text = tactic.text
                 else:
                     tactic_text = 'unknown'
                 dot2.attr(label=tactic_text)
