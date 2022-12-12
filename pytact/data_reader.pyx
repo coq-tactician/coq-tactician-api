@@ -111,7 +111,7 @@ cdef class LowlevelDataReader:
         if not dataset:
             raise ValueError(f"There does not appear to be a dataset located at {dataset_path}")
         for f, reader in dataset:
-            if reader.data_version.major != graph_api_capnp.currentVersion.major + 1:
+            if reader.data_version.major != graph_api_capnp.currentVersion.major:
                 raise ValueError(
                     f"This library is compiled for a dataset containing data versioned as "
                     f"{graph_api_capnp.currentVersion} but file {f} contains data versioned as "
