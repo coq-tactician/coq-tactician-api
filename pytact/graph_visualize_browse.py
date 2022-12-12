@@ -113,6 +113,9 @@ def make_label(context, name):
     common = os.path.commonprefix([name_split, context.split('.')])
     return '.'.join(name_split[len(common):])
 
+def graphviz_escape(s):
+    return s.replace('\\', '\\\\')
+
 def make_tooltip(d):
     return f"{inflection.camelize(d.node.label.definition.which.name.lower())} {d.name}"
 
@@ -421,10 +424,10 @@ class GraphVisualizator:
                 enum = graph_api_capnp.Graph.Node.Label
                 match node.label.which:
                     case enum.contextAssum:
-                        name = mapping[node]
+                        name = graphviz_escape(mapping[node])
                         return 'ellipse', truncate_string(name, 20), f"ContextAssum {name}"
                     case enum.contextDef:
-                        name = mapping[node]
+                        name = graphviz_escape(mapping[node])
                         return 'ellipse', truncate_string(name, 20), f"ContextDef {name}"
                     case _:
                         return node_label_map(node)
@@ -435,8 +438,8 @@ class GraphVisualizator:
         with dot.subgraph(name='cluster_before') as dot2:
             ps = outcome.before
             dot2.attr('graph',
-                      label=f"Before state\n{truncate_string(ps.conclusion_text, 70)}",
-                      tooltip=f"Before state {ps.conclusion_text}",
+                      label=f"Before state\n{graphviz_escape(truncate_string(ps.conclusion_text, 70))}",
+                      tooltip=f"Before state {graphviz_escape(ps.conclusion_text)}",
                       id='before-state')
             popups.append(('before-state', render_proof_state_text(ps)))
             prefix = 'before'
@@ -468,8 +471,8 @@ class GraphVisualizator:
         for ai, after in enumerate(outcome.after):
             with dot.subgraph(name='cluster_after' + str(ai)) as dot2:
                 dot2.attr('graph',
-                          label=f"After state {ai}\n{truncate_string(after.conclusion_text, 70)}",
-                          tooltip=f"After state {ai} {after.conclusion_text}",
+                          label=f"After state {ai}\n{graphviz_escape(truncate_string(after.conclusion_text, 70))}",
+                          tooltip=f"After state {ai} {graphviz_escape(after.conclusion_text)}",
                           id=f'after-state{ai}')
                 popups.append((f'after-state{ai}', render_proof_state_text(after)))
                 prefix = f'after{ai}'
@@ -480,8 +483,8 @@ class GraphVisualizator:
         if not self.settings.hide_proof_terms:
             with dot.subgraph(name='cluster_term') as dot2:
                 dot2.attr('graph',
-                          label=f"Proof term\n{truncate_string(outcome.term_text, 70)}",
-                          tooltip=f"Proof term {outcome.term_text}",
+                          label=f"Proof term\n{graphviz_escape(truncate_string(outcome.term_text, 70))}",
+                          tooltip=f"Proof term {graphviz_escape(outcome.term_text)}",
                           id='proof-term')
                 popups.append(('proof-term', outcome.term_text))
                 prefix = 'term'
