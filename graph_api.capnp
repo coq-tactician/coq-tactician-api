@@ -1,4 +1,4 @@
-@0x8a58f5e8c91ebd1d; # v13
+@0xfe647bf3a7fdcc2f; # v14
 
 ######################################################################################################
 #
@@ -385,6 +385,19 @@ struct Definition {
   # For inductives, constructors, projections, section variables and axioms the string is empty.
 }
 
+struct DataVersion {
+  # Version info of a dataset.
+
+  major @0 :Int64;
+  # Currently we only have a major version. Any change to the graph format, Cap'n Proto schema or
+  # communication protocol is considered a breaking change and will increment the major version number.
+  # Note that currently we don't distinquish backwards-compatible Cap'n Proto schema changes from
+  # non-backwards-compatible changes. The schema might change in a non-compatible way without notice.
+  # In the future, a minor version id might be introduced.
+}
+
+const currentVersion :DataVersion = ( major = 14 );
+
 
 ######################################################################################################
 #
@@ -396,6 +409,9 @@ struct Dataset {
   # Every file in the dataset contains a single message of type `Dataset`. Every file corresponds to
   # a Coq source file, and contains a representation of all definitions that have existed at any point
   # throughout the compilation of the source file.
+
+  dataVersion @5 :DataVersion;
+  # The version of the data stored in this dataset.
 
   dependencies @0 :List(File);
   # The graph contained in a file may reference nodes from the graph of other files. This field maps
@@ -505,6 +521,9 @@ struct PredictionProtocol {
         # Start a context for making tactical predictions for proof search. The context includes the tactics
         # that are currently available, the definitions that are available.
 
+        dataVersion @12 :DataVersion;
+        # The version number this message and subsequent messages is compatible with.
+
         tactics @0 :List(AbstractTactic);
         # A list of tactics that Coq currently knows about.
 
@@ -535,6 +554,10 @@ struct PredictionProtocol {
       checkAlignment :group {
         # Request for the server to align the given tactics and definition to it's internal knowledge
         # and report back any tactics and definitions that were not found
+
+        dataVersion @13 :DataVersion;
+        # The version number this message and subsequent messages is compatible with.
+
         tactics @7 :List(AbstractTactic);
         graph @8 :Graph;
         definitions @9 :List(NodeIndex);

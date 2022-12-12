@@ -245,7 +245,8 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentative =
+let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentative cversion =
+  ignore(cversion Api.Reader.current_version);
   let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
@@ -328,7 +329,8 @@ let init_predict rc wc tacs env =
     (Request.Initialize.tactics_init init)
     (Request.Initialize.graph_init init)
     (Request.Initialize.definitions_set_list init)
-    (Request.Initialize.representative_set_int_exn init) in
+    (Request.Initialize.representative_set_int_exn init)
+    (Request.Initialize.data_version_set_reader init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -349,7 +351,8 @@ let check_neural_alignment () =
       (Request.CheckAlignment.tactics_init init)
       (Request.CheckAlignment.graph_init init)
       (Request.CheckAlignment.definitions_set_list init)
-      (Request.CheckAlignment.representative_set_int_exn init) in
+      (Request.CheckAlignment.representative_set_int_exn init)
+      (Request.CheckAlignment.data_version_set_reader init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->

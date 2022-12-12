@@ -1,10 +1,18 @@
 # v14
+Changes to the Capn'proto format:
+- Upgraded magic id to v14
+- Introduced runtime version information to the format. This allows us to check if the version of a dataset
+  conforms to the version of a library that is trying to read it. Version information is also transmitted
+  by Coq to the prediction server.
+
 Changes to the graph:
 - Delay the generation of primitive projections until after an inductive definition is fully processed
   by the graph sharing algorithm. This prevents some subtle bugs.
 - While calculating the hash of nodes, children reachable through a `constOpaqueDef` edge are now ignored.
   This allows us to compare hashes of definitions between the dataset and new definitions in Coq without
   having to calculate the full graph of opaque proof terms (which tends to be rather large).
+- Add a non-anonymized version of the the string of a tactic. This is useful for oracles and possibly
+  some language models.
 
 # v13
 Changes to the Capn'proto format:

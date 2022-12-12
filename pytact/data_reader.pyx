@@ -111,12 +111,17 @@ cdef class LowlevelDataReader:
         if not dataset:
             raise ValueError(f"There does not appear to be a dataset located at {dataset_path}")
         for f, reader in dataset:
+            if reader.data_version.major != graph_api_capnp.currentVersion.major + 1:
+                raise ValueError(
+                    f"This library is compiled for a dataset containing data versioned as "
+                    f"{graph_api_capnp.currentVersion} but file {f} contains data versioned as "
+                    f"{reader.data_version}.")
             relative_self = Path(reader.dependencies[0])
             if f != relative_self:
                 real_root = Path(*(dataset_path/f).parts[:-len(relative_self.parts)])
                 raise ValueError(
                     f"Path {dataset_path} doesn't appear to be the root of a dataset. "
-                    f"File {dataset_path/f} suggests that the real root might be {real_root}")
+                    f"File {dataset_path/f} suggests that the real root might be {real_root}.")
 
         self.graphs = [g for _, g in dataset]
         self.graphid_by_filename = {f: i for i, (f, _) in enumerate(dataset)}
