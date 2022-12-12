@@ -66,6 +66,7 @@ type 'node outcome =
 
 type tactic =
   { tactic        : string
+  ; tactic_non_anonymous : string
   ; base_tactic   : string
   ; interm_tactic : string
   ; tactic_hash   : int

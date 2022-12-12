@@ -79,12 +79,13 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
           let capnp_tactic = K.Builder.ProofStep.tactic_init arri in
           (match tactic with
            | None -> K.Builder.ProofStep.Tactic.unknown_set capnp_tactic
-           | Some { tactic; base_tactic; interm_tactic; tactic_hash; tactic_exact } ->
+           | Some { tactic; tactic_non_anonymous; base_tactic; interm_tactic; tactic_hash; tactic_exact } ->
              let capnp_tactic = K.Builder.ProofStep.Tactic.known_init capnp_tactic in
              K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
              K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
              if include_metadata then begin
                K.Builder.Tactic.text_set capnp_tactic tactic;
+               K.Builder.Tactic.text_non_anonymous_set capnp_tactic tactic_non_anonymous;
                K.Builder.Tactic.base_text_set capnp_tactic base_tactic;
                K.Builder.Tactic.interm_text_set capnp_tactic interm_tactic
              end);

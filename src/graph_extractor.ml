@@ -498,6 +498,7 @@ end = struct
       | None -> None, []
       | Some tac ->
         let pr_tac t = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env t) in
+        let tactic_non_anonymous = tac in
         let tac_orig = Tactic_name_remove.tactic_name_remove tac in
         let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
         let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
@@ -506,12 +507,14 @@ end = struct
         let tactic =
           if metadata then
             Some { tactic = pr_tac tac_orig
+                 ; tactic_non_anonymous = pr_tac tactic_non_anonymous
                  ; base_tactic = pr_tac base_tactic
                  ; interm_tactic = pr_tac interm_tactic
                  ; tactic_hash
                  ; tactic_exact }
           else
             Some { tactic = ""
+                 ; tactic_non_anonymous = ""
                  ; base_tactic = ""
                  ; interm_tactic = ""
                  ; tactic_hash

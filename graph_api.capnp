@@ -188,7 +188,11 @@ struct Tactic {
   text @1 :Text;
   # The full text of the tactic including the full arguments. This does not currently correspond to
   # (ident, arguments) because in this dataset arguments do not include full terms, but only references to
-  # definitions and local context elements.
+  # definitions and local context elements. Tactics are postprocessed to remove explicit naming of new
+  # hypotheses as much as possible, and instead asking Coq to invent a name.
+
+  textNonAnonymous @5 :Text;
+  # Same as `text` except that the tactic is not postprocessed to remove explicit naming of new hypotheses.
 
   baseText @2 :Text;
   # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
