@@ -628,64 +628,65 @@ enum EdgeClassification {
   # Inductives
   indType @9;
   indConstruct @10;
-  projTerm @11;
-  constructTerm @12;
+  indProjection @11;
+  projTerm @12;
+  constructTerm @13;
 
   # Casts
-  castTerm @13;
-  castType @14;
+  castTerm @14;
+  castType @15;
 
   # Products
-  prodType @15;
-  prodTerm @16;
+  prodType @16;
+  prodTerm @17;
 
   # Lambdas
-  lambdaType @17;
-  lambdaTerm @18;
+  lambdaType @18;
+  lambdaTerm @19;
 
   # LetIns
-  letInDef @19;
-  letInType @20;
-  letInTerm @21;
+  letInDef @20;
+  letInType @21;
+  letInTerm @22;
 
   # Apps
-  appFun @22;
-  appArg @23;
+  appFun @23;
+  appArg @24;
 
   # Cases
-  caseTerm @24;
-  caseReturn @25;
-  caseBranchPointer @26;
-  caseInd @27;
+  caseTerm @25;
+  caseReturn @26;
+  caseBranchPointer @27;
+  caseInd @28;
 
   # CaseBranches
-  cBConstruct @28;
-  cBTerm @29;
+  cBConstruct @29;
+  cBTerm @30;
 
   # Fixes
-  fixMutual @30;
-  fixReturn @31;
+  fixMutual @31;
+  fixReturn @32;
 
   # FixFuns
-  fixFunType @32;
-  fixFunTerm @33;
+  fixFunType @33;
+  fixFunTerm @34;
 
   # CoFixes
-  coFixMutual @34;
-  coFixReturn @35;
+  coFixMutual @35;
+  coFixReturn @36;
 
   # CoFixFuns
-  coFixFunType @36;
-  coFixFunTerm @37;
+  coFixFunType @37;
+  coFixFunTerm @38;
 
   # Back pointers
-  relPointer @38;
+  relPointer @39;
 
   # Evars
-  evarSubstPointer @39;
-  evarSubstTerm @40;
-  evarSubstTarget @41;
-  evarSubject @42;
+  evarSubstPointer @40;
+  evarSubstTerm @41;
+  evarSubstTarget @42;
+  evarSubject @43;
 }
 
 # Struct is needed to work around

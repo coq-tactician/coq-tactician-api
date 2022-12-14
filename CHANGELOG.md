@@ -6,8 +6,9 @@ Changes to the Capn'proto format:
   by Coq to the prediction server.
 
 Changes to the graph:
-- Delay the generation of primitive projections until after an inductive definition is fully processed
-  by the graph sharing algorithm. This prevents some subtle bugs.
+- Add any primitive projection definitions part of an inductive to the children of that inductive. This is
+  mostly done because it simplifies the graph sharing algorithm and prevents some subtle bugs. This introduces
+  a new edge-type `indProjection`.
 - While calculating the hash of nodes, children reachable through a `constOpaqueDef` edge are now ignored.
   This allows us to compare hashes of definitions between the dataset and new definitions in Coq without
   having to calculate the full graph of opaque proof terms (which tends to be rather large).

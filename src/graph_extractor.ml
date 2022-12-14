@@ -656,26 +656,27 @@ end = struct
     snd @@ CList.fold_left (fun (reli, m) -> function
         | Rel.Declaration.LocalAssum ({ binder_name = id; _ }, typ) ->
           reli - 1, with_delayed_node @@ fun prod ->
-          (match id with
+          let* typ = gen_constr typ in
+          let* cont, prim_defs = with_relative prod m in
+          let+ prim_defs = match id with
            | Name id when reli >= 0 ->
              let proj = Projection.Repr.make
                  ind ~proj_npars ~proj_arg:reli @@ Label.of_id id in
              (* TODO: This is clearly incorrect; something needs to be done about this.
                 Note that newer versions of Coq already thread projections differently *)
              let const = GlobRef.ConstRef (Projection.Repr.constant proj) in
-             let+ _ = mk_definition (Proj (representative, proj)) const (fun d -> mk_node d [ProjTerm, prod]) in
-             ()
-           | _ -> return ()) >>
-          let* typ = gen_constr typ in
-          let+ cont = with_relative prod m in
-          prod, (Prod id), [ProdType, typ; ProdTerm, cont]
+             let+ prim_def, _ = mk_definition (Proj (representative, proj)) const
+                 (fun d -> mk_node d [ProjTerm, prod]) in
+             prim_def::prim_defs
+           | _ -> return prim_defs in
+          (prod, prim_defs), (Prod id), [ProdType, typ; ProdTerm, cont]
         | Rel.Declaration.LocalDef ({ binder_name = id; _ }, def, typ) ->
           reli, with_delayed_node @@ fun letin ->
           let* typ = gen_constr typ in
           let* def = gen_constr def in
-          let+ cont = with_relative letin m in
-          letin, (LetIn id), [LetInType, typ; LetInDef, def; LetInTerm, cont])
-      (real_arity - 1, gen_constr sort) relctx
+          let+ cont, prim_defs = with_relative letin m in
+          (letin, prim_defs), (LetIn id), [LetInType, typ; LetInDef, def; LetInTerm, cont])
+      (real_arity - 1, map (fun x -> x, []) @@ gen_constr sort) relctx
   and gen_mutinductive_helper m =
     (* Only process canonical inductives *)
     let m = MutInd.make1 (MutInd.canonical m) in
@@ -711,24 +712,24 @@ end = struct
       let representative = OList.hd indsn in
       let+ inds = List.map (fun ((i, ({ mind_user_lc; mind_consnames; _ } as ib)), n) ->
           let gen_constr_typ typ = match mind_record with
-            | NotRecord | FakeRecord -> gen_constr typ
+            | NotRecord | FakeRecord -> map (fun x -> x, []) @@ gen_constr typ
             | PrimRecord _ -> gen_primitive_constructor representative (m, i) (OList.length mind_params_ctxt) typ in
           let constructs = OList.mapi (fun j x -> j, x) @@
             OList.combine (Array.to_list mind_user_lc) (Array.to_list mind_consnames) in
           let* children =
             let* cstrs = List.map (fun (j, (typ, id)) ->
                 with_relatives indsn @@
-                let* typ = gen_constr_typ typ in
+                let* typ, prim_defs = gen_constr_typ typ in
                 let+ n, _ = mk_definition
                     (Construct (representative, ((m, i), j + 1))) (GlobRef.ConstructRef ((m, i), j + 1))
                     (fun d -> mk_node d [ConstructTerm, typ]) in
-                IndConstruct, n) constructs in
+                (IndConstruct, n) :: OList.map (fun pd -> IndProjection, pd) prim_defs) constructs in
             let univs = Declareops.inductive_polymorphic_context mb in
             let inst = Univ.make_abstract_instance univs in
             let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) env in
             let typ = Inductive.type_of_inductive env ((mb, ib), inst) in
             let+ n = gen_constr typ in
-            (IndType, n)::cstrs in
+            (IndType, n) :: OList.concat cstrs in
           let+ _, def = mk_definition (Ind (representative, (m, i))) (GlobRef.IndRef (m, i)) (fun d -> return n) in
           def, children
         ) inds in

@@ -170,6 +170,7 @@ type edge_type =
   (* Inductives *)
   | IndType
   | IndConstruct
+  | IndProjection
   | ProjTerm
   | ConstructTerm
 
@@ -242,6 +243,7 @@ let edge_type_int_mod = function
   | ConstPrimitive -> 4
   | IndType -> 0
   | IndConstruct -> 1
+  | IndProjection -> 2
   | ProjTerm -> 0
   | ConstructTerm -> 0
   | CastType -> 0
@@ -639,38 +641,39 @@ module CICHasher
     | ConstPrimitive -> u 8
     | IndType -> u 9
     | IndConstruct -> u 10
-    | ProjTerm -> u 11
-    | ConstructTerm -> u 12
-    | CastTerm -> u 13
-    | CastType -> u 14
-    | ProdType -> u 15
-    | ProdTerm -> u 16
-    | LambdaType -> u 17
-    | LambdaTerm -> u 18
-    | LetInDef -> u 19
-    | LetInType -> u 20
-    | LetInTerm -> u 21
-    | AppFun -> u 22
-    | AppArg -> u 23
-    | CaseTerm -> u 24
-    | CaseReturn -> u 25
-    | CaseBranchPointer -> u 26
-    | CaseInd -> u 27
-    | CBConstruct -> u 28
-    | CBTerm -> u 29
-    | FixMutual -> u 30
-    | FixReturn -> u 31
-    | FixFunType -> u 32
-    | FixFunTerm -> u 33
-    | CoFixMutual -> u 34
-    | CoFixReturn -> u 35
-    | CoFixFunType -> u 36
-    | CoFixFunTerm -> u 37
-    | RelPointer -> u 38
-    | EvarSubstPointer -> u 39
-    | EvarSubstTerm -> u 40
-    | EvarSubstTarget -> u 41
-    | EvarSubject -> u 42
+    | IndProjection -> u 11
+    | ProjTerm -> u 12
+    | ConstructTerm -> u 13
+    | CastTerm -> u 14
+    | CastType -> u 15
+    | ProdType -> u 16
+    | ProdTerm -> u 17
+    | LambdaType -> u 18
+    | LambdaTerm -> u 19
+    | LetInDef -> u 20
+    | LetInType -> u 21
+    | LetInTerm -> u 22
+    | AppFun -> u 23
+    | AppArg -> u 24
+    | CaseTerm -> u 25
+    | CaseReturn -> u 26
+    | CaseBranchPointer -> u 27
+    | CaseInd -> u 28
+    | CBConstruct -> u 29
+    | CBTerm -> u 30
+    | FixMutual -> u 31
+    | FixReturn -> u 32
+    | FixFunType -> u 33
+    | FixFunTerm -> u 34
+    | CoFixMutual -> u 35
+    | CoFixReturn -> u 36
+    | CoFixFunType -> u 37
+    | CoFixFunTerm -> u 38
+    | RelPointer -> u 39
+    | EvarSubstPointer -> u 40
+    | EvarSubstTerm -> u 41
+    | EvarSubstTarget -> u 42
+    | EvarSubject -> u 43
   let update_edge ~physical el n state =
     (* Ignore children when they are an opaque proof. *)
     match el with

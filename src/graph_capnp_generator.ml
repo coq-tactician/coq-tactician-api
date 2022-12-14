@@ -154,6 +154,7 @@ let et2et (et : edge_type) =
   | ConstPrimitive -> ConstPrimitive
   | IndType -> IndType
   | IndConstruct -> IndConstruct
+  | IndProjection -> IndProjection
   | ProjTerm -> ProjTerm
   | ConstructTerm -> ConstructTerm
   | CastTerm -> CastTerm
