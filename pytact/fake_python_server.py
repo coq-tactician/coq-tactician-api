@@ -121,7 +121,7 @@ def run_session(args, capnp_socket, record_file):
 
 def main():
     parser = argparse.ArgumentParser(
-        description = 'Example python server capable of communicating with Coq',
+        description = "Example python server capable of communicating with Coq through Tactician's 'synth' tactic",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('mode',

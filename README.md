@@ -54,11 +54,17 @@ The Python software provides both a software library to work with the graph base
 a number of executables. Available executables are as follows (use the `--help` flag for each executable to learn
 about all the options).
 
-- `pytact-check <dataset-root>`: Run sanity checks on a dataset and print some statistics
-- `pytact-visualize <dataset-root>`: Start an interactive server that visualizes a dataset
-- `pytact-server [--tcp <port>] [graph | text]`: A dummy example server that provides tactic predictions to
-  Tactician's `synth` tactic inside of Coq. To learn how to interface Coq and Tactician with this server, see
-  the sections below.
+- `pytact-check [-h] [--jobs JOBS] [--quick] [--verbose VERBOSE] dir`
+   Run sanity checks on a dataset and print some statistics.
+- `pytact-visualize [-h] [--port PORT] [--hostname HOSTNAME] [--dev] dataset`:
+   Start an interactive server that visualizes a dataset.
+- `pytact-server [-h] [--tcp TCP] [--record RECORD_FILE] {graph,text}`
+  Example python server capable of communicating with Coq through Tactician's 'synth' tactic
+  To learn how to interface Coq and Tactician with this server, see the sections below.
+- `pytact-oracle [-h] [--tcp PORT] [--record RECORD_FILE] {graph,text} dataset`
+  A tactic prediction server acting as an oracle, retrieving it's information from a dataset
+- `pytact-fake-coq [-h] (--tcp TCP_LOCATION | --stdin EXECUTABLE) data`
+  A fake Coq client that connects to a prediction server and feeds it a stream of previously recorded messages.
 - `pytact-prover`: A dummy example client that interfaces with Coq and Tactician for reinforcement-learning-style
   communication. To learn how to interface Coq and Tactician with this client, see the sections below.
 

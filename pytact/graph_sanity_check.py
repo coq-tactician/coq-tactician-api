@@ -229,7 +229,7 @@ def entropy(d):
 
 def main2():
     parser = argparse.ArgumentParser(
-        description = 'sanity of check of *.bin dataset with labelled_graph_api',
+        description = 'Run sanity checks on a dataset and print some statistics.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('dir',

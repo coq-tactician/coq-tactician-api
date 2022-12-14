@@ -96,7 +96,7 @@ async def root_folder(request, query: Settings):
 def main():
 
     parser = argparse.ArgumentParser(
-        description = 'Dataset visualization webserver',
+        description = 'Start an interactive server that visualizes a dataset',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('dir',
