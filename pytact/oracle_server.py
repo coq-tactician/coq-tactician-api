@@ -1,12 +1,9 @@
 from collections import defaultdict
-from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 import sys
 import socket
 import argparse
-import signal
-from typing import Any, BinaryIO
 import contextlib
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
