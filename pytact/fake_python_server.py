@@ -20,8 +20,6 @@ def text_prediction_loop(incoming_messages, capnp_socket):
             response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
             print(response)
             response.write_packed(capnp_socket)
-            import time
-            time.sleep(1)
         elif msg.is_synchronize:
             print(msg)
             response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
@@ -68,8 +66,6 @@ def prediction_loop(definitions, tactics, incoming_messages, capnp_socket):
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
                 print(response)
                 response.write_packed(capnp_socket)
-                import time
-                time.sleep(1)
         else:
             return msg
 
