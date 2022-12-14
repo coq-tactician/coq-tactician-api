@@ -26,14 +26,11 @@ def visualize_proof_state(state: ProofState):
     seen = set()
     nodes_left = 100
 
-    print("visualizing")
-
     def recurse(node: Node, depth):
         nonlocal seen
         nonlocal nodes_left
 
         id = str(node)
-        print(id)
         if id in seen:
             return id
         seen.add(id)
