@@ -245,7 +245,8 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentative =
+let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentative cversion =
+  ignore(cversion Api.Reader.current_version);
   let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
@@ -328,7 +329,8 @@ let init_predict rc wc tacs env =
     (Request.Initialize.tactics_init init)
     (Request.Initialize.graph_init init)
     (Request.Initialize.definitions_set_list init)
-    (Request.Initialize.representative_set_int_exn init) in
+    (Request.Initialize.representative_set_int_exn init)
+    (Request.Initialize.data_version_set_reader init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -349,16 +351,18 @@ let check_neural_alignment () =
       (Request.CheckAlignment.tactics_init init)
       (Request.CheckAlignment.graph_init init)
       (Request.CheckAlignment.definitions_set_list init)
-      (Request.CheckAlignment.representative_set_int_exn init) in
+      (Request.CheckAlignment.representative_set_int_exn init)
+      (Request.CheckAlignment.data_version_set_reader init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
     let response = Response.of_message response in
     match Response.get response with
     | Response.Alignment alignment ->
+      let find_global_argument = find_global_argument state in
       let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs @@ Stdint.Uint64.to_int t) @@
         Response.Alignment.unaligned_tactics_get_list alignment in
-      let unaligned_defs = List.map (fun d -> find_global_argument state @@ Stdint.Uint32.to_int d) @@
+      let unaligned_defs = List.map (fun d -> find_global_argument @@ Stdint.Uint32.to_int d) @@
         Response.Alignment.unaligned_definitions_get_list alignment in
       let tacs_msg = if CList.is_empty unaligned_tacs then Pp.mt () else
           Pp.(fnl () ++ str "Unaligned tactics: " ++ fnl () ++
@@ -374,8 +378,10 @@ let check_neural_alignment () =
                   | TOther -> Pp.mt ())
                 unaligned_defs) in
       Feedback.msg_notice Pp.(
-          str "There are " ++ int (List.length unaligned_tacs) ++ str " unaligned tactics and " ++
-          int (List.length unaligned_defs) ++ str " unaligned definitions." ++
+          str "There are " ++ int (List.length unaligned_tacs) ++ str "/" ++
+          int (Array.length @@ Request.CheckAlignment.tactics_get_array init) ++ str " unaligned tactics and " ++
+          int (List.length unaligned_defs) ++ str "/" ++
+          int (Array.length @@ Request.CheckAlignment.definitions_get_array init) ++ str " unaligned definitions." ++
           tacs_msg ++ defs_msg
         )
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
@@ -450,8 +456,12 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let context_map = Id.Map.map (fun n ->
         let (p, n), _ = G.lower n in
         p, node_local_index (p, n)) context_map in
-    let context_range = List.map (fun (_, (_, n)) -> n) @@
-      Id.Map.bindings context_map in
+    let context_range = List.rev @@ List.filter_map (fun hyp ->
+        let id = Context.Named.Declaration.get_id hyp in
+        match Id.Map.find_opt id context_map with
+        | None -> None
+        | Some (_, n) -> Some n
+      ) @@ TS.proof_state_hypotheses ps in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
 

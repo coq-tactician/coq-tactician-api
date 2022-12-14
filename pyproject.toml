@@ -43,7 +43,9 @@ dependencies = [
 ]
 
 [project.scripts]
+pytact-fake-coq = "pytact.fake_coq_client:main"
 pytact-server = "pytact.fake_python_server:main"
+pytact-oracle = "pytact.oracle_server:main"
 pytact-check = "pytact.graph_sanity_check:main"
 pytact-visualize = "pytact.visualisation_webserver:main"
 pytact-prover = "pytact.prover:main"

@@ -21,16 +21,18 @@ cdef class {{ c.cython_name }}_Reader:
 
     def __init__(self, _DynamicStructReader dyn):
         self.source = (<C_DynamicStruct_Reader>dyn.thisptr).as{{ c.cython_name }}()
+        self.root = dyn # We keep a referene to the root in order to prevent it from being garbage collected
 
     @staticmethod
-    cdef init(C_{{ c.cython_name }}_Reader source):
+    cdef init(C_{{ c.cython_name }}_Reader source, object root):
         cdef {{ c.cython_name }}_Reader wrapper = {{ c.cython_name }}_Reader.__new__({{ c.cython_name }}_Reader)
         wrapper.source = source
+        wrapper.root = root
         return wrapper
 
     @property
     def dynamic(self):
-        return to_python_reader(<DynamicValue.Reader>self.source, None)
+        return to_python_reader(<DynamicValue.Reader>self.source, self.root)
     def __repr__(self):
         return repr(self.dynamic)
 
@@ -55,7 +57,7 @@ cdef class {{ c.cython_name }}_Reader:
         {%- if field.sort == 'native' %}
         return self.source.get{{ field.cpp_name }}()
         {%- elif field.sort == 'struct' %}
-        return {{ field.cython_return }}.init(self.source.get{{ field.cpp_name }}())
+        return {{ field.cython_return }}.init(self.source.get{{ field.cpp_name }}(), self.root)
         {%- elif field.sort == 'string' %}
         temp = self.source.get{{ field.cpp_name }}()
         return (<char*>temp.begin())[:temp.size()]
@@ -85,9 +87,10 @@ pytact.graph_api_capnp.{{ c.pycapnp_name }}.schema = _Schema()._init(get{{ c.cyt
 cdef class Uint16_List:
 
     @staticmethod
-    cdef init(C_Uint16_List source):
+    cdef init(C_Uint16_List source, object root):
         cdef Uint16_List wrapper = Uint16_List.__new__(Uint16_List)
         wrapper.source = source
+        wrapper.root = root
         return wrapper
 
     def __getitem__(self, uint index):
@@ -102,9 +105,10 @@ cdef class Uint16_List:
 cdef class Uint32_List:
 
     @staticmethod
-    cdef init(C_Uint32_List source):
+    cdef init(C_Uint32_List source, object root):
         cdef Uint32_List wrapper = Uint32_List.__new__(Uint32_List)
         wrapper.source = source
+        wrapper.root = root
         return wrapper
 
     def __getitem__(self, uint index):
@@ -119,9 +123,10 @@ cdef class Uint32_List:
 cdef class Uint64_List:
 
     @staticmethod
-    cdef init(C_Uint64_List source):
+    cdef init(C_Uint64_List source, object root):
         cdef Uint64_List wrapper = Uint64_List.__new__(Uint64_List)
         wrapper.source = source
+        wrapper.root = root
         return wrapper
 
     def __getitem__(self, uint index):
@@ -136,9 +141,10 @@ cdef class Uint64_List:
 cdef class String_List:
 
     @staticmethod
-    cdef init(C_String_List source):
+    cdef init(C_String_List source, object root):
         cdef String_List wrapper = String_List.__new__(String_List)
         wrapper.source = source
+        wrapper.root = root
         return wrapper
 
     def __getitem__(self, uint index):
@@ -155,16 +161,17 @@ cdef class String_List:
 cdef class {{ c.cython_name }}_List:
 
     @staticmethod
-    cdef init(C_{{ c.cython_name }}_List source):
+    cdef init(C_{{ c.cython_name }}_List source, object root):
         cdef {{ c.cython_name }}_List wrapper = {{ c.cython_name }}_List.__new__({{ c.cython_name }}_List)
         wrapper.source = source
+        wrapper.root = root
         return wrapper
 
     def __getitem__(self, uint index):
         source = self.source
         if index >= source.size():
             raise IndexError('Out of bounds')
-        return {{ c.cython_name }}.init(source[index])
+        return {{ c.cython_name }}.init(source[index], self.root)
 
     def __len__(self):
         return self.source.size()

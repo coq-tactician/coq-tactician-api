@@ -43,6 +43,7 @@ class Settings:
     show_edge_labels: bool = False
     order_edges: bool = False
     concentrate_edges: bool = False
+    show_non_anonymized_tactics: bool = False
 
     def __post_init__(self):
         if not self.no_defaults:
@@ -77,7 +78,7 @@ def node_label_map(node: Node) -> tuple[str, str, str]:
         name = d.name
         return (
             'box', name.split('.')[-1],
-            f"{inflection.camelize(str(node.label.definition.which).split('.')[1].lower())} {d.name}"
+            f"{inflection.camelize(node.label.definition.which.name.lower())} {d.name}"
         )
     match label.which:
         case enum.SORT_PROP:
@@ -101,7 +102,7 @@ def node_label_map(node: Node) -> tuple[str, str, str]:
         case enum.CASE_BRANCH:
             return 'ellipse', 'branch', 'CaseBranch'
         case _:
-            name = inflection.camelize(str(label.which).split('.')[1].lower())
+            name = inflection.camelize(label.which.name.lower())
             return 'ellipse', name, name
 
 def truncate_string(data, maximum):
@@ -112,8 +113,11 @@ def make_label(context, name):
     common = os.path.commonprefix([name_split, context.split('.')])
     return '.'.join(name_split[len(common):])
 
+def graphviz_escape(s):
+    return s.replace('\\', '\\\\')
+
 def make_tooltip(d):
-    return f"{inflection.camelize(str(d.node.label.definition.which).split('.')[1].lower())} {d.name}"
+    return f"{inflection.camelize(d.node.label.definition.which.name.lower())} {d.name}"
 
 def render_proof_state_text(ps: ProofState):
     return ('<br>'.join(ps.context_text) +
@@ -297,7 +301,7 @@ class GraphVisualizator:
                     cid = recurse(child, depth,
                                     before_prefix if edge == graph_api_capnp.EdgeClassification.evarSubstTerm
                                     else context_prefix)
-                    edge_name = inflection.camelize(str(apic.EdgeClassification(edge)).split('.')[1].lower())
+                    edge_name = inflection.camelize(apic.EdgeClassification(edge).name.lower())
                     if self.settings.show_edge_labels:
                         label = edge_name
                     else:
@@ -367,7 +371,10 @@ class GraphVisualizator:
             with dot.subgraph(name='cluster_' + str(i)) as dot2:
                 dot2.attr('graph', labelloc="b", style="rounded")
                 if tactic := step.tactic:
-                    tactic_text = tactic.text
+                    if self.settings.show_non_anonymized_tactics:
+                        tactic_text = tactic.text_non_anonymous
+                    else:
+                        tactic_text = tactic.text
                 else:
                     tactic_text = 'unknown'
                 dot2.attr(label=tactic_text)
@@ -417,10 +424,10 @@ class GraphVisualizator:
                 enum = graph_api_capnp.Graph.Node.Label
                 match node.label.which:
                     case enum.contextAssum:
-                        name = mapping[node]
+                        name = graphviz_escape(mapping[node])
                         return 'ellipse', truncate_string(name, 20), f"ContextAssum {name}"
                     case enum.contextDef:
-                        name = mapping[node]
+                        name = graphviz_escape(mapping[node])
                         return 'ellipse', truncate_string(name, 20), f"ContextDef {name}"
                     case _:
                         return node_label_map(node)
@@ -431,8 +438,8 @@ class GraphVisualizator:
         with dot.subgraph(name='cluster_before') as dot2:
             ps = outcome.before
             dot2.attr('graph',
-                      label=f"Before state\n{truncate_string(ps.conclusion_text, 70)}",
-                      tooltip=f"Before state {ps.conclusion_text}",
+                      label=f"Before state\n{graphviz_escape(truncate_string(ps.conclusion_text, 70))}",
+                      tooltip=f"Before state {graphviz_escape(ps.conclusion_text)}",
                       id='before-state')
             popups.append(('before-state', render_proof_state_text(ps)))
             prefix = 'before'
@@ -464,8 +471,8 @@ class GraphVisualizator:
         for ai, after in enumerate(outcome.after):
             with dot.subgraph(name='cluster_after' + str(ai)) as dot2:
                 dot2.attr('graph',
-                          label=f"After state {ai}\n{truncate_string(after.conclusion_text, 70)}",
-                          tooltip=f"After state {ai} {after.conclusion_text}",
+                          label=f"After state {ai}\n{graphviz_escape(truncate_string(after.conclusion_text, 70))}",
+                          tooltip=f"After state {ai} {graphviz_escape(after.conclusion_text)}",
                           id=f'after-state{ai}')
                 popups.append((f'after-state{ai}', render_proof_state_text(after)))
                 prefix = f'after{ai}'
@@ -476,8 +483,8 @@ class GraphVisualizator:
         if not self.settings.hide_proof_terms:
             with dot.subgraph(name='cluster_term') as dot2:
                 dot2.attr('graph',
-                          label=f"Proof term\n{truncate_string(outcome.term_text, 70)}",
-                          tooltip=f"Proof term {outcome.term_text}",
+                          label=f"Proof term\n{graphviz_escape(truncate_string(outcome.term_text, 70))}",
+                          tooltip=f"Proof term {graphviz_escape(outcome.term_text)}",
                           id='proof-term')
                 popups.append(('proof-term', outcome.term_text))
                 prefix = 'term'
