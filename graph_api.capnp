@@ -700,7 +700,7 @@ const conflatableEdges :List(ConflatableEdges) =
 # Not conflatable: projTerm, constructTerm, caseTerm, cBTerm
 ];
 const importantEdges :List(EdgeClassification) =
-[ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
+[ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, indProjection, constructTerm
 , prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFun, appArg, relPointer ];
 const lessImportantEdges :List(EdgeClassification) =
 [ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
@@ -714,7 +714,7 @@ const groupedEdges :List(ConflatableEdges) =
 [ ( conflatable = [contextElem, contextSubject] )
 , ( conflatable = [contextDefType, contextDefTerm] )
 , ( conflatable = [constType, constUndef, constDef, constOpaqueDef, constPrimitive] )
-, ( conflatable = [indType, indConstruct] )
+, ( conflatable = [indType, indConstruct, indProjection] )
 , ( conflatable = [projTerm] )
 , ( conflatable = [constructTerm] )
 , ( conflatable = [castType, castTerm] )
