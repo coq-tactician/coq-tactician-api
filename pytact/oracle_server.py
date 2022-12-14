@@ -158,7 +158,6 @@ def main():
         for datafile in data.values():
             for d in datafile.definitions():
                 known_definitions.add(d.node.identity)
-                # No need to process
                 if proof := d.proof:
                     for step in proof:
                         for outcome in step.outcomes:
