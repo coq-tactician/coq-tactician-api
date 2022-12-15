@@ -27,8 +27,8 @@ def text_prediction_loop(text_oracle_data, messages_generator):
             if msg.is_predict:
                 if msg.predict.state.text in text_oracle_data:
                     preds = [
-                    {'tacticText': text_oracle_data[msg.predict.state.text][0],
-                    'confidence': 1} ]
+                    {'tacticText': t,
+                     'confidence': 1} for t in text_oracle_data[msg.predict.state.text] ]
                 else:
                     preds = []
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
@@ -148,7 +148,7 @@ def main():
     print("Building oracle data...")
     dataset_path = Path(cmd_args.dataset).resolve()
     oracle_data = defaultdict(list)
-    text_oracle_data = defaultdict(list)
+    text_oracle_data = defaultdict(set)
     known_definitions = set()
     known_tactics = set()
     with data_reader(dataset_path) as data:
@@ -169,7 +169,7 @@ def main():
                                 if outcome.before.root.identity == outcome.after[0].root.identity:
                                     # This tactic did something, but very minimally, usually just an identity cast
                                     continue
-                            text_oracle_data[outcome.before.text].append(outcome.tactic.text_non_anonymous)
+                            text_oracle_data[outcome.before.text].add(outcome.tactic.text_non_anonymous)
                             tactic_args = outcome.tactic_arguments
                             if any(arg is None for arg in tactic_args):
                                 continue # If an argument is unknown we are screwed
