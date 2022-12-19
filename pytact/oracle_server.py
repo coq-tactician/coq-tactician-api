@@ -9,16 +9,17 @@ import capnp
 import pytact.graph_api_capnp as graph_api_capnp
 from pytact.data_reader import online_definitions_initialize, online_data_predict, data_reader, Original, capnp_message_generator
 
-@dataclass
+@dataclass(eq=True, frozen=True)
 class GlobalArgument:
     identity: int
-@dataclass
+@dataclass(eq=True, frozen=True)
 class LocalArgument:
     context_index: int
-@dataclass
+@dataclass(eq=True, frozen=True)
 class OracleTactic:
     tactic_id: int
-    arguments: list[GlobalArgument | LocalArgument]
+    arguments: tuple[GlobalArgument | LocalArgument, ...]
+    clean: bool
 
 def text_prediction_loop(text_oracle_data, messages_generator):
     with contextlib.suppress(StopIteration):
@@ -52,28 +53,23 @@ def prediction_loop(msg, oracle_data, definitions, tactics, messages_generator):
             with online_data_predict(
                     definitions,
                     msg.predict) as proof_state:
-                preds = []
-                for tactic in oracle_data[proof_state.root.identity]:
-                    if tactic.tactic_id in available_tacticids:
-                        complete = True
-                        resolved_args = []
-                        for arg in tactic.arguments:
-                            if isinstance(arg, LocalArgument):
-                                resolved_args.append(
-                                    {'term': {'depIndex': 0,
-                                              'nodeIndex': proof_state.context[arg.context_index].nodeid}})
-                            elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
-                                resolved_args.append(
-                                    {'term': {'depIndex': 1,
-                                              'nodeIndex': available_definitions[arg.identity]}})
-                            else:
-                                complete = False
-                        if complete:
-                            preds = [{'tactic': {'ident': tactic.tactic_id},
-                                      'arguments': resolved_args,
-                                      'confidence': 1}]
-                            break
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
+                def resolve_arg(arg):
+                    if isinstance(arg, LocalArgument):
+                        return {'term': {'depIndex': 0,
+                                         'nodeIndex': proof_state.context[arg.context_index].nodeid}}
+                    elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
+                        return {'term': {'depIndex': 1,
+                                         'nodeIndex': available_definitions[arg.identity]}}
+                    else:
+                        return None
+                possible_tactics = [
+                    {'tactic': {'ident': t.tactic_id},
+                     'arguments': [resolve_arg(arg) for arg in t.arguments],
+                     'confidence': 1 if t.clean else 0.95}
+                    for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
+                    if t.tactic_id in available_tacticids and
+                    None not in [resolve_arg(arg) for arg in t.arguments]]
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=possible_tactics)
                 msg = messages_generator.send(response)
         else:
             return msg
@@ -147,7 +143,7 @@ def main():
 
     print("Building oracle data...")
     dataset_path = Path(cmd_args.dataset).resolve()
-    oracle_data = defaultdict(list)
+    oracle_data = defaultdict(set)
     text_oracle_data = defaultdict(set)
     known_definitions = set()
     known_tactics = set()
@@ -179,8 +175,9 @@ def main():
                                     args.append(GlobalArgument(arg_def.node.identity))
                                 else:
                                     args.append(LocalArgument(list(outcome.before.context).index(arg)))
-                            oracle_tactic = OracleTactic(outcome.tactic.ident, args)
-                            oracle_data[outcome.before.root.identity].append(oracle_tactic)
+                            oracle_tactic = OracleTactic(outcome.tactic.ident, tuple(args),
+                                                         outcome.tactic.text == outcome.tactic.interm_text)
+                            oracle_data[outcome.before.root.identity].add(oracle_tactic)
     print("Oracle data built, ready for incoming connections")
 
     if cmd_args.record_file is not None:
