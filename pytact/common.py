@@ -16,9 +16,6 @@ import functools
 from typing import List
 import capnp
 
-graph_api_filename = pkg_resources.resource_filename('pytact','graph_api.capnp')
-api_filename = graph_api_filename
-
 test_filename_stdin = pkg_resources.resource_filename('pytact','tests/TestReinforceStdin.v')
 test_filename_tcp  =  pkg_resources.resource_filename('pytact','tests/TestReinforceTcp.v')
 
@@ -76,9 +73,8 @@ class Connection:
 
         logger.debug("starting capnp client")
 
-        logger.info("loading %s", api_filename)
-        capnp.remove_import_hook()
-        self.api = capnp.load(api_filename)
+        import pytact.graph_api_capnp as api
+        self.api = api
 
         self.client = capnp.TwoPartyClient()
 
