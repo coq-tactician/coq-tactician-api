@@ -29,7 +29,7 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev 
 After installing the prerequisites, you'll need a Python virtualenv and an Opam switch to install the software.
 To create the virtualenv, run
 ```
-python -m venv <desired-location-of-virtualenv>`
+python3.10 -m venv <desired-location-of-virtualenv>`
 ```
 To activate the virtualenv run `source <location-of-virtualenv>/bin/activate`.
 
@@ -111,8 +111,8 @@ To make the `synth` command available, your Coq file will have to start with
 From Tactician Require Import Ltac1.
 ```
 The following settings govern the data that Coq will send to the server:
-- `Set Tactician Truncate` determines wether the bodies of definitions will get truncated or not (on by default).
-- `Set Tactician Textmode` determines wether Coq is communicating with a graph-based server or a text-based server (graph-based by default).
+- `Set Tactician Neural Truncate` determines wether the bodies of definitions will get truncated or not (on by default).
+- `Set Tactician Neural Textmode` determines wether Coq is communicating with a graph-based server or a text-based server (graph-based by default).
 To let Coq take care of starting and stopping the server, use the command
 ```
 Set Tactician Neural Executable "external-server-executable --argument1 --argument2".
