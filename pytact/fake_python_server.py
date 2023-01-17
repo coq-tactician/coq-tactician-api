@@ -31,7 +31,8 @@ def text_prediction_loop(messages_generator):
             else:
                 raise Exception("Capnp protocol error")
             print(response)
-            msg = messages_generator.send(response)
+            messages_generator.send(response)
+            msg = next(messages_generator)
 
 def prediction_loop(definitions, tactics, msg, messages_generator):
     while True:
@@ -60,7 +61,8 @@ def prediction_loop(definitions, tactics, msg, messages_generator):
                         preds += preds2
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
                 print(response)
-                msg = messages_generator.send(response)
+                messages_generator.send(response)
+                msg = next(messages_generator)
         else:
             return msg
 
@@ -74,7 +76,8 @@ def graph_initialize_loop(messages_generator):
                 print(msg)
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
                 print(response)
-                msg = messages_generator.send(response)
+                messages_generator.send(response)
+                msg = next(messages_generator)
             elif msg.is_check_alignment:
                 check_alignment = msg.check_alignment
                 with online_definitions_initialize(
@@ -89,7 +92,8 @@ def graph_initialize_loop(messages_generator):
                     alignment = {'unalignedTactics': [ t.ident for t in check_alignment.tactics],
                                 'unalignedDefinitions': [d.node.nodeid for d in definitions.definitions]}
                     response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-                    msg = messages_generator.send(response)
+                    messages_generator.send(response)
+                    msg = next(messages_generator)
             elif msg.is_initialize:
                 print('---------------- New prediction context -----------------')
                 init = msg.initialize
@@ -103,8 +107,10 @@ def graph_initialize_loop(messages_generator):
                     print(init.log_annotation)
                     response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
                     print(response)
+                    messages_generator.send(response)
+                    msg = next(messages_generator)
                     msg = prediction_loop(definitions, init.tactics,
-                                          messages_generator.send(response), messages_generator)
+                                          msg, messages_generator)
             else:
                 raise Exception("Capnp protocol error")
 

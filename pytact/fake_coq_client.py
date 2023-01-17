@@ -17,7 +17,8 @@ def run_fake_client(server_socket, messages_generator):
             prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
             response = next(socket_reader, None)
             signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
-            msg = messages_generator.send(response)
+            messages_generator.send(response)
+            msg = next(messages_generator)
 
 def main():
     parser = argparse.ArgumentParser(
