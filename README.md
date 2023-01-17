@@ -29,7 +29,7 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev 
 After installing the prerequisites, you'll need a Python virtualenv and an Opam switch to install the software.
 To create the virtualenv, run
 ```
-python3.10 -m venv <desired-location-of-virtualenv>`
+python3.10 -m venv <desired-location-of-virtualenv>
 ```
 To activate the virtualenv run `source <location-of-virtualenv>/bin/activate`.
 
