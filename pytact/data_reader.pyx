@@ -1246,6 +1246,7 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
             msg.as_builder().write_packed(record)
         cython_msg = PredictionProtocol_Request_Reader(msg)
         response = yield cython_msg
+        yield
         response.write_packed(socket)
         if record is not None:
             response.clear_write_flag()
@@ -1267,6 +1268,7 @@ def capnp_message_generator_from_file(message_file: BinaryIO) -> (
     for request in message_reader:
         cython_msg = PredictionProtocol_Request_Reader(request)
         response = yield cython_msg
+        yield
         # A bit of a hack, we temporarily change the schema of the reader to `Response`
         message_reader.schema = graph_api_capnp.PredictionProtocol.Response.schema
         recorded_response = next(message_reader)
