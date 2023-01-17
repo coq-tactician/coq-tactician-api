@@ -11,12 +11,12 @@ let label_option = Goptions.declare_bool_option_and_ref
     ~key:["Tactician"; "Neural"; "Visualize"; "Labels"]
     ~value:false
 
-let hash_option = Goptions.declare_bool_option_and_ref
+let debug_option = Goptions.declare_bool_option_and_ref
     ~depr:false ~name:"order graph nodes"
-    ~key:["Tactician"; "Neural"; "Visualize"; "Hashes"]
+    ~key:["Tactician"; "Neural"; "Visualize"; "Debug"]
     ~value:false
 
-type vertex = { tag : int; label : string }
+type vertex = { tag : int; label : Graph.Graphviz.DotAttributes.vertex list }
 module G = Graph.Persistent.Digraph.ConcreteLabeled(
   struct
     type t = vertex
@@ -36,10 +36,11 @@ module GraphvizGraph = struct
 
   let arrow_heads = [ `Dot; `Inv; `Odot; `Invdot; `Invodot ]
 
-  let graph_attributes _ = if order_option () then [`OrderingOut] else []
-  let default_vertex_attributes _ = []
-  let vertex_attributes n = [`Label (V.label n).label]
-  let default_edge_attributes _ = []
+  let graph_attributes _ = (if order_option () then [`OrderingOut] else []) @
+                           [`Fontname "Helvetica"; `Ranksep 0.3]
+  let default_vertex_attributes _ = [`Fontname "Helvetica"; `Style `Filled; `Penwidth 0.]
+  let vertex_attributes n = (V.label n).label
+  let default_edge_attributes _ = [`Fontname "Helvetica"; `Arrowsize 0.5; `Penwidth 0.6]
   let edge_attributes e =
     (if label_option () then [ `Label Graph_def.(show_edge_type @@ E.label e) ] else []) @
     [ `Dir `Both
@@ -65,7 +66,6 @@ let cic_graph_to_dot_graph transform ns root =
     | Some node -> visited, g, tag, node
     | None ->
       let label, children = ns.(n) in
-      Feedback.msg_notice Pp.(str (transform label));
       let source = { tag; label = transform label } in
       let g = GraphvizGraph.add_vertex g source in
       let visited = Int.Map.add n source visited in
@@ -87,7 +87,7 @@ module Viz
     (G : sig
        type node'
        type final
-       val final_to_string : final -> string
+       val final_to_string : final -> Graph.Graphviz.DotAttributes.vertex list
        type result = (final * (edge_type * int) list) DList.t
        val node_repr : node' -> int
        include GraphMonadType
@@ -132,12 +132,34 @@ struct
 
   end
 
+let node_string_pretty = function
+  | ContextDef (_, id) -> [`Shape `Ellipse; `Label (Names.Id.to_string id)]
+  | ContextAssum (_, id) -> [`Shape `Ellipse; `Label (Names.Id.to_string id)]
+  | Definition { path; _ } -> [`Shape `Box; `Label (Names.Id.to_string @@ Libnames.basename path)]
+  | SortSProp -> [`Shape `Ellipse; `Label "SProp"]
+  | SortProp -> [`Shape `Ellipse; `Label "Prop"]
+  | SortSet -> [`Shape `Ellipse; `Label "Set"]
+  | SortType -> [`Shape `Ellipse; `Label "Type"]
+  | Rel -> [`Shape `Circle; `Label "↑"]
+  | Evar _ -> [`Shape `Ellipse; `Label "Evar"]
+  | Prod id -> [`Shape `Circle; `Label "∀"]
+  | Lambda _ -> [`Shape `Circle; `Label "λ"]
+  | LetIn _ -> [`Shape `Ellipse; `Label "let"]
+  | App -> [`Shape `Circle; `Label "@"]
+  | FixFun _ -> [`Shape `Ellipse; `Label "FixFun"]
+  | CoFixFun _ -> [`Shape `Circle; `Label "CoFixFun"]
+  | x -> [`Shape `Ellipse; `Label (Graph_def.show_node_type (fun _ _ -> ()) x)]
+
+
 module SimpleCICGraph = struct
   type final = int node_type
   type node' = int
   let node_repr x = x
   type result = (final * (edge_type * int) list) DList.t
-  let final_to_string = Graph_def.show_node_type (fun _ _ -> ())
+  let final_to_string nl =
+    if debug_option () then
+      [`Shape `Ellipse; `Label (Graph_def.show_node_type (fun _ _ -> ()) nl)]
+    else node_string_pretty nl
   include SimpleGraph(
     struct
       type nonrec result = (final * (edge_type * int) list) DList.t
@@ -156,7 +178,7 @@ module rec SimpleHashedCICGraph : sig
   type node' = SimpleHashedCICGraph.node
   val node_repr : node' -> int
   type result = (final * (edge_type * int) list) DList.t
-  val final_to_string : final -> string
+  val final_to_string : final -> Graph.Graphviz.DotAttributes.vertex list
   include GraphMonadType
     with type node_label = node' node_type
      and type edge_label = edge_type
@@ -170,8 +192,9 @@ end = struct
   type node' = SimpleHashedCICGraph.node
   type result = (final * (edge_type * int) list) DList.t
   let final_to_string (nl, h) =
-    let hash = if hash_option () then " : " ^ Int64.to_string h else "" in
-    Graph_def.show_node_type (fun _ _ -> ()) nl ^ hash
+    if debug_option () then
+      [`Shape `Ellipse; `Label (Graph_def.show_node_type (fun _ _ -> ()) nl ^ " : " ^ Int64.to_string h)]
+    else node_string_pretty nl
 
   module rec Hasher :
     CICHasherType with type t = int64
