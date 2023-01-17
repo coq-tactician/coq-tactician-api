@@ -809,13 +809,12 @@ module GraphHasher
       OList.fold_left (fun state (el, n) ->
         let n = match !n with
           | Written (_, hash) -> which hash
-          | BinderPlaceholder _ -> H.with_state @@ fun x -> x
+          | BinderPlaceholder { depth } ->
+            H.with_state @@ fun state -> H.update_int (curr_depth - depth) state
           | Normal { hash; _ } -> which hash
           | Binder ({ hash; _ }, { seen = false; _ }) -> which hash
           | Binder ({ depth; label; _ }, { seen = true; final = false; _ }) ->
-              H.with_state @@ fun state ->
-              (* Careful to include the label of the binder as well as its de Bruijn index *)
-              H.update_node_label ~physical label @@ H.update_int (curr_depth - depth) state
+              H.with_state @@ fun state -> H.update_int (curr_depth - depth) state
           | Binder ({ hash; _ }, { seen = true; final = true; _ }) -> which hash
         in
         H.update_edge ~physical el n state
@@ -893,12 +892,12 @@ module GraphHasher
       ; physical =
           (H.with_state @@ fun state ->
            H.update connected_component_hash.physical @@ H.update physical state) } in
-  let rec aux n =
+    let rec aux n =
       match !n with
       | Written (n, _) -> return n
-      | Normal { label; children; hash; _ } ->
-        let hash = tag_connected_component hash in
+      | Normal { label; children; hash; depth; _ } ->
         let* ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
+        let hash = tag_connected_component @@ calc_hash depth label children in
         share_node label hash
           (fun add ->
              let* node = lift @@ make_lower_node label hash ch in

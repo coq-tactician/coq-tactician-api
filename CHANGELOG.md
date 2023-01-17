@@ -1,3 +1,7 @@
+# v15
+Changes to the graph
+- Fix a bug in the graph sharing algorithm. This causes the identity hash of nodes to be different from v14
+
 # v14
 Changes to the Capn'proto format:
 - Upgraded magic id to v14
