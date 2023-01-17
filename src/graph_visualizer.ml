@@ -55,20 +55,29 @@ end
 module Dot = Graph.Graphviz.Dot(GraphvizGraph)
 
 (* TODO: Probably not the most beautiful and efficient solution *)
-let cic_graph_to_dot_graph transform ns =
+let cic_graph_to_dot_graph transform ns root =
+  (* We cannot just dump the nodes and edges into graphviz in random order, because then the graph
+     will be printed strangely. We have to traverse the graph in-order for it to look decently. *)
   let ns = ns (fun ~node_count:_ ~edge_count:_ -> DList.nil) (fun ns nl ch -> DList.cons (nl, ch) ns) in
-  let ns = DList.to_list ns in
-  let nm, g = CList.fold_left_i (fun tag (nm, g) (label, _) ->
-      let node = { tag; label = transform label } in
-      Int.Map.add tag node nm, GraphvizGraph.add_vertex g node) 0 (Int.Map.empty, GraphvizGraph.empty) ns in
-  CList.fold_left_i (fun tag g (_, children) ->
-      let source = Int.Map.find tag nm in
-      List.fold_left (fun g (label, tag) ->
-          let target = Int.Map.find tag nm in
-        GraphvizGraph.mk_edge g label ~source ~target) g children) 0 g ns
+  let ns = Array.of_list @@ DList.to_list ns in
+  let rec traverse visited g tag n =
+    match Int.Map.find_opt n visited with
+    | Some node -> visited, g, tag, node
+    | None ->
+      let label, children = ns.(n) in
+      Feedback.msg_notice Pp.(str (transform label));
+      let source = { tag; label = transform label } in
+      let g = GraphvizGraph.add_vertex g source in
+      let visited = Int.Map.add n source visited in
+      let visited, g, tag = List.fold_left (fun (visited, g, tag) (label, i) ->
+          let visited, g, tag, target = traverse visited g tag i in
+          visited, GraphvizGraph.mk_edge g label ~source ~target, tag) (visited, g, tag + 1) children in
+      visited, g, tag, source
+  in
+  let _, g, _, _ = traverse Int.Map.empty GraphvizGraph.empty 0 root in g
 
-let make_graph transform graph =
-  let graph = cic_graph_to_dot_graph transform graph in
+let make_graph transform graph root =
+  let graph = cic_graph_to_dot_graph transform graph root in
   let chan = open_out "graph.dot" in
   Dot.output_graph chan graph;
   close_out chan;
@@ -80,6 +89,7 @@ module Viz
        type final
        val final_to_string : final -> string
        type result = (final * (edge_type * int) list) DList.t
+       val node_repr : node' -> int
        include GraphMonadType
          with type node = node'
           and type edge_label = edge_type
@@ -99,24 +109,24 @@ struct
       try
         Smartlocate.locate_global_with_alias x
       with Not_found -> CErrors.user_err (Pp.str "Invalid ident given") in
-    let (_, _), ns = GM.run_empty ?def_depth
+    let (_, root), ns = GM.run_empty ?def_depth
       (Builder.gen_globref (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) x) in
-    make_graph G.final_to_string ns
+    make_graph G.final_to_string ns @@ G.node_repr root
 
   let make_constr_graph ?def_depth c =
     let env = Global.env () in
     let sigma = Evd.from_env env in
     let evd, c = Constrintern.interp_constr_evars env sigma c in
-    let (_, _), ns = GM.run_empty ?def_depth
+    let (_, root), ns = GM.run_empty ?def_depth
       (Builder.gen_constr (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) (EConstr.to_constr evd c)) in
-    make_graph G.final_to_string ns
+    make_graph G.final_to_string ns @@ G.node_repr root
 
   let make_proof_graph ?def_depth state =
     let _ =
       Pfedit.solve (Goal_select.get_default_goal_selector ()) None
         (Proofview.tclBIND (Builder.gen_proof_state (Names.Id.Map.empty, Names.Cmap.empty)) (fun res ->
-             let (_, _), ns = GM.run_empty ?def_depth res in
-             make_graph G.final_to_string ns;
+             let (_, root), ns = GM.run_empty ?def_depth res in
+             make_graph G.final_to_string ns @@ G.node_repr root;
              Proofview.tclUNIT ()))
         (Proof_global.get_proof state) in ()
 
@@ -125,6 +135,7 @@ struct
 module SimpleCICGraph = struct
   type final = int node_type
   type node' = int
+  let node_repr x = x
   type result = (final * (edge_type * int) list) DList.t
   let final_to_string = Graph_def.show_node_type (fun _ _ -> ())
   include SimpleGraph(
@@ -143,6 +154,7 @@ end
 module rec SimpleHashedCICGraph : sig
   type final = SimpleHashedCICGraph.node node_type * int64
   type node' = SimpleHashedCICGraph.node
+  val node_repr : node' -> int
   type result = (final * (edge_type * int) list) DList.t
   val final_to_string : final -> string
   include GraphMonadType
@@ -181,6 +193,7 @@ end = struct
              ((node_count:int -> edge_count:int -> result) ->
               (result -> final -> (edge_label * int) list -> result) ->
               result)
+    val lower : node -> int * Hasher.t
   end
     = GraphHasher
       (struct
@@ -204,6 +217,7 @@ end = struct
     ((node_count:int -> edge_count:int -> result) ->
      (result -> final -> (edge_label * int) list -> result) -> result)
   let run m = run m (HashMap.create 0)
+  let node_repr x = fst @@ GH.lower x
 end
 
 module SimpleViz = Viz(SimpleCICGraph)
