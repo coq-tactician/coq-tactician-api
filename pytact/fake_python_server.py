@@ -9,33 +9,30 @@ from pytact.data_reader import online_definitions_initialize, online_data_predic
 
 def text_prediction_loop(messages_generator):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                print(msg.predict.state.text)
-                preds = [
-                    {'tacticText': t,
-                    'confidence': 0.5} for t in tactics ]
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
-            elif msg.is_synchronize:
-                print(msg)
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-            elif msg.is_initialize:
-                print(msg)
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-            elif msg.is_check_alignment:
-                alignment = {'unalignedTactics': [],
-                             'unalignedDefinitions': []}
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-            else:
-                raise Exception("Capnp protocol error")
-            print(response)
-            messages_generator.send(response)
-            msg = next(messages_generator)
+    for msg in messages_generator:
+        if msg.is_predict:
+            print(msg.predict.state.text)
+            preds = [
+                {'tacticText': t,
+                'confidence': 0.5} for t in tactics ]
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
+        elif msg.is_synchronize:
+            print(msg)
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+        elif msg.is_initialize:
+            print(msg)
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+        elif msg.is_check_alignment:
+            alignment = {'unalignedTactics': [],
+                         'unalignedDefinitions': []}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+        else:
+            raise Exception("Capnp protocol error")
+        print(response)
+        messages_generator.send(response)
 
-def prediction_loop(definitions, tactics, msg, messages_generator):
-    while True:
+def prediction_loop(definitions, tactics, messages_generator):
+    for msg in messages_generator:
         if msg.is_predict:
             with online_data_predict(
                     definitions,
@@ -62,57 +59,54 @@ def prediction_loop(definitions, tactics, msg, messages_generator):
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
                 print(response)
                 messages_generator.send(response)
-                msg = next(messages_generator)
         else:
             return msg
 
 def graph_initialize_loop(messages_generator):
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                raise Exception('Predict message received without a preceding initialize message')
-            elif msg.is_synchronize:
-                print(msg)
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+    msg = next(messages_generator, None)
+    while msg is not None:
+        if msg.is_predict:
+            raise Exception('Predict message received without a preceding initialize message')
+        elif msg.is_synchronize:
+            print(msg)
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+            print(response)
+            messages_generator.send(response)
+            msg = next(messages_generator, None)
+        elif msg.is_check_alignment:
+            check_alignment = msg.check_alignment
+            with online_definitions_initialize(
+                    check_alignment.graph,
+                    check_alignment.representative) as definitions:
+                for cluster in definitions.clustered_definitions:
+                    print('cluster:')
+                    for d in cluster:
+                        print(f'    {d.name}')
+                for t in check_alignment.tactics:
+                    print(t)
+                alignment = {'unalignedTactics': [ t.ident for t in check_alignment.tactics],
+                            'unalignedDefinitions': [d.node.nodeid for d in definitions.definitions]}
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+                messages_generator.send(response)
+                msg = next(messages_generator, None)
+        elif msg.is_initialize:
+            print('---------------- New prediction context -----------------')
+            init = msg.initialize
+            with online_definitions_initialize(init.graph, init.representative) as definitions:
+                for cluster in definitions.clustered_definitions:
+                    print('cluster:')
+                    for d in cluster:
+                        print(f'    {d.name}')
+                for t in init.tactics:
+                    print(t)
+                print(init.log_annotation)
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
                 print(response)
                 messages_generator.send(response)
-                msg = next(messages_generator)
-            elif msg.is_check_alignment:
-                check_alignment = msg.check_alignment
-                with online_definitions_initialize(
-                        check_alignment.graph,
-                        check_alignment.representative) as definitions:
-                    for cluster in definitions.clustered_definitions:
-                        print('cluster:')
-                        for d in cluster:
-                            print(f'    {d.name}')
-                    for t in check_alignment.tactics:
-                        print(t)
-                    alignment = {'unalignedTactics': [ t.ident for t in check_alignment.tactics],
-                                'unalignedDefinitions': [d.node.nodeid for d in definitions.definitions]}
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-                    messages_generator.send(response)
-                    msg = next(messages_generator)
-            elif msg.is_initialize:
-                print('---------------- New prediction context -----------------')
-                init = msg.initialize
-                with online_definitions_initialize(init.graph, init.representative) as definitions:
-                    for cluster in definitions.clustered_definitions:
-                        print('cluster:')
-                        for d in cluster:
-                            print(f'    {d.name}')
-                    for t in init.tactics:
-                        print(t)
-                    print(init.log_annotation)
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-                    print(response)
-                    messages_generator.send(response)
-                    msg = next(messages_generator)
-                    msg = prediction_loop(definitions, init.tactics,
-                                          msg, messages_generator)
-            else:
-                raise Exception("Capnp protocol error")
+                msg = prediction_loop(definitions, init.tactics,
+                                      messages_generator)
+        else:
+            raise Exception("Capnp protocol error")
 
 def run_session(args, capnp_socket, record_file):
     messages_generator = capnp_message_generator(capnp_socket, record_file)
