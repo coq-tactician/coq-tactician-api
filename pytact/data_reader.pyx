@@ -1245,8 +1245,8 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
         if record is not None:
             msg.as_builder().write_packed(record)
         cython_msg = PredictionProtocol_Request_Reader(msg)
-        yield cython_msg
-        response = yield
+        response = yield cython_msg
+        yield
         response.write_packed(socket)
         if record is not None:
             response.clear_write_flag()
