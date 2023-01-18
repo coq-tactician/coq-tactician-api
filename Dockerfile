@@ -5,7 +5,7 @@ MAINTAINER Vasily Pestun "pestun@ihes.fr"
 # conda + pythnon 3.10
 
 RUN curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o \
-    Miniconda3-latest-Linux-x86_64.sh && sh Miniconda3-latest-Linux-x86_64.sh -b -f
+    Miniconda3-latest-Linux-x86_64.sh && bash Miniconda3-latest-Linux-x86_64.sh -b -f
 ENV HOME="/home/coq"
 ENV CONDA_EXE="${HOME}/miniconda3/bin/conda"
 

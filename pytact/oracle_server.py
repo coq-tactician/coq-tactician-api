@@ -22,33 +22,31 @@ class OracleTactic:
     clean: bool
 
 def text_prediction_loop(text_oracle_data, messages_generator):
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                if msg.predict.state.text in text_oracle_data:
-                    preds = [
-                    {'tacticText': t,
-                     'confidence': 1} for t in text_oracle_data[msg.predict.state.text] ]
-                else:
-                    preds = []
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
-            elif msg.is_initialize:
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-            elif msg.is_synchronize:
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-            elif msg.is_check_alignment:
-                alignment = {'unalignedTactics': [],
-                            'unalignedDefinitions': []}
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+    for msg in messages_generator:
+        if msg.is_predict:
+            if msg.predict.state.text in text_oracle_data:
+                preds = [
+                {'tacticText': t,
+                 'confidence': 1} for t in text_oracle_data[msg.predict.state.text] ]
             else:
-                raise Exception("Capnp protocol error")
-            msg = messages_generator.send(response)
+                preds = []
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
+        elif msg.is_initialize:
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+        elif msg.is_synchronize:
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+        elif msg.is_check_alignment:
+            alignment = {'unalignedTactics': [],
+                        'unalignedDefinitions': []}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+        else:
+            raise Exception("Capnp protocol error")
+        messages_generator.send(response)
 
-def prediction_loop(msg, oracle_data, definitions, tactics, messages_generator):
+def prediction_loop(oracle_data, definitions, tactics, messages_generator):
     available_tacticids = set([ t.ident for t in tactics ])
     available_definitions = { d.node.identity : d.node.nodeid for d in definitions.definitions }
-    while True:
+    for msg in messages_generator:
         if msg.is_predict:
             with online_data_predict(
                     definitions,
@@ -70,40 +68,41 @@ def prediction_loop(msg, oracle_data, definitions, tactics, messages_generator):
                     if t.tactic_id in available_tacticids and
                     None not in [resolve_arg(arg) for arg in t.arguments]]
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=possible_tactics)
-                msg = messages_generator.send(response)
+                messages_generator.send(response)
         else:
             return msg
 
 def graph_initialize_loop(oracle_data, known_definitions, known_tactics, messages_generator):
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                raise Exception('Predict message received without a preceding initialize message')
-            elif msg.is_synchronize:
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-                msg = messages_generator.send(response)
-            elif msg.is_check_alignment:
-                check_alignment = msg.check_alignment
-                with online_definitions_initialize(
-                        check_alignment.graph,
-                        check_alignment.representative) as definitions:
-                    unknown_definitions = [ d.node.nodeid for d in definitions.definitions
-                                            if d.node.identity not in known_definitions ]
-                    unknown_tactics = [ t.ident for t in check_alignment.tactics
-                                        if t.ident not in known_tactics ]
-                    alignment = {'unalignedTactics': unknown_tactics,
-                                'unalignedDefinitions': unknown_definitions}
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-                    msg = messages_generator.send(response)
-            elif msg.is_initialize:
-                init = msg.initialize
-                with online_definitions_initialize(init.graph, init.representative) as definitions:
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-                    msg = prediction_loop(messages_generator.send(response),
-                                          oracle_data, definitions, init.tactics, messages_generator)
-            else:
-                raise Exception("Capnp protocol error")
+    msg = next(messages_generator, None)
+    while msg is not None:
+        if msg.is_predict:
+            raise Exception('Predict message received without a preceding initialize message')
+        elif msg.is_synchronize:
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+            messages_generator.send(response)
+            msg = next(messages_generator, None)
+        elif msg.is_check_alignment:
+            check_alignment = msg.check_alignment
+            with online_definitions_initialize(
+                    check_alignment.graph,
+                    check_alignment.representative) as definitions:
+                unknown_definitions = [ d.node.nodeid for d in definitions.definitions
+                                        if d.node.identity not in known_definitions ]
+                unknown_tactics = [ t.ident for t in check_alignment.tactics
+                                    if t.ident not in known_tactics ]
+                alignment = {'unalignedTactics': unknown_tactics,
+                            'unalignedDefinitions': unknown_definitions}
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+                messages_generator.send(response)
+                msg = next(messages_generator, None)
+        elif msg.is_initialize:
+            init = msg.initialize
+            with online_definitions_initialize(init.graph, init.representative) as definitions:
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+                messages_generator.send(response)
+                msg = prediction_loop(oracle_data, definitions, init.tactics, messages_generator)
+        else:
+            raise Exception("Capnp protocol error")
 
 def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics, args, capnp_socket, record_file):
     messages_generator = capnp_message_generator(capnp_socket, record_file)
