@@ -1308,8 +1308,15 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
         Generator[GlobalContextMessage | CheckAlignmentMessage, None | CheckAlignmentResponse, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
 
-    Given a `socket`, this function creates a generator that yields messages of type
-    `PredictionProtocol_Request_Reader` after which a `_DynamicStructBuilder` message needs to be `send` back.
+    Given a `socket`, this function creates a generator that can yield two different kinds of message:
+    - `GlobalContextMessage`: When such a message is yielded, a new prediction context is started.
+       Prediction requests will be received via a sub-generator `message.prediction_requests`. This
+       sub-generator yields `ProofState`'s and expects to be sent back predictions as either
+       the `TacticPredictionsGraph` or `TacticPredictionsText` dataclass. Once the sub-generator is
+       exhausted, the main generator will resume.
+    - `CheckAlignmentMessage`: A request to check which of Coq's current tactics and definitions the
+      prediction server currently "knows about". The generator expects a `CheckAlignmentResponse` to be
+      sent in response.
 
     When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
     descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
