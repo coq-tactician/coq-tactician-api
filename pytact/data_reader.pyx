@@ -1213,7 +1213,58 @@ def online_data_predict(OnlineDefinitionsReader base,
     graph_index.local_to_global = [[0], [1, 0]]
     yield ProofState.init(predict.source.getState(), 1, &graph_index)
 
-def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> (
+@dataclass
+class TacticPredictionGraph:
+    ident : int
+    arguments : list[Node]
+    confidence : float
+
+@dataclass
+class TacticPredictionsGraph:
+    predictions : list[TacticPredictionsGraph]
+
+@dataclass
+class TacticPredictionText:
+    tactic_text : str
+    confidence : float
+
+@dataclass
+class TacticPredictionsText:
+    predictions : list[TacticPredictionsText]
+
+@dataclass
+class GlobalContextMessage:
+    definitions : OnlineDefinitionsReader
+    tactics : AbstractTactic_Reader_List
+    log_annotation : str
+    prediction_requests : Generator[ProofState, TacticPredictionsGraph | TacticPredictionsText, None]
+
+def convert_predictions(preds):
+    if isinstance(preds, TacticPredictionsText):
+        preds = [{'tacticText': pred.tactic_text,
+                  'confidence': pred.confidence} for pred in preds.predictions]
+        return graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
+    elif isinstance(preds, TacticPredictionsGraph):
+        preds = [{'tactic': {'ident': pred.ident},
+                  'arguments': [{'term' : {'depIndex': 1 if a.graph == 0 else 0,
+                                           'nodeIndex': a.nodeid}}
+                            for a in pred.arguments],
+                  'confidence': pred.confidence} for pred in preds.predictions]
+        return graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
+    else:
+        raise Exception("Incorrect predictions received")
+
+@dataclass
+class CheckAlignmentMessage:
+    definitions : OnlineDefinitionsReader
+    tactics : AbstractTactic_Reader_List
+
+@dataclass
+class CheckAlignmentResponse:
+    unknown_definitions : list[Definition]
+    unknown_tactics : list[int]
+
+def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | None = None) -> (
         Generator[PredictionProtocol_Request_Reader, capnp.lib.capnp._DynamicStructBuilder, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
 
@@ -1252,6 +1303,61 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
             response.clear_write_flag()
             response.write_packed(record)
         msg = next_disabled_sigint()
+
+def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> (
+        Generator[GlobalContextMessage | CheckAlignmentMessage, None | CheckAlignmentResponse, None]):
+    """A generator that facilitates communication between a prediction server and a Coq process.
+
+    Given a `socket`, this function creates a generator that yields messages of type
+    `PredictionProtocol_Request_Reader` after which a `_DynamicStructBuilder` message needs to be `send` back.
+
+    When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
+    descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
+    """
+    lgenerator = capnp_message_generator_lowlevel(socket, record)
+
+    msg = next(lgenerator, None)
+    while msg is not None:
+        if msg.is_synchronize:
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+            lgenerator.send(response)
+            msg = next(lgenerator, None)
+        elif msg.is_check_alignment:
+            ca = msg.check_alignment
+            with online_definitions_initialize(ca.graph, ca.representative) as definitions:
+                alignment = yield CheckAlignmentMessage(definitions, ca.tactics)
+                alignment = {'unalignedTactics': alignment.unknown_tactics,
+                             'unalignedDefinitions': [d.node.nodeid for d in alignment.unknown_definitions]}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+            lgenerator.send(response)
+            yield
+            msg = next(lgenerator, None)
+        elif msg.is_initialize:
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+            lgenerator.send(response)
+            init = msg.initialize
+            with online_definitions_initialize(init.graph, init.representative) as definitions:
+                msg = None
+                def prediction_generator():
+                    nonlocal msg
+                    pred_msg = next(lgenerator, None)
+                    while pred_msg is not None:
+                        if pred_msg.is_predict:
+                            with online_data_predict(definitions, pred_msg.predict) as proof_state:
+                                preds = yield proof_state
+                                response = convert_predictions(preds)
+                            lgenerator.send(response)
+                            yield
+                            pred_msg = next(lgenerator, None)
+                        else:
+                            msg = pred_msg
+                            break
+                pd = prediction_generator()
+                yield GlobalContextMessage(definitions, init.tactics, init.log_annotation, pd)
+                if next(pd, None) is not None:
+                    raise Exception("Not all prediction requests were consumed")
+        else:
+            raise Exception("Capnp protocol error")
 
 def capnp_message_generator_from_file(message_file: BinaryIO) -> (
         Generator[PredictionProtocol_Request_Reader, capnp.lib.capnp._DynamicStructBuilder, None]):
