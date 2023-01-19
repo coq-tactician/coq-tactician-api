@@ -1,6 +1,5 @@
 import socket
 import argparse
-import contextlib
 import signal
 from subprocess import Popen
 import capnp
