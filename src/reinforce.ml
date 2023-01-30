@@ -46,8 +46,12 @@ let write_execution_result env sigma res hyps concl evar obj =
   let context_map = Id.Map.map (fun n ->
       let (p, n), _ = G.lower n in
       p, node_local_index (p, n)) context_map in
-  let context = Id.Map.bindings context_map in
-  let context_range = OList.map (fun (_, (_, n)) -> n) context in
+  let context_range = List.rev @@ List.filter_map (fun hyp ->
+      let id = Context.Named.Declaration.get_id hyp in
+      match Id.Map.find_opt id context_map with
+      | None -> None
+      | Some (_, n) -> Some n
+    ) hyps in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
 
   (* Write graph to capnp structure *)

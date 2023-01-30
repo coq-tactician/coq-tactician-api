@@ -498,6 +498,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       definition_nodes representative minimum_deps =
     let path_def_count = Int.Map.map (fun (_, c, _) -> c) !dependencies in
     let g = K.Builder.Dataset.init_root () in
+    ignore(K.Builder.Dataset.data_version_set_reader g K.Reader.current_version);
     (match representative with
      | None ->
        K.Builder.Dataset.representative_set_int_exn g (def_count + node_count)

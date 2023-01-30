@@ -120,6 +120,13 @@
                         </div>
                     </div>
                     <div class="field">
+                        <div class="ui toggle checkbox">
+                            <input type="checkbox" id="show_non_anonymized_tactics" name="show_non_anonymized_tactics"
+                                   {% if settings.show_non_anonymized_tactics %}checked{% endif %}>
+                            <label for="show_non_anonymized_tactics">Show non-anonymized tactics</label>
+                        </div>
+                    </div>
+                    <div class="field">
                         <label>Ignore edges</label>
                         <select class="ui selection dropdown search clearable" name="ignore_edges" multiple>
                             {% for (value, name) in edge_labels %}
