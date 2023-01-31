@@ -543,7 +543,9 @@ end = struct
     let gen_outcome (((before_sigma, before_proof_states, (before_hyps, before_concl, before_evar)),
                       term, term_proof_states, after) : outcome) =
       let term_text =
-        (* TODO: Some evil hacks to work around the fact that we don't have a sigma here *)
+        (* Note: We intentionally butcher evars here, because we want all evars of a term to be printed
+           as underscores. This increases the chance that the term can be parsed back, because un-named
+           evars can usually not be parsed, but underscores can. *)
         let beauti_evar c =
           let rec aux c =
             match Constr.kind c with
