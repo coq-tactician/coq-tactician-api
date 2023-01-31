@@ -193,26 +193,15 @@ struct Tactic {
   # definitions and local context elements. Tactics are postprocessed to remove explicit naming of new
   # hypotheses as much as possible, and instead asking Coq to invent a name.
 
-  textNonAnonymous @5 :Text;
+  textNonAnonymous @2 :Text;
   # Same as `text` except that the tactic is not postprocessed to remove explicit naming of new hypotheses.
 
-  baseText @2 :Text;
+  baseText @3 :Text;
   # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
   # Note, however, that this is both an under-approximation and an over-approximation. The reason is that tactic
   # printing is not 100% isomorphic to Coq's internal AST of tactics. Sometimes, different tactics get mapped to
   # the same text. Conversely, the same tactic may be mapped to different texts when identifiers are printed
   # using different partially-qualified names.
-
-  intermText @3 :Text;
-  # A textual representation that tries to come as close as possible to (ident, arguments).
-  # It comes with the same caveats as `baseText`.
-
-  exact @4 :Bool;
-  # Indicates whether or not `ident` + `arguments` is faithfully reversible into the original "strictified" tactic.
-  # Note that this does not necessarily mean that it represents exactly the tactic that was inputted by the user.
-  # All tactics are modified to be 'strict' (meaning that tactics that have delayed variables in them break).
-  # This flag measures the faithfulness of the representation w.r.t. the strict version of the tactic, not the
-  # original tactic inputted by the user.
 }
 
 struct Argument {

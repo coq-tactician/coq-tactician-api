@@ -69,9 +69,7 @@ type tactic =
   { tactic        : string
   ; tactic_non_anonymous : string
   ; base_tactic   : string
-  ; interm_tactic : string
-  ; tactic_hash   : int
-  ; tactic_exact  : bool }
+  ; tactic_hash   : int }
 
 type 'node tactical_step =
   { tactic   : tactic option

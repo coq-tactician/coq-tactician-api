@@ -514,32 +514,10 @@ end = struct
   let rec gen_proof_step (outcomes, tactic) =
     let* env = lookup_env
     and+ metadata = lookup_include_metadata in
-    let tactic, args = match tactic with
-      | None -> None, []
-      | Some tac ->
-        let pr_tac t = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env t) in
-        let tactic_non_anonymous = tac in
-        let tac_orig = Tactic_name_remove.tactic_name_remove tac in
-        let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
-        let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
-        let base_tactic = Tactic_one_variable.tactic_strip tac in
-        let tactic_hash = Hashtbl.hash_param 255 255 base_tactic in
-        let tactic =
-          if metadata then
-            Some { tactic = pr_tac tac_orig
-                 ; tactic_non_anonymous = pr_tac tactic_non_anonymous
-                 ; base_tactic = pr_tac base_tactic
-                 ; interm_tactic = pr_tac interm_tactic
-                 ; tactic_hash
-                 ; tactic_exact }
-          else
-            Some { tactic = ""
-                 ; tactic_non_anonymous = ""
-                 ; base_tactic = ""
-                 ; interm_tactic = ""
-                 ; tactic_hash
-                 ; tactic_exact } in
-        tactic, args in
+    let tactic = Option.map (fun t ->
+        t, Tactic_normalize.tactic_normalize @@
+        Tactic_normalize.tactic_strict @@
+        Tactic_name_remove.tactic_name_remove t) tactic in
     let gen_outcome (((before_sigma, before_proof_states, (before_hyps, before_concl, before_evar)),
                       term, term_proof_states, after) : outcome) =
       let term_text =
@@ -580,44 +558,17 @@ end = struct
             and+ term = gen_constr term in
             proof_states_after, term
           and+ map = lookup_named_map in
-          let warn_arg id = () in
-            (* let tac = match tactic with *)
-            (*   | None -> "Unknown-tac" *)
-            (*   | Some tactic -> tactic.tactic in *)
-            (* Feedback.msg_warning Pp.(str "Unknown tactical argument: " ++ Id.print id ++ str " in tactic " ++ *)
-            (*                          str tac (\* ++ str " in context\n" ++ *\) *)
-            (*                          (\* prlist_with_sep (fun () -> str "\n") (fun (id, node) -> Id.print id ++ str " : ") context *\)) in *)
-          let check_default id = function
-            | None -> warn_arg id; None
-            | x -> x in
-          let+ arguments =
-            let open Tactic_one_variable in
-            List.map (function
-                | TVar id ->
-                  return @@ check_default id @@
-                  Id.Map.find_opt id map
-                | TRef c ->
-                  (match c with
-                   | GlobRef.VarRef id ->
-                     (try
-                        let def = Environ.lookup_named id env in
-                        let+ c = gen_section_var id def in
-                        Some c
-                      with Not_found ->
-                        return @@ check_default id @@
-                        Id.Map.find_opt id map)
-                   | GlobRef.ConstRef c ->
-                     let+ c = gen_const c in
-                     Some c
-                   | GlobRef.IndRef i ->
-                     let+ c = gen_inductive i in
-                     Some c
-                   | GlobRef.ConstructRef c ->
-                     let+ c = gen_constructor c in
-                     Some c
-                  )
-                | TOther -> return None
-              ) args in
+          let+ arguments = match tactic with
+            | None -> return []
+            | Some (_, normalized_tactic) ->
+              let open Tactic_arguments in
+              List.map (fun a ->
+                  match a with
+                  | None -> return None
+                  | Some c ->
+                    let+ c = gen_constr c in
+                    Some c) @@
+              tactic_arguments env before_sigma normalized_tactic in
           proof_states_after, subject, arguments, map, term in
         let+ root = mk_node (ProofState before_evar) ((ContextSubject, subject)::ctx) in
         let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
@@ -628,6 +579,23 @@ end = struct
               Id.Map.find_opt id map) before_hyps in
         proof_states_after, { ps_string; concl_string; root; context; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
+    let tactic = match tactic with
+      | None -> None
+      | Some (tac_orig, tac_normalized) ->
+        let pr_tac t = Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env t) in
+        let tac_name_removed = Tactic_name_remove.tactic_name_remove tac_orig in
+        let base_tactic = Tactic_arguments.tactic_strip tac_normalized in
+        let tactic_hash = Hashtbl.hash_param 255 255 base_tactic in
+        if metadata then
+          Some { tactic = pr_tac tac_name_removed
+               ; tactic_non_anonymous = pr_tac tac_orig
+               ; base_tactic = pr_tac base_tactic
+               ; tactic_hash }
+        else
+          Some { tactic = ""
+               ; tactic_non_anonymous = ""
+               ; base_tactic = ""
+               ; tactic_hash } in
     let+ outcomes = List.map gen_outcome outcomes in
     { tactic; outcomes }
   and gen_const c : G.node t =
