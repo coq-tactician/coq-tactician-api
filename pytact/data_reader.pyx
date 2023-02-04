@@ -34,12 +34,32 @@ Additionally, some indexing helpers are defined:
 
 # Communicating with a Coq process
 
+Communication with a Coq process can be done either through a high-level or
+low-level interface.
+
+## Highlevel interface
+
 The function `capnp_message_generator` converts a socket into a generator that
 yields request messages for predictions and expects to be sent response messages
-in return. There are four types of messages `msg` Coq sends. A simple example of
-how to handle these messages is in `fake_python_server.py`.
+in return. A simple example of how to handle these messages is in `fake_python_server.py`.
+Possible messages are:
+1. `CheckAlignmentMessage`: Coq is asking the server to check which tactics and
+   definitions are known to it. A `CheckAlignmentResponse` message is expected in return.
+2. `GlobalContextMessage`: A new global context of definitions is sent. Coq will
+   subsequently send a number of prediction requests that rely on this global context.
+   These requests can be accessed through a sub-generator in
+   `GlobalContextMessage.prediction_requests`. This sub-generator yields `ProofState`'s and
+   expects either a `TacticPredictionsGraph` or `TacticPredictionsText` message in return.
+   The sub-generator needs to be exhausted before the main generator can be queried again.
+
+## Lowlevel interface
+
+The function `capnp_message_generator_lowlevel` converts a socket into a generator that
+yields lowlevel cap'n proto request messages for predictions and expects to be sent cap'n proto
+messages in return. There are four types of messages `msg` Coq sends.
 1. Synchronize: If `msg.is_synchronize` is true, Coq is attempting to synchronize
-   it's state with the server. See `fake_python_server.py` for how to respond.
+   it's state with the server. A `PredictionProtocol.Response.synchronized` message is expected
+   in return.
 2. Initialize: If `msg.is_initialize` is true, Coq is sending a list of available
    tactics and the current global context. You can conveniently read this global context using
    ```
@@ -50,15 +70,18 @@ how to handle these messages is in `fake_python_server.py`.
    Any subsequent prediction request (see (4)) will be made in the context of the
    tactics and predictions sent in this message, until a new initialize message
    is received.
+   A `PredictionProtocol.Response.initialized` message is expected in return.
 4. Predict: If `msg.is_predict` is true, Coq is asking to predict a list of plausible
    tactics given a proof state. The proof state can be easily accessed using
    ```
    with online_data_predict(definitions, msg.predict) as proof_state:
        print(dir(proof_state))
    ```
+   A `PredictionProtocol.Response.prediction` or `PredictionProtocol.Response.textPrediction`
+   message is expected in return.
 5. Check Alignment: If `msg.check_alignment` is true, then Coq is asking the server
-   to check which tactics and definitions are known to it. See `fake_python_server.py`
-   for how to respond.
+   to check which tactics and definitions are known to it. A
+   `PredictionProtocol.Response.alignment` message is expected in return.
 
 The `capnp_message_generator` function can also dump the sequence of messages send
 and received to a file. One can then use `capnp_message_generator_from_file` to replay
