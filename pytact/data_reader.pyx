@@ -824,6 +824,11 @@ cdef class Definition:
         constructor or projection. Because those are mutually recursive objects, they reference themselves
         and are therefore part of their own global context.
 
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of the
+        stream. An exception to this rule are mutually recursive definitions, because no topological sort
+        is possible there (see also `clustered_global_context`).
+
         Arguments:
         * across_files -- if False, outputs only the definitions from the local file, default True
         * inclusive -- if True, outputs also itself, default False
@@ -839,6 +844,10 @@ cdef class Definition:
     def clustered_global_context(self, across_files : bool = True, inclusive : bool = False) -> Iterable[list[Definition]]:
         """All of the definitions in the global context when this definition was created, clustered into
         mutually recursive cliques.
+
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of the
+        stream.
 
         Arguments:
         * across_files -- if False, outputs only the definitions from the local file, default True
@@ -1039,7 +1048,10 @@ cdef class Dataset:
 
     @property
     def dependencies(self) -> Sequence[Path]:
-        """A list of physical paths of data files that are direct dependencies of this file."""
+        """A list of physical paths of data files that are direct dependencies of this file.
+
+        It is guaranteed that no cycles exist in the dependency relation between files induced by this field.
+        """
         dependencies = self.reader.getDependencies()
         # The first dependency is the file itself, which we do not want to expose here.
         count = dependencies.size() - 1
@@ -1072,6 +1084,11 @@ cdef class Dataset:
         * across_files -- if True, outputs also definitions from dependent files, default False
         * spine_only -- if True, outputs only the definitions on the main spine, default False
         Note: across_files = True is incompatible with spine_only = False
+
+        When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
+        any definition in the stream, any definition reachable from the forward closure of the definition
+        also exists in the remainder of the stream. An exception to this rule are mutually recursive definitions,
+        because no topological sort is possible there (see also `clustered_definitions`).
         """
         if across_files and not spine_only:
             raise Exception("Options across_files = True and spine_only = False are incompatible")
@@ -1093,6 +1110,10 @@ cdef class Dataset:
         * across_files -- if True, outputs also definitions from dependent files, default False
         * spine_only -- if True, outputs only the definitions on the main spine, default False
         Note: across_files = True is incompatible with spine_only = False
+
+        When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
+        any definition in the stream, any definition reachable from the forward closure of the definition
+        also exists in the remainder of the stream.
         """
         return Definition._group_by_clusters(
             self.definitions(
@@ -1165,6 +1186,11 @@ cdef class OnlineDefinitionsReader:
     @property
     def definitions(self) -> Iterable[Definition]:
         """The list of definitions that are currently in the global context.
+
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of
+        the stream. An exception to this rule are mutually recursive definitions,
+        because no topological sort is possible there (see also `clustered_definitions`).
         """
         if self.representative is None: return ()
         return self.representative.global_context(inclusive = True)
@@ -1172,6 +1198,10 @@ cdef class OnlineDefinitionsReader:
     @property
     def clustered_definitions(self) -> Iterable[list[Definition]]:
         """All of the definitions present in the global context, clustered by mutually recursive definitions.
+
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of
+        the stream.
         """
         return Definition._group_by_clusters(self.definitions)
 
