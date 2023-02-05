@@ -364,7 +364,7 @@ cdef class EdgeTarget_List:
         wrapper.count = count
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> tuple[int, Node]:
         if index >= self.count:
             raise IndexError('Out of bounds')
         cdef C_Graph_EdgeTarget_Reader edge = self.edges[self.start+index]
@@ -390,7 +390,7 @@ cdef class Node_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Node:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -448,14 +448,24 @@ cdef class ProofState:
 
     @property
     def context_names(self) -> Sequence[str]:
+        """The names of the local context nodes of the proof state, as they originally appeared in the proof.
+
+        These names should be used for debugging and viewing purposes only, because hypothesis-generating tactics have
+        been modified to use auto-generated names. Hence, tactics should not be concerned about the names of
+        the context.
+        """
         return String_List.init(self.reader.getContextNames(), None)
 
     @property
     def context_text(self) -> Sequence[str]:
+        """A textual representation of the type/definition of context nodes
+        """
         return String_List.init(self.reader.getContextText(), None)
 
     @property
     def conclusion_text(self) -> str:
+        """A textual representation of the conclusion of the proof state.
+        """
         temp = self.reader.getConclusionText()
         return (<char*>temp.begin())[:temp.size()]
 
@@ -492,7 +502,7 @@ cdef class ProofState_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> ProofState:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -514,7 +524,7 @@ cdef class Argument_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Node | None:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -615,7 +625,7 @@ cdef class Outcome_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Outcome:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -682,7 +692,7 @@ cdef class ProofStep_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> ProofStep:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -704,7 +714,7 @@ cdef class Representative_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Definition:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -1034,7 +1044,7 @@ cdef class Dataset_Definition_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Definition:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
