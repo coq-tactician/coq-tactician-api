@@ -561,6 +561,7 @@ end = struct
           let+ arguments = match tactic with
             | None -> return []
             | Some (_, normalized_tactic) ->
+              let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
               let open Tactic_arguments in
               List.map (fun a ->
                   match a with
