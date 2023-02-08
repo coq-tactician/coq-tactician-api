@@ -44,6 +44,13 @@ type outcome = proof_state * Constr.t * (Evar.t -> single_proof_state) * proof_s
 type tactical_proof = (outcome list * glob_tactic_expr option) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
 
+(* TODO: All this conversion of proof states, sigmas and other things is really convoluted *)
+let sigma_to_proof_state_lookup sigma (e : Evar.t) : single_proof_state =
+  let info = Evd.find_undefined sigma e in
+  List.map (map_named (EConstr.to_constr ~abort_on_undefined_evars:false sigma)) @@ Evd.evar_filtered_context info,
+  EConstr.to_constr ~abort_on_undefined_evars:false sigma info.evar_concl,
+  e
+
 module type CICGraphMonadType = sig
 
   include Monad.Def
@@ -561,15 +568,16 @@ end = struct
           let+ arguments = match tactic with
             | None -> return []
             | Some (_, normalized_tactic) ->
-              let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
               let open Tactic_arguments in
+              let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
+              let sigma, args = tactic_arguments env before_sigma normalized_tactic in
+              with_evar_map (sigma_to_proof_state_lookup sigma) @@
               List.map (fun a ->
                   match a with
                   | None -> return None
                   | Some c ->
                     let+ c = gen_constr c in
-                    Some c) @@
-              tactic_arguments env before_sigma normalized_tactic in
+                    Some c) args in
           proof_states_after, subject, arguments, map, term in
         let+ root = mk_node (ProofState before_evar) ((ContextSubject, subject)::ctx) in
         let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
