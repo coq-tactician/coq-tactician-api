@@ -10,6 +10,7 @@ Changes to the Capn'proto format:
 Changes to the graph:
 - Proof states are now properly discharged at section end, instead of just a copy of the proof state
   inside of the section
+- Improve the decomposition of the `destruct` and `induction` tactics
 
 # v15
 Changes to the graph
