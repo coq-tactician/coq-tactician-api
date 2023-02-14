@@ -1,7 +1,6 @@
 # distutils: language = c++
 # cython: c_string_type = str
 # cython: c_string_encoding = default
-# cython: embedsignature = True
 # cython: language_level = 3
 # distutils: libraries = capnpc capnp capnp-rpc
 # distutils: sources = pytact/graph_api.capnp.cpp
@@ -15,14 +14,14 @@ The dataset is mapped into memory using mmap, allowing random access to it's
 structures while keeping memory low. This file contains three entry-points to a
 dataset in order of preference:
 
-1. Contextmanager `data_reader(path)` provides high-level access to the data
+1. Contextmanager `data_reader` provides high-level access to the data
    in directory `path`. This is the preferred entry-point unless you need
    something special.
-2. Contextmanager `lowlevel_data_reader(path)` provides low-level access to
+2. Contextmanager `lowlevel_data_reader` provides low-level access to
    the data in directory `path`, giving direct access to the Cap'n Proto structures
    of the dataset. Use this when `data_reader` is too slow or you need access
    to data not provided by `data_reader`.
-3. Contextmanager `file_dataset_reader(file)` provides low-level access to
+3. Contextmanager `file_dataset_reader` provides low-level access to
    the Cap'n Proto structures of a single file. Using this is usually not
    advisable.
 
@@ -79,7 +78,7 @@ messages in return. There are four types of messages `msg` Coq sends.
    ```
    A `PredictionProtocol.Response.prediction` or `PredictionProtocol.Response.textPrediction`
    message is expected in return.
-5. Check Alignment: If `msg.check_alignment` is true, then Coq is asking the server
+5. Check Alignment: If `msg.is_check_alignment` is true, then Coq is asking the server
    to check which tactics and definitions are known to it. A
    `PredictionProtocol.Response.alignment` message is expected in return.
 
@@ -863,10 +862,9 @@ cdef class Definition:
         is possible there (see also `clustered_global_context`).
 
         Arguments:
-        * across_files -- if False, outputs only the definitions from the local file, default True
-        * inclusive -- if True, outputs also itself, default False
-        Note: if it is a self-recursive definition,
-        the inclusive argument is ignored, and considered as True
+        * `across_files`: if `False`, outputs only the definitions from the local file, default `True`.
+        * `inclusive`: if `True`, outputs also itself, default `False`.
+        Note: if it is a self-recursive definition, the `inclusive` argument is ignored, and considered as `True`
         """
         return self._global_context(
             across_files = across_files,
@@ -883,10 +881,9 @@ cdef class Definition:
         stream.
 
         Arguments:
-        * across_files -- if False, outputs only the definitions from the local file, default True
-        * inclusive -- if True, outputs also the cluster of itself, default False
-        Note: if it is a self-recursive definition,
-        the inclusive argument is ignored, and considered as True
+        * `across_files`: if `False`, outputs only the definitions from the local file, default `True`.
+        * `inclusive`: if `True`, outputs also the cluster of itself, default `False`.
+        Note: if it is a self-recursive definition, the `inclusive` argument is ignored, and considered as `True`.
         """
         return self._group_by_clusters(self.global_context(
             across_files = across_files,
@@ -1114,9 +1111,9 @@ cdef class Dataset:
         of sections or module functors.
 
         Arguments:
-        * across_files -- if True, outputs also definitions from dependent files, default False
-        * spine_only -- if True, outputs only the definitions on the main spine, default False
-        Note: across_files = True is incompatible with spine_only = False
+        * `across_files`: if `True`, outputs also definitions from dependent files, default `False`.
+        * `spine_only`: if True, outputs only the definitions on the main spine, default `False`.
+        Note: `across_files = True` is incompatible with `spine_only = False`.
 
         When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
         any definition in the stream, any definition reachable from the forward closure of the definition
@@ -1140,9 +1137,9 @@ cdef class Dataset:
         of sections or module functors.
 
         Arguments:
-        * across_files -- if True, outputs also definitions from dependent files, default False
-        * spine_only -- if True, outputs only the definitions on the main spine, default False
-        Note: across_files = True is incompatible with spine_only = False
+        * `across_files`: if `True`, outputs also definitions from dependent files, default `False`.
+        * `spine_only`: if `True`, outputs only the definitions on the main spine, default `False`.
+        Note: `across_files = True` is incompatible with `spine_only = False`.
 
         When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
         any definition in the stream, any definition reachable from the forward closure of the definition
@@ -1298,7 +1295,7 @@ class TacticPredictionsText:
 @dataclass
 class GlobalContextMessage:
     definitions : OnlineDefinitionsReader
-    tactics : AbstractTactic_Reader_List
+    tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
     log_annotation : str
     prediction_requests : Generator[ProofState, TacticPredictionsGraph | TacticPredictionsText, None]
 
@@ -1320,7 +1317,7 @@ def convert_predictions(preds):
 @dataclass
 class CheckAlignmentMessage:
     definitions : OnlineDefinitionsReader
-    tactics : AbstractTactic_Reader_List
+    tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
 
 @dataclass
 class CheckAlignmentResponse:
@@ -1328,11 +1325,13 @@ class CheckAlignmentResponse:
     unknown_tactics : list[int]
 
 def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | None = None) -> (
-        Generator[PredictionProtocol_Request_Reader, capnp.lib.capnp._DynamicStructBuilder, None]):
+        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                  capnp.lib.capnp._DynamicStructBuilder, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
 
     Given a `socket`, this function creates a generator that yields messages of type
-    `PredictionProtocol_Request_Reader` after which a `_DynamicStructBuilder` message needs to be `send` back.
+    `pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader` after which a
+    `capnp.lib.capnp._DynamicStructBuilder` message needs to be `send` back.
 
     When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
     descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
@@ -1430,7 +1429,8 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
             raise Exception("Capnp protocol error")
 
 def capnp_message_generator_from_file(message_file: BinaryIO) -> (
-        Generator[PredictionProtocol_Request_Reader, capnp.lib.capnp._DynamicStructBuilder, None]):
+        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                  capnp.lib.capnp._DynamicStructBuilder, None]):
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
     Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
@@ -1485,12 +1485,12 @@ class GlobalContextSets:
         self.parent = parent
         self.should_propagate = should_propagate
 
-    def _propagate(self, d: Definition, context: PSet):
+    def _propagate(self, d: Definition, context: Map):
         self.cache = self.cache.set(d, context)
         if self.should_propagate(d) and (parent := self.parent):
             parent._propagate(d, context)
 
-    def _global_context_set(self, d: Definition) -> PSet:
+    def _global_context_set(self, d: Definition) -> Map:
         try:
             return self.cache[d]
         except KeyError:
@@ -1508,7 +1508,7 @@ class GlobalContextSets:
             self._propagate(d, new_set)
             return new_set
 
-    def global_context_set(self, d: Definition) -> PSet:
+    def global_context_set(self, d: Definition) -> Map:
         """Retrieve the global context of a definition, caching the result, and intermediate results."""
         start = d.cluster_representative
         context = self._global_context_set(start)
