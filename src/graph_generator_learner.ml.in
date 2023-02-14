@@ -452,19 +452,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
          if not @@ Mindset.mem (Projection.Repr.mind p) minductives then
            CErrors.user_err (err_msg @@  MutInd.print (Projection.Repr.mind p)))
 
-  let source = ref @@ Tactician_util.try_locate_absolute_library dirpath
-  let data_file () = match !source with
-    | None -> CErrors.anomaly Pp.(str "Source file location could not be found")
-    | Some f -> Filename.remove_extension f ^ ".bin"
-  let () = Hook.set Stm.document_add_hook (fun CAst.{ loc; _ } _ ->
-      (* TODO: This does not work because of the '-load-vernac' flag; commands from a loaded file
-         will have their original location attached, which is wrong for our purposes. This manifests
-         itself when compiling an empty file. *)
-      (* (match loc with *)
-      (*  | None -> () *)
-      (*  | Some Loc.{ fname = ToplevelInput; _ } -> source := None *)
-      (*  | Some Loc.{ fname = InFile f; _ } -> source := Some f); *)
-      update_graph ())
+  let () = Hook.set Stm.document_add_hook (fun _ _ -> update_graph ())
 
   let resolve_dependencies deps =
     let absolute_deps = List.map (fun p ->
@@ -495,7 +483,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
   module K = Graph_api.Make(Capnp.BytesMessage)
   let write_graph { def_count; node_count; edge_count; defs; nodes; edges }
-      definition_nodes representative minimum_deps =
+      definition_nodes representative minimum_deps data_file =
     let path_def_count = Int.Map.map (fun (_, c, _) -> c) !dependencies in
     let g = K.Builder.Dataset.init_root () in
     ignore(K.Builder.Dataset.data_version_set_reader g K.Reader.current_version);
@@ -538,11 +526,20 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
       ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges capnp_graph;
     let _ = K.Builder.Dataset.dependencies_set_list g @@ resolve_dependencies @@ depslist () in
     K.Builder.Dataset.module_name_set g @@ DirPath.to_string dirpath;
-    Capnp_unix.IO.write_message_to_file ~compression:`None (K.Builder.Dataset.to_message g) (data_file ())
+    Capnp_unix.IO.write_message_to_file ~compression:`None (K.Builder.Dataset.to_message g) data_file
 
   let () = Declaremods.append_end_library_hook @@ fun () ->
     print_endline "writing";
     update_graph ();
+    let source = Tactician_util.try_locate_absolute_library dirpath in
+    let source = match source with
+    | Some s -> s
+    | None ->
+      let doc = Stm.get_doc 0 in
+      match Stm.(get_ast ~doc (get_current_state ~doc)) with
+      | Some CAst.{ loc = Some Loc.{ fname = InFile f; _ }; _ } -> f
+      | _ -> CErrors.anomaly Pp.(str "Source file location could not be found") in
+    let data_file = Filename.remove_extension source ^ ".bin" in
 
     (* We want the dependencies of the graph to contain any non-transitive imports *)
     let second_level_deps = Int.Map.fold (fun _ (_, _, s') s -> Int.Set.union s s') !dependencies Int.Set.empty in
@@ -550,12 +547,12 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
 
     let graph_builder = !graph_builder in
     Lib.add_anonymous_leaf @@
-    in_dependencies (dirpath_hash, (data_file ()), graph_builder.def_count, Int.Map.domain !dependencies);
+    in_dependencies (dirpath_hash, data_file, graph_builder.def_count, Int.Map.domain !dependencies);
     let local_node_array = Array.of_list @@ G.HashMap.fold (fun k (p, x) ls ->
         if dirpath_hash = p then (k, (p, x))::ls else ls) node_hashes [] in
     Lib.add_anonymous_leaf @@ in_node_hashes local_node_array;
 
-    write_graph graph_builder !definition_nodes !previous_definition non_trans_deps
+    write_graph graph_builder !definition_nodes !previous_definition non_trans_deps data_file
 
 end
 
