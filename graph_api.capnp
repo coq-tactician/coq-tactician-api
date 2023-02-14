@@ -421,7 +421,8 @@ struct Dataset {
   dependencies @0 :List(File);
   # The graph contained in a file may reference nodes from the graph of other files. This field maps
   # a `DepIndex` into the a file that contains that particular node.
-  # The first file in this list is always the current file.
+  # The first file in this list is always the current file. It is guaranteed that no cycles exist in
+  # the dependency relation between files induced by this field (except for the self-reference of the file).
 
   graph @1 :Graph;
 

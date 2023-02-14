@@ -34,12 +34,32 @@ Additionally, some indexing helpers are defined:
 
 # Communicating with a Coq process
 
+Communication with a Coq process can be done either through a high-level or
+low-level interface.
+
+## Highlevel interface
+
 The function `capnp_message_generator` converts a socket into a generator that
 yields request messages for predictions and expects to be sent response messages
-in return. There are four types of messages `msg` Coq sends. A simple example of
-how to handle these messages is in `fake_python_server.py`.
+in return. A simple example of how to handle these messages is in `fake_python_server.py`.
+Possible messages are:
+1. `CheckAlignmentMessage`: Coq is asking the server to check which tactics and
+   definitions are known to it. A `CheckAlignmentResponse` message is expected in return.
+2. `GlobalContextMessage`: A new global context of definitions is sent. Coq will
+   subsequently send a number of prediction requests that rely on this global context.
+   These requests can be accessed through a sub-generator in
+   `GlobalContextMessage.prediction_requests`. This sub-generator yields `ProofState`'s and
+   expects either a `TacticPredictionsGraph` or `TacticPredictionsText` message in return.
+   The sub-generator needs to be exhausted before the main generator can be queried again.
+
+## Lowlevel interface
+
+The function `capnp_message_generator_lowlevel` converts a socket into a generator that
+yields lowlevel cap'n proto request messages for predictions and expects to be sent cap'n proto
+messages in return. There are four types of messages `msg` Coq sends.
 1. Synchronize: If `msg.is_synchronize` is true, Coq is attempting to synchronize
-   it's state with the server. See `fake_python_server.py` for how to respond.
+   it's state with the server. A `PredictionProtocol.Response.synchronized` message is expected
+   in return.
 2. Initialize: If `msg.is_initialize` is true, Coq is sending a list of available
    tactics and the current global context. You can conveniently read this global context using
    ```
@@ -50,15 +70,18 @@ how to handle these messages is in `fake_python_server.py`.
    Any subsequent prediction request (see (4)) will be made in the context of the
    tactics and predictions sent in this message, until a new initialize message
    is received.
+   A `PredictionProtocol.Response.initialized` message is expected in return.
 4. Predict: If `msg.is_predict` is true, Coq is asking to predict a list of plausible
    tactics given a proof state. The proof state can be easily accessed using
    ```
    with online_data_predict(definitions, msg.predict) as proof_state:
        print(dir(proof_state))
    ```
+   A `PredictionProtocol.Response.prediction` or `PredictionProtocol.Response.textPrediction`
+   message is expected in return.
 5. Check Alignment: If `msg.check_alignment` is true, then Coq is asking the server
-   to check which tactics and definitions are known to it. See `fake_python_server.py`
-   for how to respond.
+   to check which tactics and definitions are known to it. A
+   `PredictionProtocol.Response.alignment` message is expected in return.
 
 The `capnp_message_generator` function can also dump the sequence of messages send
 and received to a file. One can then use `capnp_message_generator_from_file` to replay
@@ -341,7 +364,7 @@ cdef class EdgeTarget_List:
         wrapper.count = count
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> tuple[int, Node]:
         if index >= self.count:
             raise IndexError('Out of bounds')
         cdef C_Graph_EdgeTarget_Reader edge = self.edges[self.start+index]
@@ -367,7 +390,7 @@ cdef class Node_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Node:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -425,14 +448,24 @@ cdef class ProofState:
 
     @property
     def context_names(self) -> Sequence[str]:
+        """The names of the local context nodes of the proof state, as they originally appeared in the proof.
+
+        These names should be used for debugging and viewing purposes only, because hypothesis-generating tactics have
+        been modified to use auto-generated names. Hence, tactics should not be concerned about the names of
+        the context.
+        """
         return String_List.init(self.reader.getContextNames(), None)
 
     @property
     def context_text(self) -> Sequence[str]:
+        """A textual representation of the type/definition of context nodes
+        """
         return String_List.init(self.reader.getContextText(), None)
 
     @property
     def conclusion_text(self) -> str:
+        """A textual representation of the conclusion of the proof state.
+        """
         temp = self.reader.getConclusionText()
         return (<char*>temp.begin())[:temp.size()]
 
@@ -469,7 +502,7 @@ cdef class ProofState_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> ProofState:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -491,7 +524,7 @@ cdef class Argument_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Node | None:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -592,7 +625,7 @@ cdef class Outcome_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Outcome:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -659,7 +692,7 @@ cdef class ProofStep_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> ProofStep:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -681,7 +714,7 @@ cdef class Representative_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Definition:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -824,6 +857,11 @@ cdef class Definition:
         constructor or projection. Because those are mutually recursive objects, they reference themselves
         and are therefore part of their own global context.
 
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of the
+        stream. An exception to this rule are mutually recursive definitions, because no topological sort
+        is possible there (see also `clustered_global_context`).
+
         Arguments:
         * across_files -- if False, outputs only the definitions from the local file, default True
         * inclusive -- if True, outputs also itself, default False
@@ -839,6 +877,10 @@ cdef class Definition:
     def clustered_global_context(self, across_files : bool = True, inclusive : bool = False) -> Iterable[list[Definition]]:
         """All of the definitions in the global context when this definition was created, clustered into
         mutually recursive cliques.
+
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of the
+        stream.
 
         Arguments:
         * across_files -- if False, outputs only the definitions from the local file, default True
@@ -1002,7 +1044,7 @@ cdef class Dataset_Definition_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Definition:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -1039,7 +1081,10 @@ cdef class Dataset:
 
     @property
     def dependencies(self) -> Sequence[Path]:
-        """A list of physical paths of data files that are direct dependencies of this file."""
+        """A list of physical paths of data files that are direct dependencies of this file.
+
+        It is guaranteed that no cycles exist in the dependency relation between files induced by this field.
+        """
         dependencies = self.reader.getDependencies()
         # The first dependency is the file itself, which we do not want to expose here.
         count = dependencies.size() - 1
@@ -1072,6 +1117,11 @@ cdef class Dataset:
         * across_files -- if True, outputs also definitions from dependent files, default False
         * spine_only -- if True, outputs only the definitions on the main spine, default False
         Note: across_files = True is incompatible with spine_only = False
+
+        When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
+        any definition in the stream, any definition reachable from the forward closure of the definition
+        also exists in the remainder of the stream. An exception to this rule are mutually recursive definitions,
+        because no topological sort is possible there (see also `clustered_definitions`).
         """
         if across_files and not spine_only:
             raise Exception("Options across_files = True and spine_only = False are incompatible")
@@ -1093,6 +1143,10 @@ cdef class Dataset:
         * across_files -- if True, outputs also definitions from dependent files, default False
         * spine_only -- if True, outputs only the definitions on the main spine, default False
         Note: across_files = True is incompatible with spine_only = False
+
+        When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
+        any definition in the stream, any definition reachable from the forward closure of the definition
+        also exists in the remainder of the stream.
         """
         return Definition._group_by_clusters(
             self.definitions(
@@ -1165,6 +1219,11 @@ cdef class OnlineDefinitionsReader:
     @property
     def definitions(self) -> Iterable[Definition]:
         """The list of definitions that are currently in the global context.
+
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of
+        the stream. An exception to this rule are mutually recursive definitions,
+        because no topological sort is possible there (see also `clustered_definitions`).
         """
         if self.representative is None: return ()
         return self.representative.global_context(inclusive = True)
@@ -1172,6 +1231,10 @@ cdef class OnlineDefinitionsReader:
     @property
     def clustered_definitions(self) -> Iterable[list[Definition]]:
         """All of the definitions present in the global context, clustered by mutually recursive definitions.
+
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of
+        the stream.
         """
         return Definition._group_by_clusters(self.definitions)
 
