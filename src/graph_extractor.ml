@@ -44,6 +44,13 @@ type outcome = proof_state * Constr.t * (Evar.t -> single_proof_state) * proof_s
 type tactical_proof = (outcome list * glob_tactic_expr option) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
 
+(* TODO: All this conversion of proof states, sigmas and other things is really convoluted *)
+let sigma_to_proof_state_lookup sigma (e : Evar.t) : single_proof_state =
+  let info = Evd.find_undefined sigma e in
+  List.map (map_named (EConstr.to_constr ~abort_on_undefined_evars:false sigma)) @@ Evd.evar_filtered_context info,
+  EConstr.to_constr ~abort_on_undefined_evars:false sigma info.evar_concl,
+  e
+
 module type CICGraphMonadType = sig
 
   include Monad.Def

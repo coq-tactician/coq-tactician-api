@@ -117,8 +117,9 @@ struct
     let env = Global.env () in
     let sigma = Evd.from_env env in
     let evd, c = Constrintern.interp_constr_evars env sigma c in
-    let (_, root), ns = GM.run_empty ?def_depth
-      (Builder.gen_constr (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) (EConstr.to_constr evd c)) in
+    let (_, root), ns = GM.run_empty ?def_depth @@
+      GM.with_evar_map (sigma_to_proof_state_lookup evd) @@
+      Builder.gen_constr (Global.env ()) (Names.Id.Map.empty, Names.Cmap.empty) (EConstr.to_constr evd c) in
     make_graph G.final_to_string ns @@ G.node_repr root
 
   let make_proof_graph ?def_depth state =
