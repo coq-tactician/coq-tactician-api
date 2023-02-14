@@ -178,21 +178,9 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
         G.map (fun (s, (a, nl, ch)) -> (s, a), nl, ch) (run (f n) c s))
 
   (* This is a typical function that would benefit greatly from having sized vectors! *)
-  let with_delayed_nodes ?definition i f =
-    let rec aux i nodes =
-      if i = 0 then
-        f nodes
-      else
-        with_delayed_node ?definition @@ fun n ->
-          let+ a, chs = aux (i - 1) (n::nodes) in
-          match chs with
-          | [] -> CErrors.anomaly Pp.(str "with_delayed_nodes received to few children nodes")
-          | (nl, ch)::chs -> (a, chs), nl, ch
-    in
-    let+ a, chs = aux i [] in
-    match chs with
-    | [] -> a
-    | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
+  let with_delayed_nodes ?definition i f = unrun @@ fun c s ->
+    with_delayed_nodes ?definition i (fun n ->
+        G.map (fun (s, (a, chls)) -> (s, a), chls) (run (f n) c s))
 
   (** Registering and lookup of definitions *)
 
