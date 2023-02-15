@@ -268,7 +268,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let f e =
       let d = tactic_result_dependent result e in
       mk_single_proof_state d in
-    mk_proof_state before, term_repr @@ tactic_result_term result, f,
+    mk_proof_state before, term_repr @@ tactic_result_term result, tactic_result_sigma result, f,
     List.map mk_proof_state @@ tactic_result_states result
 
   let grandfathered_constants =

@@ -40,7 +40,7 @@ let proof_state_to_string_safe (hyps, concl) env evar_map =
 
 type single_proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
 type proof_state = Evd.evar_map * (Evar.t -> single_proof_state) * single_proof_state
-type outcome = proof_state * Constr.t * (Evar.t -> single_proof_state) * proof_state list
+type outcome = proof_state * Constr.t * Evd.evar_map * (Evar.t -> single_proof_state) * proof_state list
 type tactical_proof = (outcome list * glob_tactic_expr option) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
 
@@ -536,22 +536,22 @@ end = struct
                  ; tactic_exact } in
         tactic, args in
     let gen_outcome (((before_sigma, before_proof_states, (before_hyps, before_concl, before_evar)),
-                      term, term_proof_states, after) : outcome) =
+                      term, term_sigma, term_proof_states, after) : outcome) =
       let term_text =
         (* Note: We intentionally butcher evars here, because we want all evars of a term to be printed
            as underscores. This increases the chance that the term can be parsed back, because un-named
            evars can usually not be parsed, but underscores can. *)
         let beauti_evar c =
           let rec aux c =
-            match Constr.kind c with
-            | Constr.Evar (x, _) -> Constr.mkEvar (x, [||])
-            | _ -> Constr.map aux c in
+            match CAst.(c.v) with
+            | Constrexpr.CEvar (x, _) -> CAst.make @@ Constrexpr.CHole (None, IntroAnonymous, None)
+            | _ -> Constrexpr_ops.map_constr_expr_with_binders (fun _ () -> ()) (fun () c -> aux c) () c in
           aux c in
         if metadata then
-          Pp.string_of_ppcmds @@ Sexpr.format_oneline @@ Constrextern.with_meta_as_hole (fun () ->
-              Flags.with_option Flags.in_toplevel (fun () ->
-                  with_depth (fun () ->
-                      Printer.safe_pr_constr_env (Global.env()) Evd.empty (beauti_evar term))) ()) ()
+          let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
+          let cexpr = beauti_evar @@ Constrextern.extern_constr false env term_sigma (EConstr.of_constr term) in
+          Pp.string_of_ppcmds @@ Sexpr.format_oneline @@
+          with_depth (fun () -> Ppconstr.pr_constr_expr env term_sigma cexpr)
         else "" in
       let mk_proof_state evd (hyps, concl, evar) =
         let+ root, arr = gen_evar evar in
