@@ -519,22 +519,27 @@ end = struct
         let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
         let base_tactic = Tactic_one_variable.tactic_strip tac in
         let tactic_hash = Hashtbl.hash_param 255 255 base_tactic in
-        let tactic =
-          if metadata then
-            Some { tactic = pr_tac tac_orig
-                 ; tactic_non_anonymous = pr_tac tactic_non_anonymous
-                 ; base_tactic = pr_tac base_tactic
-                 ; interm_tactic = pr_tac interm_tactic
-                 ; tactic_hash
-                 ; tactic_exact }
-          else
-            Some { tactic = ""
-                 ; tactic_non_anonymous = ""
-                 ; base_tactic = ""
-                 ; interm_tactic = ""
-                 ; tactic_hash
-                 ; tactic_exact } in
-        tactic, args in
+        try
+          let tactic =
+            if metadata then
+              Some { tactic = pr_tac tac_orig
+                   ; tactic_non_anonymous = pr_tac tactic_non_anonymous
+                   ; base_tactic = pr_tac base_tactic
+                   ; interm_tactic = pr_tac interm_tactic
+                   ; tactic_hash
+                   ; tactic_exact }
+            else
+              Some { tactic = ""
+                   ; tactic_non_anonymous = ""
+                   ; base_tactic = ""
+                   ; interm_tactic = ""
+                   ; tactic_hash
+                   ; tactic_exact } in
+          tactic, args
+        with e when CErrors.noncritical e || CErrors.is_anomaly e ->
+          (* Aggressively catch errors during tactic printing.
+             Sometimes the printing just errors out, mostly due to notations that no longer exist *)
+          None, [] in
     let gen_outcome (((before_sigma, before_proof_states, (before_hyps, before_concl, before_evar)),
                       term, term_sigma, term_proof_states, after) : outcome) =
       let term_text =
