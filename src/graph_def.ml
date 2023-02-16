@@ -861,12 +861,15 @@ module GraphHasher
     { structural = final ~physical:false
     ; physical = final ~physical:true }
 
-  let calc_min_binder_referenced ch =
-    OList.fold_left (fun acc (_, n) -> match !n with
-        | BinderPlaceholder { depth } -> min acc depth
-        | Normal { min_binder_referenced; _ } | Binder ({ min_binder_referenced; _}, _) ->
-          min acc min_binder_referenced
-        | Written _ -> acc) max_int ch
+  let calc_min_binder_referenced ?extra_child ch =
+    let calc acc n =
+      match !n with
+      | BinderPlaceholder { depth } -> min acc depth
+      | Normal { min_binder_referenced; _ } | Binder ({ min_binder_referenced; _}, _) ->
+        min acc min_binder_referenced
+      | Written _ -> acc in
+    let min = OList.fold_left (fun acc (_, n) -> calc acc n) max_int ch in
+    Option.fold_left calc min extra_child
 
   (** `node_size n` is not really the size of the forward closure, but rather a metric such that
       `node_size n != node_size m` implies that n and m are not bisimilar and for any subterm n'
@@ -1074,7 +1077,7 @@ module GraphHasher
           return v)
     | None ->
       let size = calc_size ch in
-      let min_binder_referenced = calc_min_binder_referenced ch in
+      let min_binder_referenced = calc_min_binder_referenced ?extra_child ch in
       node.contents <- Binder
           ({ label = nl
            ; hash
