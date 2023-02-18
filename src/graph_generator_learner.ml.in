@@ -537,7 +537,9 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     | None ->
       let doc = Stm.get_doc 0 in
       match Stm.(get_ast ~doc (get_current_state ~doc)) with
-      | Some CAst.{ loc = Some Loc.{ fname = InFile f; _ }; _ } -> f
+      | Some CAst.{ loc = Some Loc.{ fname = InFile f; _ }; _ } ->
+        let f = CUnix.remove_path_dot f in
+        if Filename.is_relative f then CUnix.correct_path f (Sys.getcwd ()) else f
       | _ -> CErrors.anomaly Pp.(str "Source file location could not be found") in
     let data_file = Filename.remove_extension source ^ ".bin" in
 
