@@ -830,13 +830,15 @@ module GraphHasher
   open Monad.Make(M)
   include Monad_util.WithMonadNotations(M)
 
-  let physical_hash n =
-    let which = fun { physical; _ } -> physical in
+  let get_hash ~physical n =
+    let which = if physical then fun { physical; _ } -> physical else fun { structural; _ } -> structural in
     match !n with
-      | Written (_, hash) -> which hash
-      | BinderPlaceholder _ -> H.with_state @@ fun x -> x
-      | Normal { hash; _ } -> which hash
-      | Binder ({ hash; _ }, _) -> which hash
+    | Written (_, hash) -> which hash
+    | BinderPlaceholder _ -> H.with_state @@ fun x -> x
+    | Normal { hash; _ } -> which hash
+    | Binder ({ hash; _ }, _) -> which hash
+
+  let physical_hash n = get_hash ~physical:true n
 
   let calc_hash curr_depth nl ch =
     (* Technically speaking, we should sort the hashes to make the final hash invariant w.r.t. child ordering.
@@ -1064,6 +1066,16 @@ module GraphHasher
     let node = ref @@ BinderPlaceholder { depth } in
     let* v, extra_child, nl, ch = f node in
     let hash = calc_hash depth nl ch in
+    (* We need to include the hash of an extra_child, because it needs to be part of the
+       connected_component hash. *)
+    let hash = match extra_child with
+      | None -> hash
+      | Some n -> { physical =
+                      (H.with_state @@ fun state ->
+                       H.update hash.physical @@ H.update (get_hash ~physical:true n) state)
+                  ; structural =
+                      (H.with_state @@ fun state ->
+                       H.update hash.structural @@ H.update (get_hash ~physical:false n) state) } in
     match children_converged ?extra_child ch with
     | Some ch ->
       share_node nl hash
