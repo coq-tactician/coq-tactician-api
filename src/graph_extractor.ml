@@ -21,7 +21,7 @@ let with_depth f =
     (fun () -> Topfmt.set_depth_boxes (Some 32); f ())
 
 let constr_str env evar_map t = Pp.string_of_ppcmds (Sexpr.format_oneline (
-    Printer.safe_pr_constr_env env evar_map t))
+    Printer.pr_constr_env env evar_map t))
 
 let hyp_to_string_safe env evar_map =
   let id_str id = Names.Id.to_string id.binder_name in
@@ -559,6 +559,7 @@ end = struct
           with_depth (fun () -> Ppconstr.pr_constr_expr env term_sigma cexpr)
         else "" in
       let mk_proof_state evd (hyps, concl, evar) =
+        let env = Environ.push_named_context hyps @@ Environ.reset_context env in
         let+ root, arr = gen_evar evar in
         let ps_string = proof_state_to_string_safe (hyps, concl) env evd in
         let concl_string = constr_str env evd concl in
@@ -619,6 +620,7 @@ end = struct
                 | TOther -> return None
               ) args in
           proof_states_after, subject, arguments, map, term in
+        let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
         let+ root = mk_node (ProofState before_evar) ((ContextSubject, subject)::ctx) in
         let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
         let concl_string = constr_str env before_sigma before_concl in
