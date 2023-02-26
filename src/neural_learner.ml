@@ -245,8 +245,14 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentative cversion =
-  ignore(cversion Api.Reader.current_version);
+let init_predict rc wc tacs env =
+  let module Request = Api.Builder.PredictionProtocol.Request in
+  let module Response = Api.Reader.PredictionProtocol.Response in
+  let request = Request.init_root () in
+  let init = Request.initialize_init request in
+  Request.Initialize.log_annotation_set init @@ log_annotation ();
+
+  ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
   let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
@@ -282,7 +288,8 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
       TacticMap.add
         (Hashtbl.hash_param 255 255 base_tactic) (base_tactic, List.length args) map)
       TacticMap.empty tacs in
-  let tac_arr = ctacs @@ TacticMap.cardinal tacs in
+
+  let tac_arr = Request.Initialize.tactics_init init @@ TacticMap.cardinal tacs in
   List.iteri (fun i (hash, (_tac, params)) ->
       let arri = Capnp.Array.get tac_arr i in
       Api.Builder.AbstractTactic.ident_set_int_exn arri hash;
@@ -296,41 +303,14 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
   Graph_capnp_generator.write_graph
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
     ~node_dep_index:(fun _ -> 0) ~node_local_index
-    ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges cgraph;
-
-  let definitions =
-    let f (_, (_, n)) =
-      let (_, (def, n)), _ = G.lower n in
-      assert def; Stdint.Uint32.of_int n in
-    (List.map f @@ Cmap.bindings state.definition_nodes.constants) @
-    (List.map f @@ Indmap.bindings state.definition_nodes.inductives) @
-    (List.map f @@ Constrmap.bindings state.definition_nodes.constructors) @
-    (List.map f @@ ProjMap.bindings state.definition_nodes.projections) @
-    (List.map (fun (_, n) ->
-         let (_, (def, n)), _ = G.lower n in
-         assert def; Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
-  in
-  ignore(cdefinitions definitions);
+    ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges
+    (Request.Initialize.graph_init init);
 
   let representative = match state.previous with
     | None -> def_count + node_count
     | Some i -> node_local_index @@ fst @@ G.transform_node_type @@ G.lower i in
-  crepresentative(representative);
+  Request.Initialize.representative_set_int_exn init representative;
 
-  state, tacs
-
-let init_predict rc wc tacs env =
-  let module Request = Api.Builder.PredictionProtocol.Request in
-  let module Response = Api.Reader.PredictionProtocol.Response in
-  let request = Request.init_root () in
-  let init = Request.initialize_init request in
-  Request.Initialize.log_annotation_set init @@ log_annotation ();
-  let state, tacs = populate_global_context_info tacs env
-    (Request.Initialize.tactics_init init)
-    (Request.Initialize.graph_init init)
-    (Request.Initialize.definitions_set_list init)
-    (Request.Initialize.representative_set_int_exn init)
-    (Request.Initialize.data_version_set_reader init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -346,13 +326,8 @@ let check_neural_alignment () =
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
   let request = Request.init_root () in
-  let init = Request.check_alignment_init request in
-  let state, tacs = populate_global_context_info !last_model env
-      (Request.CheckAlignment.tactics_init init)
-      (Request.CheckAlignment.graph_init init)
-      (Request.CheckAlignment.definitions_set_list init)
-      (Request.CheckAlignment.representative_set_int_exn init)
-      (Request.CheckAlignment.data_version_set_reader init) in
+  Request.check_alignment_set request;
+  let tacs, state = init_predict rc wc !last_model env in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -377,11 +352,16 @@ let check_neural_alignment () =
                   | TRef r -> Libnames.pr_path @@ Nametab.path_of_global r
                   | TOther -> Pp.mt ())
                 unaligned_defs) in
+      let def_count = Id.Map.cardinal state.section_nodes +
+                      Cmap.cardinal state.definition_nodes.constants +
+                      Indmap.cardinal state.definition_nodes.inductives +
+                      Constrmap.cardinal state.definition_nodes.constructors +
+                      ProjMap.cardinal state.definition_nodes.projections in
       Feedback.msg_notice Pp.(
           str "There are " ++ int (List.length unaligned_tacs) ++ str "/" ++
-          int (Array.length @@ Request.CheckAlignment.tactics_get_array init) ++ str " unaligned tactics and " ++
+          int (TacticMap.cardinal tacs) ++ str " unaligned tactics and " ++
           int (List.length unaligned_defs) ++ str "/" ++
-          int (Array.length @@ Request.CheckAlignment.definitions_get_array init) ++ str " unaligned definitions." ++
+          int def_count ++ str " unaligned definitions." ++
           tacs_msg ++ defs_msg
         )
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")

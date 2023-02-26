@@ -401,7 +401,7 @@ struct DataVersion {
   # In the future, a minor version id might be introduced.
 }
 
-const currentVersion :DataVersion = ( major = 14 );
+const currentVersion :DataVersion = ( major = 15 );
 
 
 ######################################################################################################
@@ -527,49 +527,40 @@ struct PredictionProtocol {
         # Start a context for making tactical predictions for proof search. The context includes the tactics
         # that are currently available, the definitions that are available.
 
-        dataVersion @12 :DataVersion;
+        dataVersion @0 :DataVersion;
         # The version number this message and subsequent messages is compatible with.
 
-        tactics @0 :List(AbstractTactic);
+        stackSize @1 :Int32;
+
+        tactics @2 :List(AbstractTactic);
         # A list of tactics that Coq currently knows about.
 
-        graph @1 :Graph;
+        graph @3 :Graph;
 
-        definitions @2 :List(NodeIndex);
-        # The list of definitions that are currently in the global context.
-        # TODO: With the introduction of `representative` this is redundant. Consider removing.
-
-        logAnnotation @3 :Text;
+        logAnnotation @4 :Text;
         # An annotation containing file and line information on where Coq is currently processing.
 
-        representative @10 :NodeIndex;
+        representative @5 :NodeIndex;
         # Points to the last definition of the global context. All other definitions can be accessed by following
         # the `Definition.previous` chain starting from this definition. If the global context is empty
         # this is equal to `len(graph.nodes)`.
       }
       predict :group {
         # Request a list of tactic predictions given the graph of a proof state.
-        graph @4 :Graph;
+
+        graph @6 :Graph;
         # The graph may reference definitions that were transmitted during the the `initialize` message.
         # This graph is designated using the `DepIndex` 1.
-        state @5 :ProofState;
+
+        state @7 :ProofState;
       }
-      synchronize @6 :UInt64;
+      synchronize @8 :UInt64;
       # Coq uses this message to synchronize the state of the protocol when exceptions have occurred.
       # The contract is that the given integer needs to be echo'd back verbatim.
-      checkAlignment :group {
-        # Request for the server to align the given tactics and definition to it's internal knowledge
-        # and report back any tactics and definitions that were not found
 
-        dataVersion @13 :DataVersion;
-        # The version number this message and subsequent messages is compatible with.
-
-        tactics @7 :List(AbstractTactic);
-        graph @8 :Graph;
-        definitions @9 :List(NodeIndex);
-        # TODO: With the introduction of `representative` this is redundant. Consider removing.
-        representative @11 :NodeIndex;
-      }
+      checkAlignment @9 :Void;
+      # Request for the server to align the given tactics and definition to it's internal knowledge
+      # and report back any tactics and definitions that were not found
     }
   }
   struct Prediction {
