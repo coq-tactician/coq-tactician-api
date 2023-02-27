@@ -243,6 +243,7 @@ let init_predict_text rc wc =
   let request = Request.init_root () in
   let init = Request.initialize_init request in
   Request.Initialize.log_annotation_set init @@ log_annotation ();
+  ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->

@@ -22,18 +22,21 @@ class OracleTactic:
     arguments: tuple[GlobalArgument | LocalArgument, ...]
     clean: bool
 
-def text_prediction_loop(text_oracle_data, messages_generator):
-    for msg in messages_generator:
-        if isinstance(msg, GlobalContextMessage):
-            for proof_state in msg.prediction_requests:
-                if proof_state.text in text_oracle_data:
-                    preds = [TacticPredictionText(t, 1) for t in text_oracle_data[proof_state.text]]
-                else:
-                    preds = []
-                msg.prediction_requests.send(TacticPredictionsText(preds))
+def text_prediction_loop(text_oracle_data, context: GlobalContextMessage):
+    prediction_requests = context.prediction_requests
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            if proof_state.text in text_oracle_data:
+                preds = [TacticPredictionText(t, 1) for t in text_oracle_data[proof_state.text]]
+            else:
+                preds = []
+            prediction_requests.send(TacticPredictionsText(preds))
         elif isinstance(msg, CheckAlignmentMessage):
             alignment = CheckAlignmentResponse([], [])
-            messages_generator.send(alignment)
+            prediction_requests.send(alignment)
+        elif isinstance(msg, GlobalContextMessage):
+            text_prediction_loop(text_oracle_data, msg)
         else:
             raise Exception("Capnp protocol error")
 
@@ -58,7 +61,6 @@ def graph_prediction_loop(context: GlobalContextMessage, oracle_data, known_defi
                 for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
                 if t.tactic_id in available_tacticids and
                 all([resolve_arg(arg) is not None for arg in t.arguments])]
-            print(possible_tactics)
             prediction_requests.send(TacticPredictionsGraph(possible_tactics))
         elif isinstance(msg, CheckAlignmentMessage):
             unknown_definitions = [ d for d in context.definitions.definitions()

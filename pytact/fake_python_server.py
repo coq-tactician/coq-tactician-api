@@ -3,22 +3,25 @@ import sys
 import socket
 import argparse
 import pytact.graph_visualize as gv
-from pytact.data_reader import (capnp_message_generator, ProofState, Definition,
+from pytact.data_reader import (capnp_message_generator, ProofState,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 TacticPredictionText, TacticPredictionsText,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
 
-def text_prediction_loop(messages_generator):
+def text_prediction_loop(context : GlobalContextMessage):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
-    for msg in messages_generator:
-        if isinstance(msg, GlobalContextMessage):
-            for proof_state in msg.prediction_requests:
-                print(proof_state.text)
-                preds = [TacticPredictionText(t, 0.5) for t in tactics]
-                msg.prediction_requests.send(TacticPredictionsText(preds))
+    prediction_requests = context.prediction_requests
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            print(proof_state.text)
+            preds = [TacticPredictionText(t, 0.5) for t in tactics]
+            prediction_requests.send(TacticPredictionsText(preds))
         elif isinstance(msg, CheckAlignmentMessage):
             alignment = CheckAlignmentResponse([], [])
-            messages_generator.send(alignment)
+            prediction_requests.send(alignment)
+        elif isinstance(msg, GlobalContextMessage):
+            text_prediction_loop(msg)
         else:
             raise Exception("Capnp protocol error")
 
