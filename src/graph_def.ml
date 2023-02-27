@@ -619,7 +619,12 @@ module CICHasher
   let update_node_label ~physical p =
     let u = update_int in
     match p with
-    | ProofState e -> fun s -> u 0 @@ u (Evar.repr e) s (* Special care needs to be taken because two evars are never equal *)
+    | ProofState e ->
+      (* TODO: Take the evar into account. Evars are somewhat non-deterministic during proof search,
+         so we cannot hash them. But morally we should has them, because it is possible to have two evars
+         with the same hyps and conclusion that are nontheless different. *)
+      (* fun s -> u 0 @@ u (Evar.repr e) s *)
+      u 0
     | ContextDef (idx, _) -> fun s -> u 2 @@ update_int idx s
     | ContextAssum (idx, _) -> fun s -> u 3 @@ update_int idx s
     | Definition { path; previous; external_previous; status; _ } -> fun s ->
