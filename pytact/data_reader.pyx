@@ -1293,11 +1293,22 @@ class TacticPredictionsText:
     predictions : list[TacticPredictionsText]
 
 @dataclass
+class CheckAlignmentMessage:
+    pass
+
+@dataclass
+class CheckAlignmentResponse:
+    unknown_definitions : list[Definition]
+    unknown_tactics : list[int]
+
+@dataclass
 class GlobalContextMessage:
     definitions : OnlineDefinitionsReader
     tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
     log_annotation : str
-    prediction_requests : Generator[ProofState, TacticPredictionsGraph | TacticPredictionsText, None]
+    prediction_requests : Generator[ProofState | CheckAlignmentMessage,
+                                    TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
+                                    None]
 
 def convert_predictions(preds):
     if isinstance(preds, TacticPredictionsText):
@@ -1313,16 +1324,6 @@ def convert_predictions(preds):
         return graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
     else:
         raise Exception("Incorrect predictions received")
-
-@dataclass
-class CheckAlignmentMessage:
-    definitions : OnlineDefinitionsReader
-    tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
-
-@dataclass
-class CheckAlignmentResponse:
-    unknown_definitions : list[Definition]
-    unknown_tactics : list[int]
 
 def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | None = None) -> (
         Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
@@ -1367,7 +1368,7 @@ def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | N
         msg = next_disabled_sigint()
 
 def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> (
-        Generator[GlobalContextMessage | CheckAlignmentMessage, None | CheckAlignmentResponse, None]):
+        Generator[GlobalContextMessage, None, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
 
     Given a `socket`, this function creates a generator that can yield two different kinds of message:
@@ -1391,16 +1392,6 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
             response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
             lgenerator.send(response)
             msg = next(lgenerator, None)
-        elif msg.is_check_alignment:
-            ca = msg.check_alignment
-            with online_definitions_initialize(ca.graph, ca.representative) as definitions:
-                alignment = yield CheckAlignmentMessage(definitions, ca.tactics)
-                alignment = {'unalignedTactics': alignment.unknown_tactics,
-                             'unalignedDefinitions': [d.node.nodeid for d in alignment.unknown_definitions]}
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-            lgenerator.send(response)
-            yield
-            msg = next(lgenerator, None)
         elif msg.is_initialize:
             response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
             lgenerator.send(response)
@@ -1415,6 +1406,14 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
                             with online_data_predict(definitions, pred_msg.predict) as proof_state:
                                 preds = yield proof_state
                                 response = convert_predictions(preds)
+                            lgenerator.send(response)
+                            yield
+                            pred_msg = next(lgenerator, None)
+                        elif pred_msg.is_check_alignment:
+                            alignment = yield CheckAlignmentMessage()
+                            alignment = {'unalignedTactics': alignment.unknown_tactics,
+                                         'unalignedDefinitions': [d.node.nodeid for d in alignment.unknown_definitions]}
+                            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
                             lgenerator.send(response)
                             yield
                             pred_msg = next(lgenerator, None)

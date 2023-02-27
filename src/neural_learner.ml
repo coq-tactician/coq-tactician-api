@@ -47,7 +47,7 @@ let executable_option = declare_string_option ~name:"Executable" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
-type location = Local | Global
+type location = int
 module Hashable = struct
   type t = location
   let hash _ = XXHasher.with_state @@ fun h -> h
@@ -245,7 +245,17 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-let init_predict rc wc tacs env =
+type cache_info = { stack_size : int
+                  ; state : CICGraphMonad.state }
+
+let graph_cache =
+  let (empty_state, ()), _ = CICGraphMonad.run_empty (CICGraphMonad.return ())
+      (G.HashMap.create 0) G.builder_nil 0 in
+  Summary.ref ~name:"neural-learner-graph-cache"
+    { stack_size = 0
+    ; state = empty_state }
+
+let init_predict rc wc tacs env { stack_size; state } =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
@@ -253,6 +263,7 @@ let init_predict rc wc tacs env =
   Request.Initialize.log_annotation_set init @@ log_annotation ();
 
   ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
+  Request.Initialize.stack_size_set_int_exn init stack_size;
   let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
@@ -276,8 +287,8 @@ let init_predict rc wc tacs env =
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraphMonad.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater
-        (G.HashMap.create 100) G.builder_nil Global in
+      CICGraphMonad.run ~include_opaque:false ~def_truncate:(truncate_option ()) ~state updater
+        (G.HashMap.create 100) G.builder_nil stack_size in
     builder, state in
 
   let tacs = List.fold_left (fun map tac ->
@@ -302,7 +313,7 @@ let init_predict rc wc tacs env =
   let node_label n = fst @@ G.transform_node_type n in
   Graph_capnp_generator.write_graph
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
-    ~node_dep_index:(fun _ -> 0) ~node_local_index
+    ~node_dep_index:(fun (stack_id, _) -> stack_size - stack_id) ~node_local_index
     ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges
     (Request.Initialize.graph_init init);
 
@@ -316,7 +327,7 @@ let init_predict rc wc tacs env =
   | Some response ->
     let response = Response.of_message response in
     match Response.get response with
-    | Response.Initialized -> tacs, state
+    | Response.Initialized -> tacs, { stack_size = stack_size + 1; state }
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
 let check_neural_alignment () =
@@ -327,7 +338,7 @@ let check_neural_alignment () =
   let env = Global.env () in
   let request = Request.init_root () in
   Request.check_alignment_set request;
-  let tacs, state = init_predict rc wc !last_model env in
+  let tacs, { state; _ } = init_predict rc wc !last_model env !graph_cache in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -418,7 +429,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
-  let predict rc wc find_global_argument state tacs env ps =
+  let predict rc wc find_global_argument { stack_size; state } tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
@@ -431,7 +442,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let updater = gen_proof_state env ps in
     let (_, (root, context_map)), { def_count; node_count; edge_count; defs; nodes; edges } =
       CICGraphMonad.run ~include_opaque:false ~state updater
-        (G.HashMap.create 100) G.builder_nil Local in
+        (G.HashMap.create 100) G.builder_nil stack_size in
     let node_local_index (_, (def, i)) =
       if def then i else def_count + i in
     let context_map = Id.Map.map (fun n ->
@@ -446,9 +457,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
 
-    let node_dep_index (p, _) = match p with
-      | Local -> 0
-      | Global -> 1 in
+    let node_dep_index (stack_id, _) = stack_size - stack_id in
     let node_hash n = snd @@ G.transform_node_type n in
     let node_label n = fst @@ G.transform_node_type n in
     Graph_capnp_generator.write_graph
@@ -462,7 +471,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let context_arr = ProofState.context_init state @@ List.length context_range in
     List.iteri (fun i arg ->
         let arri = Capnp.Array.get context_arr i in
-        Node.dep_index_set_exn arri @@ node_dep_index (Local, arg);
+        Node.dep_index_set_exn arri @@ node_dep_index (stack_size, arg);
         Node.node_index_set_int_exn arri arg
       ) context_range;
     match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
@@ -532,11 +541,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     drain read_context write_context;
     if not @@ textmode_option () then
       let env = Global.env () in
-      let tacs, state = init_predict read_context write_context tactics env in
-      let find_global_argument = find_global_argument state in
+      let tacs, cache = init_predict read_context write_context tactics env !graph_cache in
+      let find_global_argument = find_global_argument cache.state in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict read_context write_context find_global_argument state tacs env
+          let preds = predict read_context write_context find_global_argument cache tacs env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds

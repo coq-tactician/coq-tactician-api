@@ -3,7 +3,7 @@ import sys
 import socket
 import argparse
 import pytact.graph_visualize as gv
-from pytact.data_reader import (capnp_message_generator,
+from pytact.data_reader import (capnp_message_generator, ProofState,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 TacticPredictionText, TacticPredictionsText,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
@@ -24,44 +24,39 @@ def text_prediction_loop(messages_generator):
 
 def prediction_loop(context):
     prediction_requests = context.prediction_requests
-    for proof_state in prediction_requests:
-        gv.visualize_proof_state(proof_state)
-        zeroArgs = [t.ident for t in context.tactics if t.parameters == 0]
-        preds = [TacticPredictionGraph(t, [], 0.5) for t in zeroArgs]
-        if len(proof_state.context) > 0:
-            oneArg = [t.ident for t in context.tactics if t.parameters == 1]
-            hyp_node = proof_state.context[0]
-            preds += [TacticPredictionGraph(t, [hyp_node], 0.5) for t in oneArg]
-        for d in context.definitions.definitions:
-            if d.name == "Coq.Init.Logic.I":
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            gv.visualize_proof_state(proof_state)
+            zeroArgs = [t.ident for t in context.tactics if t.parameters == 0]
+            preds = [TacticPredictionGraph(t, [], 0.5) for t in zeroArgs]
+            if len(proof_state.context) > 0:
                 oneArg = [t.ident for t in context.tactics if t.parameters == 1]
-                preds += [TacticPredictionGraph(t, [d.node], 0.5) for t in oneArg]
-        prediction_requests.send(TacticPredictionsGraph(preds))
+                hyp_node = proof_state.context[0]
+                preds += [TacticPredictionGraph(t, [hyp_node], 0.5) for t in oneArg]
+            for d in context.definitions.definitions:
+                if d.name == "Coq.Init.Logic.I":
+                    oneArg = [t.ident for t in context.tactics if t.parameters == 1]
+                    preds += [TacticPredictionGraph(t, [d.node], 0.5) for t in oneArg]
+            prediction_requests.send(TacticPredictionsGraph(preds))
+        elif isinstance(msg, CheckAlignmentMessage):
+            unknown_definitions = list(context.definitions.definitions)
+            unknown_tactics = [t.ident for t in context.tactics]
+            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
+            prediction_requests.send(alignment)
+        else:
+            raise Exception("Capnp protocol error")
 
 def graph_initialize_loop(messages_generator):
     for msg in messages_generator:
-        if isinstance(msg, GlobalContextMessage):
-            for cluster in msg.definitions.clustered_definitions:
-                print('cluster:')
-                for d in cluster:
-                    print(f'    {d.name}')
-            for t in msg.tactics:
-                print(t)
-            print(msg.log_annotation)
-            prediction_loop(msg)
-        elif isinstance(msg, CheckAlignmentMessage):
-            for cluster in msg.definitions.clustered_definitions:
-                print('cluster:')
-                for d in cluster:
-                    print(f'    {d.name}')
-            for t in msg.tactics:
-                print(t)
-            unknown_definitions = list(msg.definitions.definitions)
-            unknown_tactics = [t.ident for t in msg.tactics]
-            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
-            messages_generator.send(alignment)
-        else:
-            raise Exception("Capnp protocol error")
+        for cluster in msg.definitions.clustered_definitions:
+            print('cluster:')
+            for d in cluster:
+                print(f'    {d.name}')
+        for t in msg.tactics:
+            print(t)
+        print(msg.log_annotation)
+        prediction_loop(msg)
 
 def run_session(args, capnp_socket, record_file):
     messages_generator = capnp_message_generator(capnp_socket, record_file)

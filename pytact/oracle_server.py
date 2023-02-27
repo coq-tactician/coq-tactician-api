@@ -5,7 +5,7 @@ import sys
 import socket
 import argparse
 import contextlib
-from pytact.data_reader import (data_reader, Original, capnp_message_generator,
+from pytact.data_reader import (data_reader, Original, capnp_message_generator, ProofState,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 TacticPredictionText, TacticPredictionsText,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
@@ -37,40 +37,41 @@ def text_prediction_loop(text_oracle_data, messages_generator):
         else:
             raise Exception("Capnp protocol error")
 
-def prediction_loop(oracle_data, context):
+def prediction_loop(oracle_data, context, known_definitions, known_tactics):
     available_tacticids = set([ t.ident for t in context.tactics ])
     available_definitions = { d.node.identity : d.node for d in context.definitions.definitions }
     prediction_requests = context.prediction_requests
-    for proof_state in prediction_requests:
-        def resolve_arg(arg):
-            if isinstance(arg, LocalArgument):
-                return proof_state.context[arg.context_index]
-            elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
-                return available_definitions[arg.identity]
-            else:
-                return None
-        possible_tactics = [
-            TacticPredictionGraph(t.tactic_id,
-                                  [resolve_arg(arg) for arg in t.arguments],
-                                  1 if t.clean else 0.95)
-            for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
-            if t.tactic_id in available_tacticids and
-            all([resolve_arg(arg) is not None for arg in t.arguments])]
-        prediction_requests.send(TacticPredictionsGraph(possible_tactics))
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            def resolve_arg(arg):
+                if isinstance(arg, LocalArgument):
+                    return proof_state.context[arg.context_index]
+                elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
+                    return available_definitions[arg.identity]
+                else:
+                    return None
+            possible_tactics = [
+                TacticPredictionGraph(t.tactic_id,
+                                    [resolve_arg(arg) for arg in t.arguments],
+                                    1 if t.clean else 0.95)
+                for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
+                if t.tactic_id in available_tacticids and
+                all([resolve_arg(arg) is not None for arg in t.arguments])]
+            prediction_requests.send(TacticPredictionsGraph(possible_tactics))
+        elif isinstance(msg, CheckAlignmentMessage):
+            unknown_definitions = [ d for d in context.definitions.definitions
+                                    if d.node.identity not in known_definitions ]
+            unknown_tactics = [ t.ident for t in context.tactics
+                                if t.ident not in known_tactics ]
+            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
+            prediction_requests.send(alignment)
+        else:
+            raise Exception("Capnp protocol error")
 
 def graph_initialize_loop(oracle_data, known_definitions, known_tactics, messages_generator):
     for msg in messages_generator:
-        if isinstance(msg, GlobalContextMessage):
-            prediction_loop(oracle_data, msg)
-        elif isinstance(msg, CheckAlignmentMessage):
-            unknown_definitions = [ d for d in msg.definitions.definitions
-                                    if d.node.identity not in known_definitions ]
-            unknown_tactics = [ t.ident for t in msg.tactics
-                                if t.ident not in known_tactics ]
-            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
-            messages_generator.send(alignment)
-        else:
-            raise Exception("Capnp protocol error")
+        prediction_loop(oracle_data, msg, known_definitions, known_tactics)
 
 def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics, args, capnp_socket, record_file):
     messages_generator = capnp_message_generator(capnp_socket, record_file)
