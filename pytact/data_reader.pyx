@@ -1396,6 +1396,11 @@ def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
             msg = next(lgenerator, None)
         elif msg.is_initialize:
             init = msg.initialize
+            if init.data_version.major != graph_api_capnp.currentVersion.major:
+                raise ValueError(
+                    f"This library is compiled for a dataset containing data versioned as "
+                    f"{graph_api_capnp.currentVersion} but file Coq sent a message versioned as "
+                    f"{init.data_version}.")
             if init.stack_size != defs.graph_index.nodes.size():
                 return msg
             else:
