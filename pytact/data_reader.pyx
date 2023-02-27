@@ -38,18 +38,10 @@ low-level interface.
 
 ## Highlevel interface
 
-The function `capnp_message_generator` converts a socket into a generator that
+The function `capnp_message_generator` converts a socket into a nested generator that
 yields request messages for predictions and expects to be sent response messages
 in return. A simple example of how to handle these messages is in `fake_python_server.py`.
-Possible messages are:
-1. `CheckAlignmentMessage`: Coq is asking the server to check which tactics and
-   definitions are known to it. A `CheckAlignmentResponse` message is expected in return.
-2. `GlobalContextMessage`: A new global context of definitions is sent. Coq will
-   subsequently send a number of prediction requests that rely on this global context.
-   These requests can be accessed through a sub-generator in
-   `GlobalContextMessage.prediction_requests`. This sub-generator yields `ProofState`'s and
-   expects either a `TacticPredictionsGraph` or `TacticPredictionsText` message in return.
-   The sub-generator needs to be exhausted before the main generator can be queried again.
+Some docs can be found with `capnp_message_generator`.
 
 ## Lowlevel interface
 
@@ -60,16 +52,18 @@ messages in return. There are four types of messages `msg` Coq sends.
    it's state with the server. A `PredictionProtocol.Response.synchronized` message is expected
    in return.
 2. Initialize: If `msg.is_initialize` is true, Coq is sending a list of available
-   tactics and the current global context. You can conveniently read this global context using
+   tactics and the current global context to be added to an existing stack of global context
+   information. An empty stack can be created through `empty_online_definitions_initialize`.
+   To add an initialize message to the stack, you can use
    ```
-   with online_definitions_initialize(msg.initialize.graph,
-                                      msg.initialize.representative) as definitions:
+   with online_definitions_initialize(existing_stack, msg) as definitions:
        print(type(definitions))
    ```
-   Any subsequent prediction request (see (4)) will be made in the context of the
-   tactics and predictions sent in this message, until a new initialize message
-   is received.
-   A `PredictionProtocol.Response.initialized` message is expected in return.
+   Any subsequent messages will be made in the context of the
+   tactics and predictions sent in this message, until an initialize message is received
+   such that `msg.initialize.stack_size` is smaller than the current stack size.
+
+   A `PredictionProtocol.Response.initialized` message is expected in response of this message.
 4. Predict: If `msg.is_predict` is true, Coq is asking to predict a list of plausible
    tactics given a proof state. The proof state can be easily accessed using
    ```
@@ -1270,6 +1264,9 @@ def online_definitions_initialize(OnlineDefinitionsReader stack,
     dr = OnlineDefinitionsReader.init(graph_index, init.source)
     yield dr
 
+def empty_online_definitions_initialize() -> OnlineDefinitionsReader:
+    defs = OnlineDefinitionsReader.init_empty()
+
 @contextmanager
 def online_data_predict(OnlineDefinitionsReader base,
                         PredictionProtocol_Request_Predict_Reader predict) -> Generator[ProofState, None, None]:
@@ -1437,15 +1434,18 @@ def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
 def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> GlobalContextMessage:
     """A generator that facilitates communication between a prediction server and a Coq process.
 
-    Given a `socket`, this function creates a generator that can yield two different kinds of message:
-    - `GlobalContextMessage`: When such a message is yielded, a new prediction context is started.
-       Prediction requests will be received via a sub-generator `message.prediction_requests`. This
-       sub-generator yields `ProofState`'s and expects to be sent back predictions as either
-       the `TacticPredictionsGraph` or `TacticPredictionsText` dataclass. Once the sub-generator is
-       exhausted, the main generator will resume.
+    Given a `socket`, this function creates a `GlobalContextMessage` `context`. This message contains an
+    initially empty list of available tactics and definitions in the global context. Through
+    `context.prediction_requests` one can access a generator that yields prediction requests and expects
+    predictions to be sent in response. The possible messages are as follows:
+    - `GlobalContextMessage`: An additional, nested global context message that adds in additional tactics
+       and definitions. The prediction requests of this nested context need to be exhausted before continuing
+       with messages from the current context.
     - `CheckAlignmentMessage`: A request to check which of Coq's current tactics and definitions the
       prediction server currently "knows about". The generator expects a `CheckAlignmentResponse` to be
       sent in response.
+    - `ProofState`: A request to make tactic predictions for a given proof state. Either a
+      `TacticPredictionsGraph` or a `TacticPredictionsText` message is expected in return.
 
     When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
     descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
