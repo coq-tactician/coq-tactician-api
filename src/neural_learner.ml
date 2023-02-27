@@ -40,7 +40,6 @@ let declare_string_option ~name ~default =
     } in
   optread
 
-let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
 let tcp_option = declare_string_option ~name:"Server" ~default:""
 let executable_option = declare_string_option ~name:"Executable" ~default:""
@@ -294,7 +293,7 @@ let init_predict rc wc tacs env { stack_size; state } =
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraphMonad.run ~include_opaque:false ~def_truncate:(truncate_option ()) ~state updater
+      CICGraphMonad.run ~include_opaque:false ~state updater
         (G.HashMap.create 100) G.builder_nil stack_size in
     builder, state in
 

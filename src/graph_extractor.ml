@@ -100,7 +100,6 @@ module type CICGraphMonadType = sig
         by an Evar node. If an element in the node is None, it is a section variable. *)
   val lookup_named_map    : node Id.Map.t t
   val lookup_def_depth    : int option t
-  val lookup_def_truncate : bool t
   val lookup_env          : Environ.env t
   val lookup_env_extra    : env_extra t
   val lookup_include_metadata : bool t
@@ -129,10 +128,10 @@ module type CICGraphMonadType = sig
     ; definition_nodes : definitions}
 
   val run :
-    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int -> state:state ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_depth:int -> state:state ->
     'a t -> (state * 'a) repr_t
   val run_empty :
-    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_depth:int ->
     'a t -> (state * 'a) repr_t
 end
 module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
@@ -157,7 +156,6 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     { relative     : node list
     ; named        : node Id.Map.t
     ; def_depth    : int option
-    ; def_truncate : bool
     ; env          : Environ.env option
     ; env_extra    : env_extra option
     ; metadata     : bool
@@ -282,9 +280,6 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let lookup_def_depth =
     let+ { def_depth; _ } = ask in
     def_depth
-  let lookup_def_truncate =
-    let+ { def_truncate; _ } = ask in
-    def_truncate
   let lookup_env =
     let+ { env; _ } = ask in
     match env with
@@ -330,14 +325,14 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let with_evar_map evar_map m =
     with_empty_evars @@ local (fun c -> { c with evar_map }) m
 
-  let run ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth ~state m =
+  let run ?(include_metadata=false) ?(include_opaque=true) ?def_depth ~state m =
     G.run @@
     let context =
       { relative = []; named = Id.Map.empty; evar_map = (fun e -> raise Not_found)
-      ; def_depth; def_truncate; env = None; env_extra = None; metadata = include_metadata
+      ; def_depth; env = None; env_extra = None; metadata = include_metadata
       ; opaque = include_opaque } in
     G.map (fun ((s, se), a) -> s, a) @@ run m context (state, Evar.Map.empty)
-  let run_empty ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth m =
+  let run_empty ?(include_metadata=false) ?(include_opaque=true) ?def_depth m =
     let definition_nodes =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
@@ -348,7 +343,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
       ; external_previous = []
       ; section_nodes = Id.Map.empty
       ; definition_nodes } in
-    run ~include_metadata ~include_opaque ~def_truncate ?def_depth ~state m
+    run ~include_metadata ~include_opaque ?def_depth ~state m
 end
 
 module GraphBuilder
@@ -502,10 +497,6 @@ end = struct
     | Some follow_defs ->
       if follow_defs > 0 then with_decremented_def_depth m else alt
 
-  let if_not_truncate alt m =
-    let* truncate = lookup_def_truncate in
-    if truncate then alt else m
-
   let rec gen_proof_step (outcomes, tactic) =
     let* env = lookup_env
     and+ metadata = lookup_include_metadata in
@@ -640,7 +631,7 @@ end = struct
     let gen_const_aux d p =
       let* env = lookup_env in
       let { const_body; const_type; _ } = Environ.lookup_constant c env in
-      let* children = if_not_truncate (return []) @@
+      let* children =
         let bt, b = match const_body with
           | Undef _ -> ConstUndef, mk_node ConstEmpty []
           | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
@@ -782,7 +773,7 @@ end = struct
     | None ->
       let gen_aux c =
         follow_def (mk_fake_definition (fun _self -> c) (GlobRef.VarRef id)) @@
-        let* children = if_not_truncate (return []) @@
+        let* children =
           match def with
           | Named.Declaration.LocalAssum (_, typ) ->
             let+ typ = gen_constr typ
