@@ -122,7 +122,7 @@ If you have a prediction server already running somewhere over TCP, you can make
 Set Tactician Neural Server "<address>:<port>".
 ```
 At this point, you have the following commands available which will interact with the server:
-- `Check Neural Alignment` will ask the which tactics and definitions currently in scope are unknown to it.
+- `Tactician Neural Alignment` will ask the which tactics and definitions currently in scope are unknown to it.
   This is meant as a sanity check.
 - `Suggest` and `Debug Suggest` will ask the server for predictions for the current proof state.
 - `synth` and `debug synth` will perform a proof search by repeatedly asking the server for predictions.

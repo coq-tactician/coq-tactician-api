@@ -37,9 +37,9 @@ def text_prediction_loop(text_oracle_data, messages_generator):
         else:
             raise Exception("Capnp protocol error")
 
-def prediction_loop(oracle_data, context, known_definitions, known_tactics):
+def graph_prediction_loop(context: GlobalContextMessage, oracle_data, known_definitions, known_tactics):
     available_tacticids = set([ t.ident for t in context.tactics ])
-    available_definitions = { d.node.identity : d.node for d in context.definitions.definitions }
+    available_definitions = { d.node.identity : d.node for d in context.definitions.definitions() }
     prediction_requests = context.prediction_requests
     for msg in prediction_requests:
         if isinstance(msg, ProofState):
@@ -58,20 +58,19 @@ def prediction_loop(oracle_data, context, known_definitions, known_tactics):
                 for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
                 if t.tactic_id in available_tacticids and
                 all([resolve_arg(arg) is not None for arg in t.arguments])]
+            print(possible_tactics)
             prediction_requests.send(TacticPredictionsGraph(possible_tactics))
         elif isinstance(msg, CheckAlignmentMessage):
-            unknown_definitions = [ d for d in context.definitions.definitions
+            unknown_definitions = [ d for d in context.definitions.definitions()
                                     if d.node.identity not in known_definitions ]
             unknown_tactics = [ t.ident for t in context.tactics
                                 if t.ident not in known_tactics ]
             alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
             prediction_requests.send(alignment)
+        elif isinstance(msg, GlobalContextMessage):
+            graph_prediction_loop(msg, oracle_data, known_definitions, known_tactics)
         else:
             raise Exception("Capnp protocol error")
-
-def graph_initialize_loop(oracle_data, known_definitions, known_tactics, messages_generator):
-    for msg in messages_generator:
-        prediction_loop(oracle_data, msg, known_definitions, known_tactics)
 
 def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics, args, capnp_socket, record_file):
     messages_generator = capnp_message_generator(capnp_socket, record_file)
@@ -80,7 +79,7 @@ def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
         text_prediction_loop(text_oracle_data, messages_generator)
     elif args.mode == 'graph':
         print('Python server running in graph mode')
-        graph_initialize_loop(oracle_data, known_definitions, known_tactics, messages_generator)
+        graph_prediction_loop(messages_generator, oracle_data, known_definitions, known_tactics)
     else:
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 

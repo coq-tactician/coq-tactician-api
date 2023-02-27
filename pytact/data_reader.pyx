@@ -1177,23 +1177,26 @@ def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None
 cdef class OnlineDefinitionsReader:
 
     cdef GraphIndex graph_index
-    cdef C_Graph_Reader graph
-    cdef uint32_t representative_int
 
     @staticmethod
-    cdef init(C_Graph_Reader graph, uint32_t representative):
+    cdef init(GraphIndex graph_index, C_PredictionProtocol_Request_Initialize_Reader init):
         cdef OnlineDefinitionsReader wrapper = OnlineDefinitionsReader.__new__(OnlineDefinitionsReader)
 
-        wrapper.graph = graph
-        wrapper.representative_int = representative
-        cdef vector[C_Graph_Node_Reader_List] c_nodes
-        c_nodes.push_back(graph.getNodes())
-        cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
-        c_edges.push_back(graph.getEdges())
-        cdef vector[uint32_t] c_representatives = [representative]
+        graph_index.nodes.push_back(init.getGraph().getNodes())
+        graph_index.edges.push_back(init.getGraph().getEdges())
+        graph_index.representatives.push_back(init.getRepresentative())
+        graph_index.local_to_global.push_back(reversed(range(graph_index.nodes.size())))
+        wrapper.graph_index = graph_index
+        return wrapper
 
-        local_to_global = [[0]]
-        wrapper.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, local_to_global)
+    @staticmethod
+    cdef init_empty():
+        cdef OnlineDefinitionsReader wrapper = OnlineDefinitionsReader.__new__(OnlineDefinitionsReader)
+
+        cdef vector[C_Graph_Node_Reader_List] c_nodes
+        cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
+        cdef vector[uint32_t] c_representatives
+        wrapper.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, [])
         return wrapper
 
     def local_to_global(self, graph: int, dep_index: int) -> int:
@@ -1207,14 +1210,16 @@ cdef class OnlineDefinitionsReader:
         This is a low-level property.
         Prefer to use `definitions` and `clustered_definitions`.
         """
-        representative = self.representative_int
-        if self.graph.getNodes().size() == representative:
-            return None
-        else:
-            return Node.init(0, representative, &self.graph_index).definition
+        graph_index = self.graph_index
+        for i in reversed(range(graph_index.representatives.size())):
+            representative = graph_index.representatives[i]
+            if graph_index.nodes[i].size() == representative:
+                continue
+            else:
+                return Node.init(i, representative, &self.graph_index).definition
+        return None
 
-    @property
-    def definitions(self) -> Iterable[Definition]:
+    def definitions(self, full : bool = True) -> Iterable[Definition]:
         """The list of definitions that are currently in the global context.
 
         The resulting iterable is topologically sorted. That is, for any definition in the stream, any
@@ -1222,21 +1227,34 @@ cdef class OnlineDefinitionsReader:
         the stream. An exception to this rule are mutually recursive definitions,
         because no topological sort is possible there (see also `clustered_definitions`).
         """
-        if self.representative is None: return ()
-        return self.representative.global_context(inclusive = True)
+        if full:
+            representative = self.representative
+        else:
+            graph_index = self.graph_index
+            size = graph_index.representatives.size()
+            if size == 0:
+                representative = None
+            else:
+                representative = graph_index.representatives[size - 1]
+                if graph_index.nodes[size - 1].size() == representative:
+                    representative = None
+                else:
+                    representative = Node.init(size - 1, representative, &self.graph_index).definition
+        if representative is None: return ()
+        return representative.global_context(inclusive = True, across_files = full)
 
-    @property
-    def clustered_definitions(self) -> Iterable[list[Definition]]:
+    def clustered_definitions(self, full : bool = True) -> Iterable[list[Definition]]:
         """All of the definitions present in the global context, clustered by mutually recursive definitions.
 
         The resulting iterable is topologically sorted. That is, for any definition in the stream, any
         definition reachable from the forward closure of the definition also exists in the remainder of
         the stream.
         """
-        return Definition._group_by_clusters(self.definitions)
+        return Definition._group_by_clusters(self.definitions(full))
 
 @contextmanager
-def online_definitions_initialize(Graph_Reader graph, uint32_t representative) -> Generator[OnlineDefinitionsReader, None, None]:
+def online_definitions_initialize(OnlineDefinitionsReader stack,
+                                  PredictionProtocol_Request_Initialize_Reader init) -> Generator[OnlineDefinitionsReader, None, None]:
     """Given a new initialization message sent by Coq, construct a `OnlineDefinitiosnReader` object. This can be used
     to inspect the definitions currently available. Additionally, using `online_data_predict` it can
     be combined with a subsequent prediction request received from Coq to build a `ProofState`.
@@ -1248,7 +1266,8 @@ def online_definitions_initialize(Graph_Reader graph, uint32_t representative) -
     # the `with` block.
     # If the Python runtime ever becomes clever and eliminates this variable, a different
     # method of keeping the object around should be found.
-    dr = OnlineDefinitionsReader.init(graph.source, representative)
+    graph_index = stack.graph_index
+    dr = OnlineDefinitionsReader.init(graph_index, init.source)
     yield dr
 
 @contextmanager
@@ -1270,8 +1289,8 @@ def online_data_predict(OnlineDefinitionsReader base,
     graph_index.nodes.push_back(p.getGraph().getNodes())
     graph_index.edges.push_back(p.getGraph().getEdges())
     graph_index.representatives.push_back(p.getGraph().getNodes().size())
-    graph_index.local_to_global = [[0], [1, 0]]
-    yield ProofState.init(predict.source.getState(), 1, &graph_index)
+    graph_index.local_to_global.push_back(reversed(range(graph_index.nodes.size())))
+    yield ProofState.init(predict.source.getState(), graph_index.nodes.size() - 1, &graph_index)
 
 @dataclass
 class TacticPredictionGraph:
@@ -1306,18 +1325,18 @@ class GlobalContextMessage:
     definitions : OnlineDefinitionsReader
     tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
     log_annotation : str
-    prediction_requests : Generator[ProofState | CheckAlignmentMessage,
-                                    TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
+    prediction_requests : Generator[GlobalContextMessage | ProofState | CheckAlignmentMessage,
+                                    None | TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
                                     None]
 
-def convert_predictions(preds):
+def convert_predictions(preds, stack_size):
     if isinstance(preds, TacticPredictionsText):
         preds = [{'tacticText': pred.tactic_text,
                   'confidence': pred.confidence} for pred in preds.predictions]
         return graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
     elif isinstance(preds, TacticPredictionsGraph):
         preds = [{'tactic': {'ident': pred.ident},
-                  'arguments': [{'term' : {'depIndex': 1 if a.graph == 0 else 0,
+                  'arguments': [{'term' : {'depIndex': stack_size - a.graph,
                                            'nodeIndex': a.nodeid}}
                             for a in pred.arguments],
                   'confidence': pred.confidence} for pred in preds.predictions]
@@ -1367,8 +1386,50 @@ def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | N
             response.write_packed(record)
         msg = next_disabled_sigint()
 
-def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> (
-        Generator[GlobalContextMessage, None, None]):
+
+def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
+    msg = next(lgenerator, None)
+    while msg is not None:
+        if msg.is_synchronize:
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+            lgenerator.send(response)
+            msg = next(lgenerator, None)
+        elif msg.is_initialize:
+            init = msg.initialize
+            if init.stack_size != defs.graph_index.nodes.size():
+                return msg
+            else:
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+                lgenerator.send(response)
+                with online_definitions_initialize(defs, init) as definitions:
+                    def prediction_generator_sub():
+                        nonlocal msg
+                        msg = yield from prediction_generator(lgenerator, definitions)
+                    pg = prediction_generator_sub()
+                    yield GlobalContextMessage(definitions, init.tactics, init.log_annotation, pg)
+                    if next(pg, None) is not None:
+                        raise Exception("Not all prediction requests were consumed")
+        elif msg.is_predict:
+            with online_data_predict(defs, msg.predict) as proof_state:
+                preds = yield proof_state
+                response = convert_predictions(preds, defs.graph_index.nodes.size())
+            lgenerator.send(response)
+            yield
+            msg = next(lgenerator, None)
+        elif msg.is_check_alignment:
+            alignment = yield CheckAlignmentMessage()
+            alignment = {'unalignedTactics': alignment.unknown_tactics,
+                         'unalignedDefinitions':
+                         [{'depIndex': defs.graph_index.nodes.size() - 1 - d.node.graph, 'nodeIndex': d.node.nodeid}
+                           for d in alignment.unknown_definitions]}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+            lgenerator.send(response)
+            yield
+            msg = next(lgenerator, None)
+        else:
+            raise Exception("Capnp protocol error")
+
+def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> GlobalContextMessage:
     """A generator that facilitates communication between a prediction server and a Coq process.
 
     Given a `socket`, this function creates a generator that can yield two different kinds of message:
@@ -1385,47 +1446,9 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
     """
     lgenerator = capnp_message_generator_lowlevel(socket, record)
-
-    msg = next(lgenerator, None)
-    while msg is not None:
-        if msg.is_synchronize:
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-            lgenerator.send(response)
-            msg = next(lgenerator, None)
-        elif msg.is_initialize:
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-            lgenerator.send(response)
-            init = msg.initialize
-            with online_definitions_initialize(init.graph, init.representative) as definitions:
-                msg = None
-                def prediction_generator():
-                    nonlocal msg
-                    pred_msg = next(lgenerator, None)
-                    while pred_msg is not None:
-                        if pred_msg.is_predict:
-                            with online_data_predict(definitions, pred_msg.predict) as proof_state:
-                                preds = yield proof_state
-                                response = convert_predictions(preds)
-                            lgenerator.send(response)
-                            yield
-                            pred_msg = next(lgenerator, None)
-                        elif pred_msg.is_check_alignment:
-                            alignment = yield CheckAlignmentMessage()
-                            alignment = {'unalignedTactics': alignment.unknown_tactics,
-                                         'unalignedDefinitions': [d.node.nodeid for d in alignment.unknown_definitions]}
-                            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-                            lgenerator.send(response)
-                            yield
-                            pred_msg = next(lgenerator, None)
-                        else:
-                            msg = pred_msg
-                            break
-                pd = prediction_generator()
-                yield GlobalContextMessage(definitions, init.tactics, init.log_annotation, pd)
-                if next(pd, None) is not None:
-                    raise Exception("Not all prediction requests were consumed")
-        else:
-            raise Exception("Capnp protocol error")
+    defs = OnlineDefinitionsReader.init_empty()
+    pg = prediction_generator(lgenerator, defs)
+    return GlobalContextMessage(defs, [], None, pg)
 
 def capnp_message_generator_from_file(message_file: BinaryIO) -> (
         Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,

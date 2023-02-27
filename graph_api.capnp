@@ -583,7 +583,7 @@ struct PredictionProtocol {
       synchronized @3 :UInt64;
       alignment :group {
         unalignedTactics @4 :List(TacticId);
-        unalignedDefinitions @5 :List(NodeIndex);
+        unalignedDefinitions @5 :List(Node);
       }
     }
   }

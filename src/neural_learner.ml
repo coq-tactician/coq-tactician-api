@@ -63,7 +63,7 @@ module GB = GraphBuilder(CICGraphMonad)
 
 exception NoSuchTactic
 exception UnknownLocalArgument
-exception UnknownArgument of int
+exception UnknownArgument of int * int
 exception IllegalArgument
 
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
@@ -83,34 +83,41 @@ let find_local_argument context_map =
     | None -> raise UnknownLocalArgument
     | Some x -> x
 
+module IntPairMap = Map.Make(struct
+  type t = int * int
+  let compare (a1, b1) (a2, b2) =
+    let c1 = Int.compare a1 a2 in
+    if c1 = 0 then Int.compare b1 b2 else c1
+  end)
+
 let find_global_argument
     CICGraphMonad.{ section_nodes; definition_nodes = { constants; inductives; constructors; projections }; _ } =
   let open Tactic_one_variable in
   let map = Cmap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
-      constants Int.Map.empty in
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.ConstRef c)) m)
+      constants IntPairMap.empty in
   let map = Indmap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.IndRef c)) m)
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.IndRef c)) m)
       inductives map in
   let map = Constrmap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.ConstructRef c)) m)
       constructors map in
   let map = ProjMap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
+      let (sid, (_, node)), _ = G.lower n in
       (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
-      Int.Map.add node (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
+      IntPairMap.add (sid, node) (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
       projections map in
   let map = Id.Map.fold (fun c n m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.VarRef c)) m)
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.VarRef c)) m)
       section_nodes map in
-  fun id ->
-    match Int.Map.find_opt id map with
+  fun (sid, nid) ->
+    match IntPairMap.find_opt (sid, nid) map with
     | None ->
-      raise (UnknownArgument id)
+      raise (UnknownArgument (sid, nid))
     | Some x -> x
 
 (* Whenever we write a message to the server, we prevent a timeout from triggering.
@@ -338,7 +345,7 @@ let check_neural_alignment () =
   let env = Global.env () in
   let request = Request.init_root () in
   Request.check_alignment_set request;
-  let tacs, { state; _ } = init_predict rc wc !last_model env !graph_cache in
+  let tacs, { stack_size; state } = init_predict rc wc !last_model env !graph_cache in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -348,7 +355,10 @@ let check_neural_alignment () =
       let find_global_argument = find_global_argument state in
       let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs @@ Stdint.Uint64.to_int t) @@
         Response.Alignment.unaligned_tactics_get_list alignment in
-      let unaligned_defs = List.map (fun d -> find_global_argument @@ Stdint.Uint32.to_int d) @@
+      let unaligned_defs = List.map (fun node ->
+          let sid = stack_size - 1 - Api.Reader.Node.dep_index_get node in
+          let nid = Api.Reader.Node.node_index_get_int_exn node in
+          find_global_argument (sid, nid)) @@
         Response.Alignment.unaligned_definitions_get_list alignment in
       let tacs_msg = if CList.is_empty unaligned_tacs then Pp.mt () else
           Pp.(fnl () ++ str "Unaligned tactics: " ++ fnl () ++
@@ -376,6 +386,18 @@ let check_neural_alignment () =
           tacs_msg ++ defs_msg
         )
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
+
+let push_cache () =
+  if textmode_option () then () (* No caching needed for the text model at the moment *) else
+    let rc, wc = get_connection () in
+    drain rc wc;
+    let _, { stack_size; state } = init_predict rc wc !last_model (Global.env ()) !graph_cache in
+    Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size);
+    graph_cache :=
+      { stack_size
+      ; state = CICGraphMonad.{ state with
+                                previous = None
+                              ; external_previous = Option.fold_left (fun ls x -> x::ls) [] state.previous } }
 
 module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
@@ -494,16 +516,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
                   let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
                   match dep_index with
                   | 0 -> find_local_argument node_index
-                  | 1 ->
+                  | _ ->
                     (try
-                       find_global_argument node_index
-                     with UnknownArgument id ->
+                       find_global_argument (stack_size - dep_index, node_index)
+                     with UnknownArgument (sid, nid) ->
                        CErrors.anomaly
-                         Pp.(str "Unknown global argument " ++ int id ++ str " at index " ++ int j ++
-                             str " for prediction " ++ int i ++ str " which is tactic " ++
+                         Pp.(str "Unknown global argument (" ++ int sid ++ str ", " ++ int nid ++ str ") at index "
+                             ++ int j ++ str " for prediction " ++ int i ++ str " which is tactic " ++
                              Pptactic.pr_glob_tactic (Global.env ()) tac ++
                              str " with hash " ++ int tid))
-                  | _ -> raise IllegalArgument
                 ) args in
             let args = convert_args @@ Prediction.arguments_get_list p in
             if params <> List.length args then begin
