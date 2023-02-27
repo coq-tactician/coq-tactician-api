@@ -126,6 +126,9 @@ At this point, you have the following commands available which will interact wit
   This is meant as a sanity check.
 - `Suggest` and `Debug Suggest` will ask the server for predictions for the current proof state.
 - `synth` and `debug synth` will perform a proof search by repeatedly asking the server for predictions.
+- `Tactician Neural Cache` will preemptively send a lot of required data to the prediction server and keeps that
+  information cached. This will make the commands above run much faster. This command can be issued multiple times
+  in a document, creating multiple nested caches.
 
 ## Reinforcement interaction
 
