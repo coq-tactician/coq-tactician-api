@@ -9,9 +9,9 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pytact"
-version = '8.11.0.1.dev0'
-description = "Python interface to coq-tactician-reinforce"
+name = "pytactician"
+version = '15.0'
+description = "Python Library for interfacing with Coq and Tactician"
 authors = [
     {name = "Lasse Blaauwbroek", email = "lasse@blaauwbroek.eu"},
     {name = "Vasily Pestun", email = "vasily.pestun@gmail.com"},
