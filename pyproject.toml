@@ -57,6 +57,8 @@ where = ["."]
 pytact = [
     "graph_api.capnp",
     "templates/visualizer.html",
+    "templates/capnp_cython.pyx",
+    "templates/capnp_cython.pxd",
     "tests/TestReinforceStdin.v",
     "tests/TestReinforceTcp.v",
     "tests/prop4.txt",
