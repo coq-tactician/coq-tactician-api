@@ -54,7 +54,7 @@ pytact-prover = "pytact.prover:main"
 where = ["."]
 
 [tool.setuptools.package-data]
-pytact = [
+pytactician = [
     "graph_api.capnp",
     "templates/visualizer.html",
     "templates/capnp_cython.pyx",
