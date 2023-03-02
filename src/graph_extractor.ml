@@ -276,7 +276,9 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     named
   let lookup_named id =
     let+ named = lookup_named_map in
-    Id.Map.find id named
+    try
+      Id.Map.find id named
+    with Not_found -> CErrors.anomaly Pp.(str "Variable name could not be resolved")
   let lookup_def_depth =
     let+ { def_depth; _ } = ask in
     def_depth
@@ -328,7 +330,8 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let run ?(include_metadata=false) ?(include_opaque=true) ?def_depth ~state m =
     G.run @@
     let context =
-      { relative = []; named = Id.Map.empty; evar_map = (fun e -> raise Not_found)
+      { relative = []; named = Id.Map.empty
+      ; evar_map = (fun e -> CErrors.anomaly Pp.(str "Evar " ++ Evar.print e ++ str " not found"))
       ; def_depth; env = None; env_extra = None; metadata = include_metadata
       ; opaque = include_opaque } in
     G.map (fun ((s, se), a) -> s, a) @@ run m context (state, Evar.Map.empty)
