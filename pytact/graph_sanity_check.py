@@ -197,7 +197,7 @@ def process1(args, fname: Path):
                         if t := p.tactic:
                             file_tactic_ident_to_base.setdefault(ident, t.base_text)
                         if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
-                            raise Exception(f"{fname}: Tactic with two different argument lengths detected. : Original: {file_tactic_ident_to_base[ident]} : new {t.text}")
+                            raise Exception(f"{fname}: Tactic with two different argument lengths detected. : Original: {file_tactic_arguments[ident]} : {file_tactic_ident_to_base[ident]}. New {len(outcome.tactic_arguments)} : {t.text} : {t.base_text}")
                         outcomes += 1
                         if isinstance(d.status, Original):
                             original_outcomes += 1
