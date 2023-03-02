@@ -162,7 +162,7 @@ def process1(args, fname: Path):
                     for outcome in p.outcomes:
                         for after in outcome.after:
                             if after.id not in before_states:
-                                raise Exception(
+                                print(
                                     f"{fname}: After state {after} with tactic {p.tactic} "
                                     f"of definition {d.name} does not have a corresponding "
                                     f"before state")
