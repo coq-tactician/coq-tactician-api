@@ -194,7 +194,8 @@ def process1(args, fname: Path):
                                         f"has the wrong node classification {c.label}")
 
                         file_tactic_arguments.setdefault(ident, len(outcome.tactic_arguments))
-                        file_tactic_ident_to_base.setdefault(ident, t.base_text)
+                        if t := p.tactic:
+                            file_tactic_ident_to_base.setdefault(ident, t.base_text)
                         if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
                             raise Exception(f"{fname}: Tactic with two different argument lengths detected. : Original: {file_tactic_ident_to_base[ident]} : new {t.text}")
                         outcomes += 1
