@@ -52,6 +52,7 @@ def process1(args, fname: Path):
     file_tactics = Counter()
     file_original_tactics = Counter()
     file_tactic_arguments = {}
+    file_tactic_ident_to_base = {}
     proof_steps = 0
     original_proof_steps = 0
     original_proof_steps_faithful = 0
@@ -193,8 +194,9 @@ def process1(args, fname: Path):
                                         f"has the wrong node classification {c.label}")
 
                         file_tactic_arguments.setdefault(ident, len(outcome.tactic_arguments))
-                        if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
-                            raise Exception(f"{fname}: Tactic with two different argument lengths detected")
+                        file_tactic_ident_to_base.setdefault(ident, t.base_text)
+                        if file_tactic_arguments[ident]:
+                            raise Exception(f"{fname}: Tactic with two different argument lengths detected: Original: {file_tactic_ident_to_base[ident]} : new {t.text}")
                         outcomes += 1
                         if isinstance(d.status, Original):
                             original_outcomes += 1
