@@ -66,6 +66,7 @@ exception UnknownArgument of int * int
 exception IllegalArgument
 
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
+module W = Graph_capnp_generator.Writer(Api)
 
 module TacticMap = Int.Map
 let find_tactic tacs id =
@@ -318,7 +319,7 @@ let init_predict rc wc tacs env { stack_size; state } =
     if def then i else def_count + i in
   let node_hash n = snd @@ G.transform_node_type n in
   let node_label n = fst @@ G.transform_node_type n in
-  Graph_capnp_generator.write_graph
+  W.write_graph
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
     ~node_dep_index:(fun (stack_id, _) -> stack_size - stack_id) ~node_local_index
     ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges
@@ -403,22 +404,6 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   module LH = Learner_helper.L(TS)
   open TS
 
-  let gen_proof_state env ps =
-    let open GB in
-    let hyps = proof_state_hypotheses ps in
-    let concl = proof_state_goal ps in
-    let evar = proof_state_evar ps in
-    let hyps = List.map (map_named term_repr) hyps in
-    let concl = term_repr concl in
-    let open CICGraphMonad in
-    let open Monad_util.WithMonadNotations(CICGraphMonad) in
-    let* hyps, (concl, map) = with_named_context env (Id.Map.empty, Cmap.empty) hyps @@
-      let* map = lookup_named_map in
-      let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
-      concl, map in
-    let+ root = mk_node (ProofState evar) ((ContextSubject, concl)::hyps) in
-    root, map
-
   let predict_text rc wc env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
@@ -461,41 +446,33 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let module Response = Api.Reader.PredictionProtocol.Response in
     let request = Request.init_root () in
     let predict = Request.predict_init request in
-    let updater = gen_proof_state env ps in
-    let (_, (root, context_map)), { def_count; node_count; edge_count; defs; nodes; edges } =
+    let updater =
+      let open Graph_generator_learner.ConvertStructures(TS) in
+      let (_, evm, _) as ps = mk_proof_state ps in
+      CICGraphMonad.with_evar_map evm @@
+      GB.gen_proof_state env (Names.Id.Map.empty, Names.Cmap.empty) ps in
+    let (_, ps), { def_count; node_count; edge_count; defs; nodes; edges } =
       CICGraphMonad.run ~include_opaque:false ~state updater
         (G.HashMap.create 100) G.builder_nil stack_size in
     let node_local_index (_, (def, i)) =
       if def then i else def_count + i in
-    let context_map = Id.Map.map (fun n ->
-        let (p, n), _ = G.lower n in
-        p, node_local_index (p, n)) context_map in
-    let context_range = List.rev @@ List.filter_map (fun hyp ->
-        let id = Context.Named.Declaration.get_id hyp in
-        match Id.Map.find_opt id context_map with
-        | None -> None
-        | Some (_, n) -> Some n
-      ) @@ TS.proof_state_hypotheses ps in
+    let context_map = List.fold_left (fun map { id; node; _ } ->
+        let (p, n), _ = G.lower node in
+        Id.Map.add id (p, node_local_index (p, n)) map) Id.Map.empty ps.context in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
 
     let node_dep_index (stack_id, _) = stack_size - stack_id in
     let node_hash n = snd @@ G.transform_node_type n in
     let node_label n = fst @@ G.transform_node_type n in
-    Graph_capnp_generator.write_graph
+    W.write_graph
       ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
       ~node_dep_index ~node_local_index
       ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph;
     let state = Request.Predict.state_init predict in
-    let capnp_root = ProofState.root_init state in
-    ProofState.Root.dep_index_set_exn capnp_root @@ node_dep_index @@ fst @@ G.lower root;
-    ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index @@ fst @@ G.lower root;
-    let context_arr = ProofState.context_init state @@ List.length context_range in
-    List.iteri (fun i arg ->
-        let arri = Capnp.Array.get context_arr i in
-        Node.dep_index_set_exn arri @@ node_dep_index (stack_size, arg);
-        Node.node_index_set_int_exn arri arg
-      ) context_range;
+    W.write_proof_state
+      { node_depindex = (fun n -> node_dep_index (fst @@ G.lower n))
+      ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps;
     match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->

@@ -114,9 +114,32 @@ module CICGraphMonad = struct
 end
 module GB = GraphBuilder(CICGraphMonad)
 
+module ConvertStructures(TS : TacticianStructures) = struct
+  open TS
+  let mk_single_proof_state ps : Graph_extractor.single_proof_state =
+    let concl = proof_state_goal ps in
+    let hyps = proof_state_hypotheses ps in
+    let evar = proof_state_evar ps in
+    List.map (map_named term_repr) hyps, term_repr concl, evar
+  let mk_proof_state ps : Graph_extractor.proof_state =
+    let sigma = proof_state_sigma ps in
+    let f e =
+      let d = proof_state_dependent ps e in
+      mk_single_proof_state d in
+    sigma, f, mk_single_proof_state ps
+  let mk_outcome before result =
+    let f e =
+      let d = tactic_result_dependent result e in
+      mk_single_proof_state d in
+    mk_proof_state before, term_repr @@ tactic_result_term result, tactic_result_sigma result, f,
+    List.map mk_proof_state @@ tactic_result_states result
+
+  end
+
 module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
   open TS
+  open ConvertStructures(TS)
 
   type model = (((proof_state * tactic_result) list * tactic option) list * data_status * KerName.t) list
 
@@ -252,24 +275,6 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
                  ~subst:(Some (fun (_, _) -> None)))
 
   open GB
-
-  let mk_single_proof_state ps : Graph_extractor.single_proof_state =
-    let concl = proof_state_goal ps in
-    let hyps = proof_state_hypotheses ps in
-    let evar = proof_state_evar ps in
-    List.map (map_named term_repr) hyps, term_repr concl, evar
-  let mk_proof_state ps : Graph_extractor.proof_state =
-    let sigma = proof_state_sigma ps in
-    let f e =
-      let d = proof_state_dependent ps e in
-      mk_single_proof_state d in
-    sigma, f, mk_single_proof_state ps
-  let mk_outcome before result =
-    let f e =
-      let d = tactic_result_dependent result e in
-      mk_single_proof_state d in
-    mk_proof_state before, term_repr @@ tactic_result_term result, tactic_result_sigma result, f,
-    List.map mk_proof_state @@ tactic_result_states result
 
   let grandfathered_constants =
     [ match Coqlib.lib_ref "tactician.private_constant_placeholder" with
@@ -482,6 +487,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     relative_deps
 
   module K = Graph_api.Make(Capnp.BytesMessage)
+  module W = Graph_capnp_generator.Writer(K)
   let write_graph { def_count; node_count; edge_count; defs; nodes; edges }
       definition_nodes representative minimum_deps data_file =
     let path_def_count = Int.Map.map (fun (_, c, _) -> c) !dependencies in
@@ -520,7 +526,7 @@ module GraphGeneratorLearner : TacticianOnlineLearnerType = functor (TS : Tactic
     let node_hash n = snd @@ G.transform_node_type n in
     let node_label n = fst @@ G.transform_node_type n in
     let capnp_graph = K.Builder.Dataset.graph_init g in
-    Graph_capnp_generator.write_graph ~include_metadata:true
+    W.write_graph ~include_metadata:true
       ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
       ~node_dep_index ~node_local_index
       ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges capnp_graph;

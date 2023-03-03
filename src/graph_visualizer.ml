@@ -125,9 +125,9 @@ struct
   let make_proof_graph ?def_depth state =
     let _ =
       Pfedit.solve (Goal_select.get_default_goal_selector ()) None
-        (Proofview.tclBIND (Builder.gen_proof_state (Names.Id.Map.empty, Names.Cmap.empty)) (fun res ->
-             let (_, root), ns = GM.run_empty ?def_depth res in
-             make_graph G.final_to_string ns @@ G.node_repr root;
+        (Proofview.tclBIND (Builder.gen_proof_state_tactic (Names.Id.Map.empty, Names.Cmap.empty)) (fun res ->
+             let (_, ps), ns = GM.run_empty ?def_depth res in
+             make_graph G.final_to_string ns @@ G.node_repr ps.root;
              Proofview.tclUNIT ()))
         (Proof_global.get_proof state) in ()
 

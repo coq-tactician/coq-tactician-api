@@ -367,7 +367,8 @@ module GraphBuilder
   val gen_constr              : (Constr.t -> node t) with_envs
   val gen_section_var         : (Id.t -> node t) with_envs
   val with_named_context      : ((Constr.t, Constr.t) Named.pt -> 'a t -> ((edge_type * node) list * 'a) t) with_envs
-  val gen_proof_state         : env_extra -> node t Proofview.tactic
+  val gen_proof_state         : (proof_state -> node Graph_def.proof_state t) with_envs
+  val gen_proof_state_tactic  : env_extra -> node Graph_def.proof_state t Proofview.tactic
   val gen_globref             : (GlobRef.t -> node t) with_envs
 end = struct
 
@@ -500,9 +501,24 @@ end = struct
     | Some follow_defs ->
       if follow_defs > 0 then with_decremented_def_depth m else alt
 
-  let rec gen_proof_step (outcomes, tactic) =
+  let rec gen_proof_state (evd, _, (hyps, concl, evar)) =
     let* env = lookup_env
     and+ metadata = lookup_include_metadata in
+    let if_metadata f = if metadata then f () else "" in
+    let env = Environ.push_named_context hyps @@ Environ.reset_context env in
+    let+ root, arr = gen_evar evar in
+    let ps_string = if_metadata @@ fun () -> proof_state_to_string_safe (hyps, concl) env evd in
+    let concl_string = if_metadata @@ fun () -> constr_str env evd concl in
+    let context = OList.rev @@ OList.filter_map (fun (hyp, node) ->
+        let id = Named.Declaration.get_id hyp in
+        Option.map (fun node -> { id; node
+                                ; text = if_metadata @@ fun () ->hyp_to_string_safe env evd hyp }) node) @@
+      OList.combine hyps @@ Array.to_list arr in
+    { ps_string; concl_string; root; context; evar }
+  and gen_proof_step (outcomes, tactic) =
+    let* env = lookup_env
+    and+ metadata = lookup_include_metadata in
+    let if_metadata f = if metadata then f () else "" in
     let tactic, args = match tactic with
       | None -> None, []
       | Some tac ->
@@ -546,24 +562,11 @@ end = struct
             | Constrexpr.CEvar (x, _) -> CAst.make @@ Constrexpr.CHole (None, IntroAnonymous, None)
             | _ -> Constrexpr_ops.map_constr_expr_with_binders (fun _ () -> ()) (fun () c -> aux c) () c in
           aux c in
-        if metadata then
+        if_metadata @@ fun () ->
           let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
           let cexpr = beauti_evar @@ Constrextern.extern_constr false env term_sigma (EConstr.of_constr term) in
           Pp.string_of_ppcmds @@ Sexpr.format_oneline @@
-          with_depth (fun () -> Ppconstr.pr_constr_expr env term_sigma cexpr)
-        else "" in
-      let mk_proof_state evd (hyps, concl, evar) =
-        let env = Environ.push_named_context hyps @@ Environ.reset_context env in
-        let+ root, arr = gen_evar evar in
-        let ps_string = proof_state_to_string_safe (hyps, concl) env evd in
-        let concl_string = constr_str env evd concl in
-        let context = OList.rev @@ OList.filter_map (fun (hyp, node) ->
-            let id = Named.Declaration.get_id hyp in
-            Option.map (fun node -> { id; node; text = hyp_to_string_safe env evd hyp }) node) @@
-          OList.combine hyps @@ Array.to_list arr in
-        { ps_string; concl_string; root; context; evar } in
-      let mk_after_states after =
-        List.map (fun (evd, _, st) -> mk_proof_state evd st) after in
+          with_depth (fun () -> Ppconstr.pr_constr_expr env term_sigma cexpr) in
       let+ proof_states_after, proof_state_before, arguments, term =
         with_evar_map before_proof_states @@
         let* ctx, (proof_states_after, subject, arguments, map, term) =
@@ -571,7 +574,7 @@ end = struct
           let* subject = gen_constr before_concl
           and+ proof_states_after, term =
             with_evar_map term_proof_states @@
-            let+ proof_states_after = mk_after_states after
+            let+ proof_states_after = List.map gen_proof_state after
             and+ term = gen_constr term in
             proof_states_after, term
           and+ map = lookup_named_map in
@@ -616,11 +619,13 @@ end = struct
           proof_states_after, subject, arguments, map, term in
         let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
         let+ root = mk_node (ProofState before_evar) ((ContextSubject, subject)::ctx) in
-        let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
-        let concl_string = constr_str env before_sigma before_concl in
+        let ps_string = if_metadata @@ fun () ->
+          proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
+        let concl_string = if_metadata @@ fun () -> constr_str env before_sigma before_concl in
         let context = OList.rev @@ OList.filter_map (fun hyp ->
             let id = Named.Declaration.get_id hyp in
-            Option.map (fun node -> { id; node; text = hyp_to_string_safe env before_sigma hyp }) @@
+            Option.map (fun node -> { id; node
+                                    ; text = if_metadata @@ fun () -> hyp_to_string_safe env before_sigma hyp }) @@
               Id.Map.find_opt id map) before_hyps in
         proof_states_after, { ps_string; concl_string; root; context; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
@@ -929,21 +934,22 @@ end = struct
 
   let with_envs f env env_extra x = with_env env (with_env_extra env_extra (f x))
 
-  let gen_proof_state env_extra =
+  let gen_proof_state_tactic env_extra =
     (* NOTE: We intentionally get retrieve then environment here, because we don't want any of the
        local context elements of the proof state to be in the environment. If they are, they will be
        extracted as definitions instead of local variables. *)
     Proofview.tclBIND Proofview.tclENV @@ fun env ->
-    Proofview.Goal.enter_one (fun g ->
-        let concl = Proofview.Goal.concl g in
-        let hyps = Proofview.Goal.hyps g in
-        let sigma = Proofview.Goal.sigma g in
-        let evar = Proofview.Goal.goal g in
-        let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
-        Proofview.tclUNIT @@
-        with_env env @@ with_env_extra env_extra @@
-        let* hyps, concl = with_named_context hyps @@ gen_constr (EConstr.to_constr sigma concl) in
-        mk_node (ProofState evar) ((ContextSubject, concl)::hyps))
+    Proofview.Goal.enter_one @@ fun g ->
+    let sigma = Proofview.Goal.sigma g in
+    let concl = EConstr.to_constr sigma @@ Proofview.Goal.concl g in
+    let hyps = Proofview.Goal.hyps g in
+    let evar = Proofview.Goal.goal g in
+    let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
+    Proofview.tclUNIT @@
+    with_env env @@ with_env_extra env_extra @@
+    let proof_state_lookup = sigma_to_proof_state_lookup sigma in
+    with_evar_map proof_state_lookup @@
+    gen_proof_state (sigma, proof_state_lookup, (hyps, concl, evar))
 
   let gen_section_var =
     with_envs @@ fun id ->
@@ -951,6 +957,7 @@ end = struct
     let def = Environ.lookup_named id env in
     gen_section_var id def
 
+  let gen_proof_state = with_envs gen_proof_state
   let gen_const = with_envs gen_const
   let gen_mutinductive_helper = with_envs gen_mutinductive_helper
   let gen_inductive = with_envs gen_inductive
