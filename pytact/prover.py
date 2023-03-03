@@ -331,6 +331,7 @@ async def a_main(args):
             stdin=coq_sock,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE)
+        coq_sock.close()
 
         reader, writer = await asyncio.open_connection(sock=py_sock)
         await call_back(reader, writer)

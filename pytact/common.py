@@ -113,15 +113,15 @@ class Connection:
         if proc_task.done():
             logger.debug("process with capnp ended %s", repr(proc_task))
             if proc_task.exception():
-                logger.error("EXCEPTION in connection task; this is not expected, debug: %s",
-                             repr(proc_task))
+                raise Exception("EXCEPTION in connection task; this is not expected, debug: %s",
+                                repr(proc_task))
 
         else:
             if read_task.done():
-                logger.error("reading_socket ended before reinforce ended: "
+                raise Exception("reading_socket ended before reinforce ended: "
                              "possibly terminated from other side")
             if write_task.done():
-                logger.error("_writing_socket ended ended before reinforce ended: "
+                raise Exception("_writing_socket ended ended before reinforce ended: "
                              "possibly connection broken")
 
         read_task.cancel()
