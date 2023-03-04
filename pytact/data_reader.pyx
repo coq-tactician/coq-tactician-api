@@ -101,6 +101,7 @@ from libcpp.stack cimport stack
 from pytact.graph_api_capnp_cython cimport *
 import mmap
 import itertools
+import resource
 
 T = TypeVar('T')
 class TupleLike():
@@ -221,19 +222,29 @@ def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, No
     further documentation.
     """
     fnames = [f for f in dataset_path.glob('**/*.bin') if f.is_file()]
-    with ExitStack() as stack:
-        dataset = [(fname.relative_to(dataset_path),
-                    stack.enter_context(file_dataset_reader(fname)))
-                   for fname in fnames]
-        # CAREFUL: LowlevelDataReader contains critical C++ structures that are not being
-        # tracked by the garbage collector. As soon as this object gets destroyed, those
-        # structures will also be destroyed, even if other objects still reference it.
-        # This variable assignment makes sure that the reader will exist until the end of
-        # the `with` block.
-        # If the Python runtime ever becomes clever and eliminates this variable, a different
-        # method of keeping the object around should be found.
-        dr = LowlevelDataReader(dataset_path, dataset)
-        yield dr
+
+    # Increase the open file limit, because we could be intentionally mapping a large number of files
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    new_soft = min(soft + len(fnames), hard)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+
+    try:
+        with ExitStack() as stack:
+            dataset = [(fname.relative_to(dataset_path),
+                        stack.enter_context(file_dataset_reader(fname)))
+                    for fname in fnames]
+            # CAREFUL: LowlevelDataReader contains critical C++ structures that are not being
+            # tracked by the garbage collector. As soon as this object gets destroyed, those
+            # structures will also be destroyed, even if other objects still reference it.
+            # This variable assignment makes sure that the reader will exist until the end of
+            # the `with` block.
+            # If the Python runtime ever becomes clever and eliminates this variable, a different
+            # method of keeping the object around should be found.
+            dr = LowlevelDataReader(dataset_path, dataset)
+            yield dr
+    finally:
+        # Reset open file limit to original
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
 
 ProofStateId = int
 TacticId = int
