@@ -95,6 +95,7 @@ module type CICGraphMonadType = sig
 
   (** Managing the local context *)
   val lookup_relative     : int -> node t
+  val lookup_relative_opt : int -> node option t
   val lookup_named        : Id.t -> node t
       (* The array is the local context associated with the section, in the same ordering as would be given
         by an Evar node. If an element in the node is None, it is a section variable. *)
@@ -264,13 +265,18 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     put (s, Evar.Map.update e (update_error (n, ns)) sigma)
 
   (** Managing the local context *)
-  let lookup_relative i =
+  let lookup_relative_opt i =
     let+ { relative; _ } = ask in
     let rec find ctx i = match ctx, i with
-      | node::_, 1 -> node
+      | node::_, 1 -> Some node
       | _::ctx, n -> find ctx (n - 1)
-      | [], _ -> CErrors.anomaly (Pp.str "Invalid relative context") in
+      | [], _ -> None in
     find relative i
+  let lookup_relative i =
+    let+ no = lookup_relative_opt i in
+    match no with
+    | None -> CErrors.anomaly (Pp.str "Invalid relative context")
+    | Some n -> n
   let lookup_named_map =
     let+ { named; _ } = ask in
     named
@@ -840,9 +846,25 @@ end = struct
       let substs = OList.filter_map (fun (x, y) -> Option.map (fun y -> x, y) y) @@
         OList.combine (Array.to_list substs) (Array.to_list ctx) in
       let* substs = List.map (fun (c, t) ->
-          let* c = gen_constr c in
-          map (fun n -> EvarSubstPointer, n) @@
-          mk_node EvarSubst [EvarSubstTerm, c; EvarSubstTarget, t]) substs in
+          let* valid = match Constr.kind c with
+            | Constr.Rel i ->
+              let+ no = lookup_relative_opt i in
+              (match no with
+               | None ->
+                 Feedback.msg_warning Pp.(str "Invalid term detected due to https://github.com/coq/coq/issues/17314");
+                 false
+               | Some _ -> true)
+            | Constr.Var id ->
+              let+ named = lookup_named_map in
+              if Names.Id.Map.mem id named then true else
+                (Feedback.msg_warning Pp.(str "Invalid term detected due to https://github.com/coq/coq/issues/17295");
+                 false)
+            | _ -> return true in
+          if not valid then return (EvarSubstPointer, n)
+          else
+            let* c = gen_constr c in
+            map (fun n -> EvarSubstPointer, n) @@
+            mk_node EvarSubst [EvarSubstTerm, c; EvarSubstTarget, t]) substs in
       mk_node Evar ((EvarSubject, n)::substs)
     | Sort s ->
       mk_node (match s with
