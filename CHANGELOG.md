@@ -4,6 +4,7 @@ Changes to the graph
 - Proof states are now properly discharged at section end, instead of just a copy of the proof state
   inside of the section
 - Improve the decomposition of the `destruct` and `induction` tactics
+- Tactic identifiers have been changed to use a better hash function. The old hash function produced collisions.
 
 Changes to the Capn'proto format:
 - All `evar` nodes are now properly resolved towards a `proofState` node, even when that proof state is
