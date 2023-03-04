@@ -63,6 +63,7 @@ def process1(args, fname: Path):
     original_proofs = 0
     original_proofs_faithful = 0
     unresolvable = 0
+    file_disappearing_proof_states = 0
     graphid = data.graphid_by_filename[fname]
     freader = data[graphid]
     graph = freader.graph
@@ -163,10 +164,7 @@ def process1(args, fname: Path):
                     for outcome in p.outcomes:
                         for after in outcome.after:
                             if after.id not in before_states:
-                                print(
-                                    f"{fname}: After state {after} with tactic {p.tactic} "
-                                    f"of definition {d.name} does not have a corresponding "
-                                    f"before state")
+                                file_disappearing_proof_states += 1
 
                         if not args.quick:
                             check_in_global_context(node_dependencies(outcome.term))
@@ -225,7 +223,7 @@ def process1(args, fname: Path):
             file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
             proof_steps, original_proof_steps, original_proof_steps_faithful,
             outcomes, original_outcomes, proofs, original_proofs,
-            original_proofs_faithful, unresolvable, file_errors)
+            original_proofs_faithful, unresolvable, file_errors, file_disappearing_proof_states)
 
 def entropy(d):
     n = sum(d.values())
@@ -277,6 +275,7 @@ def main2():
     original_proofs_total = 0
     original_proofs_faithful_total = 0
     unresolvable_total = 0
+    disappearing_proof_states = 0
 
     with lowlevel_data_reader(dataset_path) as data:
         file_list = data.graph_files
@@ -295,7 +294,7 @@ def main2():
          file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
          proof_steps, original_proof_steps, original_proof_steps_faithful,
          outcomes, original_outcomes, proofs, original_proofs,
-         original_proofs_faithful, unresolvable, file_errors) = res
+         original_proofs_faithful, unresolvable, file_errors, file_disappearing_proof_states) = res
         nodes_total += nodes_count
         edges_total += edges_count
         proof_steps_total += proof_steps
@@ -312,6 +311,7 @@ def main2():
         base_tactics_intermtext.update(file_base_tactics_intermtext)
         tactics += file_tactics
         original_tactics += file_original_tactics
+        disappearing_proof_states += file_disappearing_proof_states
         errors += file_errors
         for tac, length in file_tactic_arguments.items():
             tactic_arguments.setdefault(tac, length)
@@ -343,6 +343,7 @@ def main2():
     print(f"Original proofs total {original_proofs_total}")
     print(f"Faithful original proofs total {original_proofs_faithful_total}")
     print(f"Unresolvable tactic arguments {unresolvable_total}")
+    print(f"Disappearing proof states (spooky action at a distance) {disappearing_proof_states}")
 
     if (args.verbose >= 1):
         print("Tactics base text:")
