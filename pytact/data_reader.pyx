@@ -102,6 +102,7 @@ from pytact.graph_api_capnp_cython cimport *
 import mmap
 import itertools
 import resource
+import threading
 
 T = TypeVar('T')
 class TupleLike():
@@ -1377,10 +1378,13 @@ def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | N
         Note that the proper solution to this is to read messages in async mode, but pycapnp currently doesn't
         support this.
         """
-        prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-        msg = next(reader, None)
-        signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
-        return msg
+        if threading.current_thread() is threading.main_thread():
+            prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+            msg = next(reader, None)
+            signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
+            return msg
+        else:
+            return next(reader, None)
     msg = next_disabled_sigint()
     while msg is not None:
         if record is not None:

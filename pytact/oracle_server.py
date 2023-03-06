@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 import socket
+import socketserver
 import argparse
 import contextlib
 from pytact.data_reader import (data_reader, Original, capnp_message_generator, ProofState,
@@ -155,17 +156,16 @@ def main():
         record_context = contextlib.nullcontext()
     with record_context as record_file:
         if cmd_args.port is not None:
-            addr = ('localhost', cmd_args.port)
-            server_sock = socket.create_server(addr)
-            try:
-                while True:
-                    capnp_socket, remote_addr = server_sock.accept()
-                    print(f"coq client connected {remote_addr}")
+            class TCPHandler(socketserver.BaseRequestHandler):
+                def handle(self):
                     run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
-                                cmd_args, capnp_socket, record_file)
-            finally:
-                print(f'closing the server on port {addr[1]}')
-                server_sock.close()
+                                cmd_args, self.request, record_file)
+            class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+                pass
+            addr = ('localhost', cmd_args.port)
+            with ThreadedTCPServer(addr, TCPHandler) as server:
+                server.daemon_threads = True
+                server.serve_forever()
         else:
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
             run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
