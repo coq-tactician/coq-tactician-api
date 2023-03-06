@@ -72,6 +72,8 @@ cp -r $(opam var prefix)/.opam-switch/build/* $datasetname/dataset
 
 echo "Removing files other than .bin and .v (if a corresponding .bin file exists)"
 files=$(find $datasetname/dataset -not -type d)
+OIFS="$IFS"
+IFS=$'\n'
 for f in "$files"; do
     if [[ ! "$f" == *.bin ]]; then
         if [[ "$f" == *.v ]]; then
@@ -84,6 +86,7 @@ for f in "$files"; do
         fi
     fi
 done
+IFS="$OIFS"
 
 echo "Deleting empty directories"
 find $datasetname/dataset -type d -empty -delete
