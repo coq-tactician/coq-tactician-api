@@ -115,10 +115,11 @@ for package in $datasetname/dataset/*; do
     echo "Writing licensing information for $package"
     license=$(opam show -f license $package)
     license=${license//\"}
-    homepage=$(opam show -f license $package)
+    homepage=$(opam show -f homepage $package)
     homepage=${homepage//\"}
     summary=$(opam show -f synopsis $package)
     authors=$(opam show -f authors $package)
+    authors="${authors//$'\n'/ }"
     if curl --head --silent --fail "https://spdx.org/licenses/$license" > /dev/null; then
         spdx="https://spdx.org/licenses/$license"
     else
