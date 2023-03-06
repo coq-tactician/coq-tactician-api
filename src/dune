@@ -14,6 +14,7 @@
     graph_capnp_generator
     graph_api
     definition_order
+    tactic_hash
     ))
   (libraries
     ;please enter one library name per one line in between watermark lines

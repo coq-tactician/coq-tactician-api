@@ -212,7 +212,7 @@ let pull_reinforce =
       Tactic_learner_internal.process_queue ();
       let tacs = Neural_learner.(!last_model) in
       print_endline (string_of_int (List.length tacs));
-      let tacs = List.map (fun t -> t, Hashtbl.hash_param 255 255 t) tacs in
+      let tacs = List.map (fun t -> t, Tactic_hash.tactic_hash (Global.env ()) t) tacs in
       let map = List.fold_left (fun map tac ->
           let open Tactic_learner_internal.TS in
           let tac = tactic_repr tac in

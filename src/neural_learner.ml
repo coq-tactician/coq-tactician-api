@@ -305,7 +305,7 @@ let init_predict rc wc tacs env { stack_size; state } =
       let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
       let base_tactic = Tactic_one_variable.tactic_strip tac in
       TacticMap.add
-        (Hashtbl.hash_param 255 255 base_tactic) (base_tactic, List.length args) map)
+        (Tactic_hash.tactic_hash env base_tactic) (base_tactic, List.length args) map)
       TacticMap.empty tacs in
 
   let tac_arr = Request.Initialize.tactics_init init @@ TacticMap.cardinal tacs in

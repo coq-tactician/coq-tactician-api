@@ -534,7 +534,7 @@ end = struct
         let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
         let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
         let base_tactic = Tactic_one_variable.tactic_strip tac in
-        let tactic_hash = Hashtbl.hash @@ Digest.string (Marshal.to_string base_tactic [Marshal.No_sharing]) in
+        let tactic_hash = Tactic_hash.tactic_hash env base_tactic in
         try
           let tactic =
             if metadata then
