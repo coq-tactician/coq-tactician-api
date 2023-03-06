@@ -67,5 +67,6 @@ let tactic_hash env t =
     try
       Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env t)
     with e when CErrors.noncritical e || CErrors.is_anomaly e -> "" in
-  let str = if is_ssr_tactic t then pr_tac t else "" in
-  Hashtbl.hash_param 255 255 (Hashtbl.hash_param 255 255 t, Hashtbl.hash_param 255 255 str)
+  if is_ssr_tactic t then
+    Hashtbl.hash_param 255 255 (Hashtbl.hash_param 255 255 t, Hashtbl.hash_param 255 255 @@ pr_tac t) else
+    Hashtbl.hash (Digest.string @@ Marshal.to_string t [Marshal.No_sharing])
