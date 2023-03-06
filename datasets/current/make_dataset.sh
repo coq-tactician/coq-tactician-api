@@ -74,7 +74,7 @@ echo "Removing files other than .bin and .v (if a corresponding .bin file exists
 files=$(find $datasetname/dataset -not -type d)
 OIFS="$IFS"
 IFS=$'\n'
-for f in "$files"; do
+for f in $files; do
     if [[ ! "$f" == *.bin ]]; then
         if [[ "$f" == *.v ]]; then
             fbin=${f%.*}.bin
