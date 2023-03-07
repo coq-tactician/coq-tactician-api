@@ -316,7 +316,7 @@ def main2():
         for tac, length in file_tactic_arguments.items():
             tactic_arguments.setdefault(tac, length)
             if tactic_arguments[tac] != length:
-                errors.append(f'{fname}: Tactic with two different argument lengths detected')
+                errors.append(f'{fname}: Tactic with two different argument lengths detected: {tac}')
 
         unresolvable_total += unresolvable
 
