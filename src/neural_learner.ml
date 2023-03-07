@@ -68,7 +68,8 @@ exception IllegalArgument
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 module W = Graph_capnp_generator.Writer(Api)
 
-module TacticMap = Int.Map
+open Stdint
+module TacticMap = Map.Make(struct type t = int64 let compare = Stdint.Int64.compare end)
 let find_tactic tacs id =
   match TacticMap.find_opt id tacs with
   | None -> raise NoSuchTactic
@@ -311,7 +312,7 @@ let init_predict rc wc tacs env { stack_size; state } =
   let tac_arr = Request.Initialize.tactics_init init @@ TacticMap.cardinal tacs in
   List.iteri (fun i (hash, (_tac, params)) ->
       let arri = Capnp.Array.get tac_arr i in
-      Api.Builder.AbstractTactic.ident_set_int_exn arri hash;
+      Api.Builder.AbstractTactic.ident_set arri hash;
       Api.Builder.AbstractTactic.parameters_set_exn arri params)
     (TacticMap.bindings tacs);
 
@@ -354,7 +355,7 @@ let check_neural_alignment () =
     match Response.get response with
     | Response.Alignment alignment ->
       let find_global_argument = find_global_argument state in
-      let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs @@ Stdint.Uint64.to_int t) @@
+      let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs t) @@
         Response.Alignment.unaligned_tactics_get_list alignment in
       let unaligned_defs = List.map (fun node ->
           let sid = stack_size - 1 - Api.Reader.Node.dep_index_get node in
@@ -482,7 +483,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         let preds = Capnp.Array.to_list preds in
         let preds = CList.filter_map (fun (i, p) ->
             let tac = Prediction.tactic_get p in
-            let tid = Tactic.ident_get_int_exn tac in
+            let tid = Tactic.ident_get tac in
             let tac, params = find_tactic tacs tid in
             let convert_args args =
               List.mapi (fun j arg ->
@@ -501,14 +502,14 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
                          Pp.(str "Unknown global argument (" ++ int sid ++ str ", " ++ int nid ++ str ") at index "
                              ++ int j ++ str " for prediction " ++ int i ++ str " which is tactic " ++
                              Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                             str " with hash " ++ int tid))
+                             str " with hash " ++ str (Stdint.Int64.to_string tid)))
                 ) args in
             let args = convert_args @@ Prediction.arguments_get_list p in
             if params <> List.length args then begin
               CErrors.anomaly
                 Pp.(str "Mismatched argument length for prediction " ++ int i ++ str " which is tactic " ++
                     Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                    str " with hash " ++ int tid ++
+                    str " with hash " ++ str (Stdint.Int64.to_string tid) ++
                     str ". Number of arguments expected: " ++ int params ++
                     str ". Number of argument given: " ++ int (List.length args))
             end;

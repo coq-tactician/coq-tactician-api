@@ -63,10 +63,13 @@ let tactic_hash env t =
      Our solution is to hash together with the string of the tactic for ssreflect tactics.
      We don't do that for normal tactics, because string representations do not map 1-to-1 to AST representations.
   *)
+  let open Graph_def in
   let pr_tac t =
     try
       Pp.string_of_ppcmds @@ Sexpr.format_oneline (Pptactic.pr_glob_tactic env t)
     with e when CErrors.noncritical e || CErrors.is_anomaly e -> "" in
   if is_ssr_tactic t then
-    Hashtbl.hash_param 255 255 (Hashtbl.hash_param 255 255 t, Hashtbl.hash_param 255 255 @@ pr_tac t) else
-    Hashtbl.hash (Digest.string @@ Marshal.to_string t [Marshal.No_sharing])
+    XXHasher.with_state (fun s -> XXHasher.update_int (Hashtbl.hash_param 255 255 t) @@
+                          XXHasher.update_string (Digest.string @@ pr_tac t) s)
+  else
+    XXHasher.with_state (fun s -> XXHasher.update_string (Marshal.to_string t [Marshal.No_sharing]) s)

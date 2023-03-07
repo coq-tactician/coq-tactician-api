@@ -40,7 +40,7 @@ using DepIndex = UInt16;
 
 using NodeIdentity = Int64;
 
-using TacticId = UInt64;
+using TacticId = Int64;
 using ProofStateId = UInt32; # Note, proof state ids are only unique within their own proof
 using ProofStateIdP = IntP; # Same as ProofStateId, except wrapped into a pointer
 # Tactics, definitions and proof states are identified by hashes

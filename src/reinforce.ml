@@ -11,7 +11,7 @@ module G = Neural_learner.G
 module CICGraph = Neural_learner.CICGraphMonad
 open Neural_learner.GB
 
-module TacticMap = Int.Map
+module TacticMap = Neural_learner.TacticMap
 
 
 exception NoSuchTactic
@@ -95,7 +95,7 @@ let rec proof_object env state tacs context_map =
       let response, results = Service.Response.create Results.init_pointer in
       let res = Results.result_init results in
       let tac = Params.tactic_get params in
-      let tac_id = Tactic.ident_get_int_exn tac in
+      let tac_id = Tactic.ident_get tac in
       let tac_args = Params.arguments_get_list params in
       begin
         try
@@ -181,7 +181,7 @@ let available_tactics tacs =
       let tac_arr = Results.tactics_init results (TacticMap.cardinal tacs) in
       List.iteri (fun i (hash, (_tac, params)) ->
           let arri = Capnp.Array.get tac_arr i in
-          Api.Builder.AbstractTactic.ident_set_int_exn arri hash;
+          Api.Builder.AbstractTactic.ident_set arri hash;
           Api.Builder.AbstractTactic.parameters_set_exn arri (List.length params))
         (TacticMap.bindings tacs);
       Service.return response
@@ -190,7 +190,7 @@ let available_tactics tacs =
       let open AvailableTactics.PrintTactic in
       release_param_caps ();
       let response, results = Service.Response.create Results.init_pointer in
-      let id = Params.tactic_get_int_exn params in
+      let id = Params.tactic_get params in
       let tac, params = find_tactic tacs id in
       let str =
         try Pp.string_of_ppcmds @@ pp_tac tac
@@ -215,11 +215,12 @@ let pull_reinforce =
       let tacs = List.map (fun t -> t, Tactic_hash.tactic_hash (Global.env ()) t) tacs in
       let map = List.fold_left (fun map tac ->
           let open Tactic_learner_internal.TS in
+          (* TODO: Convert this to the same tactic argument extraction procedure as in neural_learner.ml *)
           let tac = tactic_repr tac in
           let tac = Tactic_normalize.tactic_strict tac in
           let args, tac = Tactic_abstract.tactic_abstract tac in
           TacticMap.add
-            (tactic_hash (tactic_make tac)) (tac, args) map)
+            (Int64.of_int (tactic_hash (tactic_make tac))) (tac, args) map)
           TacticMap.empty tacs in
       let capability = available_tactics map in
       Results.available_set results (Some capability);

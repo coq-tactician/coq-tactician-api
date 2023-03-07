@@ -70,7 +70,7 @@ type tactic =
   ; tactic_non_anonymous : string
   ; base_tactic   : string
   ; interm_tactic : string
-  ; tactic_hash   : int
+  ; tactic_hash   : int64
   ; tactic_exact  : bool }
 
 type 'node tactical_step =
