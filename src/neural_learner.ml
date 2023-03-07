@@ -549,7 +549,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
     else
-      init_predict_text read_context write_context;
+      let () = init_predict_text read_context write_context in
       fun f ->
         if f = [] then IStream.empty else
           let preds = predict_text read_context write_context env
