@@ -103,7 +103,9 @@ def main():
                 def handle(self):
                     run_session(args, self.request, record_file)
             class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-                pass
+                def __init__(self, *kwargs):
+                    self.allow_reuse_address = True
+                    super().__init__(*kwargs)
             addr = ('localhost', args.tcp)
             with ThreadedTCPServer(addr, TCPHandler) as server:
                 server.daemon_threads = True

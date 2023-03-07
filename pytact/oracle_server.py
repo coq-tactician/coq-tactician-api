@@ -161,7 +161,9 @@ def main():
                     run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
                                 cmd_args, self.request, record_file)
             class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-                pass
+                def __init__(self, *kwargs):
+                    self.allow_reuse_address = True
+                    super().__init__(*kwargs)
             addr = ('localhost', cmd_args.port)
             with ThreadedTCPServer(addr, TCPHandler) as server:
                 server.daemon_threads = True
