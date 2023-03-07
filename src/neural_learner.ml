@@ -284,7 +284,7 @@ let init_predict rc wc tacs env { stack_size; state } =
     let minductives = Mindset.elements @@ List.fold_left (fun m c ->
         let c = MutInd.make1 @@ MutInd.canonical c in
         Mindset.add c m) Mindset.empty minductives in
-    let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
+    let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context env in
     let open Monad_util.WithMonadNotations(CICGraphMonad) in
     let open Monad.Make(CICGraphMonad) in
 
@@ -538,8 +538,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       { db with tactics }
   let predict { tactics; write_context; read_context } =
     drain read_context write_context;
+    let env = Global.env () in
     if not @@ textmode_option () then
-      let env = Global.env () in
       let tacs, cache = init_predict read_context write_context tactics env !graph_cache in
       let find_global_argument = find_global_argument cache.state in
       fun f ->
@@ -549,7 +549,6 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
     else
-      let env = Global.env () in
       init_predict_text read_context write_context;
       fun f ->
         if f = [] then IStream.empty else
