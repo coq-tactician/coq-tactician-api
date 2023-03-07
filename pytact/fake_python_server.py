@@ -99,15 +99,16 @@ def main():
         record_context = contextlib.nullcontext()
     with record_context as record_file:
         if args.tcp != 0:
-            class TCPHandler(socketserver.BaseRequestHandler):
+            class Handler(socketserver.BaseRequestHandler):
                 def handle(self):
                     run_session(args, self.request, record_file)
-            class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+            class Server(socketserver.ThreadingTCPServer):
                 def __init__(self, *kwargs):
                     self.allow_reuse_address = True
+                    self.daemon_threads = True
                     super().__init__(*kwargs)
             addr = ('localhost', args.tcp)
-            with ThreadedTCPServer(addr, TCPHandler) as server:
+            with Server(addr, Handler) as server:
                 server.daemon_threads = True
                 server.serve_forever()
         else:

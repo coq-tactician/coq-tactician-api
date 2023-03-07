@@ -156,17 +156,17 @@ def main():
         record_context = contextlib.nullcontext()
     with record_context as record_file:
         if cmd_args.port is not None:
-            class TCPHandler(socketserver.BaseRequestHandler):
+            class Handler(socketserver.BaseRequestHandler):
                 def handle(self):
                     run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
                                 cmd_args, self.request, record_file)
-            class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+            class Server(socketserver.ThreadingTCPServer):
                 def __init__(self, *kwargs):
                     self.allow_reuse_address = True
+                    self.daemon_threads = True
                     super().__init__(*kwargs)
             addr = ('localhost', cmd_args.port)
-            with ThreadedTCPServer(addr, TCPHandler) as server:
-                server.daemon_threads = True
+            with Server(addr, Handler) as server:
                 server.serve_forever()
         else:
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
