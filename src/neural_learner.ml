@@ -561,3 +561,4 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 end
 
 (* let () = register_online_learner "Neural Learner" (module NeuralLearner) *)
+(* let () = Hook.set Ltacrecord.pre_benchmark_hook push_cache *)
