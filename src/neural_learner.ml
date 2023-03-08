@@ -560,4 +560,4 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
 end
 
-(* let () = register_online_learner "Neural Learner" (module NeuralLearner) *)
+let () = register_online_learner "Neural Learner" (module NeuralLearner)
