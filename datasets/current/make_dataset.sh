@@ -68,7 +68,7 @@ done
 mkdir -p $datasetname/dataset
 
 echo "Retrieving dataset"
-cp -H -r $(opam var prefix)/.opam-switch/build/* $datasetname/dataset
+cp -L -r $(opam var prefix)/.opam-switch/build/* $datasetname/dataset
 
 echo "Removing files other than .bin and .v (if a corresponding .bin file exists)"
 files=$(find $datasetname/dataset -not -type d)
