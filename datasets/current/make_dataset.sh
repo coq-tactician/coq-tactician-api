@@ -142,4 +142,4 @@ EOF
 done
 
 echo "Creating SquashFS archive"
-mksquashfs "$datasetname" "$datasetname.squ" -comp gzip
+mksquashfs "$datasetname" "$datasetname.squ" -comp xz
