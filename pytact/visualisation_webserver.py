@@ -99,7 +99,7 @@ def main():
         description = 'Start an interactive server that visualizes a dataset',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('dir',
+    parser.add_argument('dataset',
                         type=str,
                         help=('The location of the dataset to visualize. ' +
                               'Either a dataset directory, or a SquashFS image, ' +
@@ -118,7 +118,7 @@ def main():
 
     args = parser.parse_args()
 
-    dataset_path = Path(args.dir).resolve()
+    dataset_path = Path(args.dataset).resolve()
     with data_reader(dataset_path) as data:
         app.ctx.gvd = GraphVisualizationData(data)
         app.run(host=args.hostname, port=args.port, dev=args.dev)

@@ -234,7 +234,7 @@ def main2():
         description = 'Run sanity checks on a dataset and print some statistics.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('dir',
+    parser.add_argument('dataset',
                         type=str,
                         help=('The location of the dataset to check. ' +
                               'Either a dataset directory, or a SquashFS image, ' +
@@ -256,7 +256,7 @@ def main2():
     import sys
     sys.setrecursionlimit(10000)
 
-    dataset_path = Path(args.dir).resolve()
+    dataset_path = Path(args.dataset).resolve()
 
     errors = []
     tactics = Counter()
