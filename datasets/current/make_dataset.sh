@@ -150,4 +150,4 @@ echo "Deleting contents of dataset/"
 rm -rf "$datasetname"/dataset/*
 
 echo "Creating final archive"
-tar cf - "$datasetname/" | xz -T0 -v -z - > "$datasetname.tar.xz"
+tar cf - "$datasetname/" | xz --best -T0 -v -z - > "$datasetname.tar.xz"
