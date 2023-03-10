@@ -1,0 +1,47 @@
+================================================================================
+                              Tactician's Web
+================================================================================
+
+This dataset contains data extracted from formal knowledge encoded in the Coq
+Proof Assistant. Data is present in both a graph-format and a text-format.
+
+TODO: Link to relevant literature.
+
+--------------------------------------------------------------------------------
+                             Mounting the dataset
+--------------------------------------------------------------------------------
+
+The data in this archive is represented as a SquashFS image 'dataset.squ'.
+The recommended method of reading the contained data is by mounting it.
+If you do not have root access, this can be done using 'squashfuse', which you
+can install through your favorite package manager:
+
+squashfuse dataset.squ dataset/
+
+If you do have root access, you can mount the image more efficiently through
+
+mount dataset.squ dataset/
+
+Finally, you can also unpack the image without mounting it. However, on systems
+with limited memory or slow hard-disks this will lead to performance
+degradations while accessing the dataset. Experiments show that, due to the
+high decompression speed of the image's LZ4 compression algorithm, mounting is
+almost always preferrable to unpacking. Regardless, if you wich to unpack, you
+can run:
+
+unmksquashfs -dest dataset/ dataset.squ
+
+--------------------------------------------------------------------------------
+                             Accessing the data
+--------------------------------------------------------------------------------
+
+The data is encoded using the Cap'n Proto serialization protocol, allowing for
+fast random access to the graph from many programming languages. The schema and
+documentation for the data can be found in 'meta/graph_api.capnp'. For further
+information about Cap'n Proto, we refer to https://capnproto.org/
+
+For Python, a library called PyTactician (TODO: Link to Pypi and documentation)
+is provided that allows for easy and efficient access to the data. It includes
+software to visualize the dataset, a sanity checker for the dataset, an example
+prediction server that interfaces with Coq, an Oracle prediction server and
+a client for the reinforcement learning component.

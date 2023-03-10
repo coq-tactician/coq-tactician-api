@@ -27,6 +27,8 @@ echo "Populating meta directory"
 
 mkdir -p $datasetname/meta
 
+cp $scriptpath/README $datasetname/README
+
 cat > $datasetname/meta/LICENSE <<EOF
 MIT License
 
@@ -141,5 +143,11 @@ EOF
     echo "$info" > $datasetname/dataset/$package/LICENSE
 done
 
-echo "Creating SquashFS archive"
-mksquashfs "$datasetname" "$datasetname.squ" -comp xz
+echo "Creating SquashFS image"
+mksquashfs "$datasetname/dataset/" "$datasetname/dataset.squ" -comp lz4 -Xhc
+
+echo "Deleting contents of dataset/"
+rm -rf "$datasetname/dataset/*"
+
+echo "Creating final archive"
+tar cf - "$datasetname/" | xz -v -z - > "$datasetname.tar.xz"
