@@ -101,7 +101,9 @@ def main():
 
     parser.add_argument('dir',
                         type=str,
-                        help='the directory of the dataset')
+                        help=('The location of the dataset to visualize. ' +
+                              'Either a dataset directory, or a SquashFS image, ' +
+                              'which will be automatically mounted.'))
     parser.add_argument('--port',
                         type=int,
                         default=8080,

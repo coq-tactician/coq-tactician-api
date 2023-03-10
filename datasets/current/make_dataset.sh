@@ -147,7 +147,7 @@ echo "Creating SquashFS image"
 mksquashfs "$datasetname/dataset/" "$datasetname/dataset.squ" -comp lz4 -Xhc
 
 echo "Deleting contents of dataset/"
-rm -rf "$datasetname/dataset/*"
+rm -rf "$datasetname"/dataset/*
 
 echo "Creating final archive"
-tar cf - "$datasetname/" | xz -v -z - > "$datasetname.tar.xz"
+tar cf - "$datasetname/" | xz -T0 -v -z - > "$datasetname.tar.xz"

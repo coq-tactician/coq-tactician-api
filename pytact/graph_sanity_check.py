@@ -236,7 +236,9 @@ def main2():
 
     parser.add_argument('dir',
                         type=str,
-                        help='the directory of the dataset')
+                        help=('The location of the dataset to check. ' +
+                              'Either a dataset directory, or a SquashFS image, ' +
+                              'which will be automatically mounted.'))
     parser.add_argument('--jobs',
                         type=int,
                         default=None,

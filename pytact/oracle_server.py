@@ -97,7 +97,9 @@ def main():
                         help='"graph" to communicate in graph-mode, "text" to communicate in text-mode')
     parser.add_argument('dataset',
                         type=str,
-                        help='The location of the dataset from which to extract the oracle information')
+                        help=('The location of the dataset from which to extract the oracle information. ' +
+                              'Either a dataset directory, or a SquashFS image, ' +
+                              'which will be automatically mounted.'))
     parser.add_argument('--tcp',
                         dest='port',
                         type = int,

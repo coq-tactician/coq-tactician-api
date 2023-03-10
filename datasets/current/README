@@ -8,30 +8,6 @@ Proof Assistant. Data is present in both a graph-format and a text-format.
 TODO: Link to relevant literature.
 
 --------------------------------------------------------------------------------
-                             Mounting the dataset
---------------------------------------------------------------------------------
-
-The data in this archive is represented as a SquashFS image 'dataset.squ'.
-The recommended method of reading the contained data is by mounting it.
-If you do not have root access, this can be done using 'squashfuse', which you
-can install through your favorite package manager:
-
-squashfuse dataset.squ dataset/
-
-If you do have root access, you can mount the image more efficiently through
-
-mount dataset.squ dataset/
-
-Finally, you can also unpack the image without mounting it. However, on systems
-with limited memory or slow hard-disks this will lead to performance
-degradations while accessing the dataset. Experiments show that, due to the
-high decompression speed of the image's LZ4 compression algorithm, mounting is
-almost always preferrable to unpacking. Regardless, if you wich to unpack, you
-can run:
-
-unmksquashfs -dest dataset/ dataset.squ
-
---------------------------------------------------------------------------------
                              Accessing the data
 --------------------------------------------------------------------------------
 
@@ -45,3 +21,33 @@ is provided that allows for easy and efficient access to the data. It includes
 software to visualize the dataset, a sanity checker for the dataset, an example
 prediction server that interfaces with Coq, an Oracle prediction server and
 a client for the reinforcement learning component.
+
+The data in this archive is represented as a SquashFS image 'dataset.squ'.
+If you are using the PyTactician library, you can load the dataset by pointing
+directly to this image. This will automatically mount the image in directory
+'dataset/'. For example:
+
+pytact-check dataset.squ
+pytact-visualize dataset.squ
+
+In order to make this work, 'squashfuse' needs to be installed through your
+favorite package manager. If you prefer to mount manually, or if you are not
+using the PyTactician library, you can mount the image using
+
+squashfuse dataset.squ dataset/
+pytact-check dataset/
+pytact-visualize dataset/
+
+If you have root access, you can mount the image more efficiently through
+
+mount dataset.squ dataset/
+
+Finally, you can also unpack the image without mounting it. However, on systems
+with limited memory or slow hard-disks this will lead to performance
+degradations while accessing the dataset. Experiments show that, due to the
+high decompression speed of the image's LZ4 compression algorithm, mounting is
+almost always preferrable to unpacking. Nevertheless, if you wich to unpack, you
+can run:
+
+unsquashfs -dest dataset/ dataset.squ
+

@@ -103,6 +103,9 @@ import mmap
 import itertools
 import resource
 import threading
+import subprocess
+import shutil
+import time
 
 T = TypeVar('T')
 class TupleLike():
@@ -215,14 +218,48 @@ cdef class LowlevelDataReader:
     def __len__(self) -> int:
         return len(self.graphs)
 
+def setup_dataset(dataset_path: Path):
+    if not dataset_path.exists():
+        raise ValueError(f"Dataset does not exist: {dataset_path}")
+    if dataset_path.is_file():
+        mountpoint = dataset_path.with_suffix('')
+        if not mountpoint.is_dir():
+            raise ValueError(f"Unable to mount dataset. Mountpoint does not exist: {mountpoint}")
+        if not mountpoint.is_mount():
+            if shutil.which('squashfuse') is None:
+                raise ValueError(f"Unable to mount dataset. Executable 'squashfuse' not found.")
+            args = ['squashfuse', str(dataset_path), str(mountpoint)]
+            result = subprocess.run(args,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                raise ValueError(f"Unable to mount dataset. Squashfuse invocation:\n" +
+                                 ' '.join(args) +
+                                 f"\nSquashfuse error: \n" +
+                                 result.stderr.decode())
+            for _ in range(100):
+                if mountpoint.is_mount(): break
+                time.sleep(0.01)
+            if not mountpoint.is_mount():
+                raise ValueError(f"Unable to mount dataset {dataset_path}. Mount did not appear.")
+        return mountpoint
+    else:
+        return dataset_path
+
 @contextmanager
 def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, None, None]:
-    """Load a directory of dataset files into memory, and expose their raw Cap'n Proto structures.
+    """Map a directory of dataset files into memory, and expose their raw Cap'n Proto structures.
+
+    Arguments:
+    `dataset_path`: Can either be a dataset directory, or a SquashFS image file. In case of an image
+                    file `dataset.squ`, the image will be mounted using `squashfuse` on directory
+                    `dataset/`, after which the contents of that directory will be read.
 
     This is a low-level function. Prefer to use `data_reader`. See `LowlevelDataReader` for
     further documentation.
     """
-    fnames = [f for f in dataset_path.glob('**/*.bin') if f.is_file()]
+
+    mountpoint = setup_dataset(dataset_path)
+    fnames = [f for f in mountpoint.glob('**/*.bin') if f.is_file()]
 
     # Increase the open file limit, because we could be intentionally mapping a large number of files
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -231,7 +268,7 @@ def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, No
 
     try:
         with ExitStack() as stack:
-            dataset = [(fname.relative_to(dataset_path),
+            dataset = [(fname.relative_to(mountpoint),
                         stack.enter_context(file_dataset_reader(fname)))
                     for fname in fnames]
             # CAREFUL: LowlevelDataReader contains critical C++ structures that are not being
@@ -241,7 +278,7 @@ def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, No
             # the `with` block.
             # If the Python runtime ever becomes clever and eliminates this variable, a different
             # method of keeping the object around should be found.
-            dr = LowlevelDataReader(dataset_path, dataset)
+            dr = LowlevelDataReader(mountpoint, dataset)
             yield dr
     finally:
         # Reset open file limit to original
@@ -1176,6 +1213,12 @@ def lowlevel_to_highlevel(LowlevelDataReader lreader) -> dict[Path, Dataset]:
 def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None]:
     """Load a directory of dataset files into memory, and expose the data they contain.
     The result is a dictionary that maps physical paths to `Dataset` instances that allow access to the data.
+
+    Arguments:
+    `dataset_path`: Can either be a dataset directory, or a SquashFS image file. In case of an image
+                    file `dataset.squ`, the image will be mounted using `squashfuse` on directory
+                    `dataset/`, after which the contents of that directory will be read.
+
     """
     with lowlevel_data_reader(dataset_path) as lreader:
         yield lowlevel_to_highlevel(lreader)
