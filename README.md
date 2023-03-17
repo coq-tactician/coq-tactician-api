@@ -111,7 +111,6 @@ To make the `synth` command available, your Coq file will have to start with
 From Tactician Require Import Ltac1.
 ```
 The following settings govern the data that Coq will send to the server:
-- `Set Tactician Neural Truncate` determines wether the bodies of definitions will get truncated or not (on by default).
 - `Set Tactician Neural Textmode` determines wether Coq is communicating with a graph-based server or a text-based server (graph-based by default).
 To let Coq take care of starting and stopping the server, use the command
 ```
