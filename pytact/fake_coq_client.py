@@ -4,7 +4,7 @@ import signal
 from subprocess import Popen
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
-from pytact.data_reader import capnp_message_generator_from_file
+from pytact.data_reader import capnp_message_generator_from_file_lowlevel
 
 def run_fake_client(server_socket, messages_generator):
     socket_reader = graph_api_capnp.PredictionProtocol.Response.read_multiple_packed(
@@ -39,7 +39,7 @@ def main():
     cmd_args = parser.parse_args()
 
     with open(cmd_args.data, 'rb') as message_file:
-        messages_generator = capnp_message_generator_from_file(message_file)
+        messages_generator = capnp_message_generator_from_file_lowlevel(message_file)
         if cmd_args.tcp_location is not None:
             addr, port = cmd_args.tcp_location.split(':')
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:

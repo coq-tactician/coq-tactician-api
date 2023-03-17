@@ -1441,6 +1441,36 @@ def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | N
             response.write_packed(record)
         msg = next_disabled_sigint()
 
+def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO) -> (
+        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                  capnp.lib.capnp._DynamicStructBuilder, None]):
+    """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
+
+    Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
+    `capnp_message_generator(s, record=message_file)`. The resulting generator acts just like the generator
+    created by `capnp_message_generator` except that it is not connected to the socket but just replays the
+    pre-recorded messages. Every responsemessage received by this generator through `send` will be compared against
+    the recorded response and if they differ an error is thrown.
+    """
+    message_reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
+        message_file, traversal_limit_in_words=2**64-1)
+    for request in message_reader:
+        cython_msg = PredictionProtocol_Request_Reader(request)
+        response = yield cython_msg
+        yield
+        # A bit of a hack, we temporarily change the schema of the reader to `Response`
+        message_reader.schema = graph_api_capnp.PredictionProtocol.Response.schema
+        recorded_response = next(message_reader)
+        message_reader.schema = graph_api_capnp.PredictionProtocol.Request.schema
+        # if response.to_dict() == recorded_response.to_dict():
+        #     print(f'The servers response to a {cython_msg.which.name} message was equal to the recorded response')
+        # else:
+        #     raise ValueError(
+        #         f"The servers response to a {cython_msg.which.name} message was not equal to the recorded response.\n"
+        #         f"Recorded response: {recorded_response}\n"
+        #         f"Servers response: {response}\n"
+        #     )
+
 
 def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
     msg = next(lgenerator, None)
@@ -1513,35 +1543,29 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     pg = prediction_generator(lgenerator, defs)
     return GlobalContextMessage(defs, [], None, pg)
 
-def capnp_message_generator_from_file(message_file: BinaryIO) -> (
-        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
-                  capnp.lib.capnp._DynamicStructBuilder, None]):
-    """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
+def capnp_message_generator_from_file(message_file: BinaryIO) -> GlobalContextMessage:
+    """A generator that facilitates communication between a prediction server and a Coq process.
 
-    Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
-    `capnp_message_generator(s, record=message_file)`. The resulting generator acts just like the generator
-    created by `capnp_message_generator` except that it is not connected to the socket but just replays the
-    pre-recorded messages. Every responsemessage received by this generator through `send` will be compared against
-    the recorded response and if they differ an error is thrown.
+    Given a `socket`, this function creates a `GlobalContextMessage` `context`. This message contains an
+    initially empty list of available tactics and definitions in the global context. Through
+    `context.prediction_requests` one can access a generator that yields prediction requests and expects
+    predictions to be sent in response. The possible messages are as follows:
+    - `GlobalContextMessage`: An additional, nested global context message that adds in additional tactics
+       and definitions. The prediction requests of this nested context need to be exhausted before continuing
+       with messages from the current context.
+    - `CheckAlignmentMessage`: A request to check which of Coq's current tactics and definitions the
+      prediction server currently "knows about". The generator expects a `CheckAlignmentResponse` to be
+      sent in response.
+    - `ProofState`: A request to make tactic predictions for a given proof state. Either a
+      `TacticPredictionsGraph` or a `TacticPredictionsText` message is expected in return.
+
+    When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
+    descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
     """
-    message_reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
-        message_file, traversal_limit_in_words=2**64-1)
-    for request in message_reader:
-        cython_msg = PredictionProtocol_Request_Reader(request)
-        response = yield cython_msg
-        yield
-        # A bit of a hack, we temporarily change the schema of the reader to `Response`
-        message_reader.schema = graph_api_capnp.PredictionProtocol.Response.schema
-        recorded_response = next(message_reader)
-        message_reader.schema = graph_api_capnp.PredictionProtocol.Request.schema
-        if response.to_dict() == recorded_response.to_dict():
-            print(f'The servers response to a {cython_msg.which.name} message was equal to the recorded response')
-        else:
-            raise ValueError(
-                f"The servers response to a {cython_msg.which.name} message was not equal to the recorded response.\n"
-                f"Recorded response: {recorded_response}\n"
-                f"Servers response: {response}\n"
-            )
+    lgenerator = capnp_message_generator_from_file_lowlevel(message_file)
+    defs = OnlineDefinitionsReader.init_empty()
+    pg = prediction_generator(lgenerator, defs)
+    return GlobalContextMessage(defs, [], None, pg)
 
 class GlobalContextSets:
     """Lazily retrieve a the global context of a definition as a set, with memoization.
