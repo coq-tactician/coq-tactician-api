@@ -60,6 +60,9 @@ cdef extern from "capnp/list.h":
     cdef cppclass C_Uint64_List " ::capnp::List<uint64_t, ::capnp::Kind::PRIMITIVE>::Reader":
         uint64_t operator[](uint) except +reraise_kj_exception
         uint size()
+    cdef cppclass C_Int64_List " ::capnp::List<int64_t, ::capnp::Kind::PRIMITIVE>::Reader":
+        int64_t operator[](uint) except +reraise_kj_exception
+        uint size()
     cdef cppclass C_String_List " ::capnp::List<capnp::Text, ::capnp::Kind::BLOB>::Reader":
         StringPtr operator[](uint) except +reraise_kj_exception
         uint size()
@@ -96,6 +99,12 @@ cdef class Uint64_List:
     cdef object root
     @staticmethod
     cdef init(C_Uint64_List source, object root)
+
+cdef class Int64_List:
+    cdef C_Int64_List source
+    cdef object root
+    @staticmethod
+    cdef init(C_Int64_List source, object root)
 
 cdef class String_List:
     cdef C_String_List source

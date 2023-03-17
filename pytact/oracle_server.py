@@ -3,111 +3,77 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 import socket
+import socketserver
 import argparse
 import contextlib
-import capnp
-import pytact.graph_api_capnp as graph_api_capnp
-from pytact.data_reader import online_definitions_initialize, online_data_predict, data_reader, Original, capnp_message_generator
+from pytact.data_reader import (data_reader, Original, capnp_message_generator, ProofState,
+                                TacticPredictionGraph, TacticPredictionsGraph,
+                                TacticPredictionText, TacticPredictionsText,
+                                GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
 
-@dataclass
+@dataclass(eq=True, frozen=True)
 class GlobalArgument:
     identity: int
-@dataclass
+@dataclass(eq=True, frozen=True)
 class LocalArgument:
     context_index: int
-@dataclass
+@dataclass(eq=True, frozen=True)
 class OracleTactic:
     tactic_id: int
-    arguments: list[GlobalArgument | LocalArgument]
+    arguments: tuple[GlobalArgument | LocalArgument, ...]
+    clean: bool
 
-def text_prediction_loop(text_oracle_data, messages_generator):
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                if msg.predict.state.text in text_oracle_data:
-                    preds = [
-                    {'tacticText': text_oracle_data[msg.predict.state.text][0],
-                    'confidence': 1} ]
-                else:
-                    preds = []
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
-            elif msg.is_initialize:
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-            elif msg.is_synchronize:
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-            elif msg.is_check_alignment:
-                alignment = {'unalignedTactics': [],
-                            'unalignedDefinitions': []}
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+def text_prediction_loop(text_oracle_data, context: GlobalContextMessage):
+    prediction_requests = context.prediction_requests
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            if proof_state.text in text_oracle_data:
+                preds = [TacticPredictionText(t, 1) for t in text_oracle_data[proof_state.text]]
             else:
-                raise Exception("Capnp protocol error")
-            msg = messages_generator.send(response)
-
-def prediction_loop(msg, oracle_data, definitions, tactics, messages_generator):
-    available_tacticids = set([ t.ident for t in tactics ])
-    available_definitions = { d.node.identity : d.node.nodeid for d in definitions.definitions }
-    while True:
-        if msg.is_predict:
-            with online_data_predict(
-                    definitions,
-                    msg.predict) as proof_state:
                 preds = []
-                for tactic in oracle_data[proof_state.root.identity]:
-                    if tactic.tactic_id in available_tacticids:
-                        complete = True
-                        resolved_args = []
-                        for arg in tactic.arguments:
-                            if isinstance(arg, LocalArgument):
-                                resolved_args.append(
-                                    {'term': {'depIndex': 0,
-                                              'nodeIndex': proof_state.context[arg.context_index].nodeid}})
-                            elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
-                                resolved_args.append(
-                                    {'term': {'depIndex': 1,
-                                              'nodeIndex': available_definitions[arg.identity]}})
-                            else:
-                                complete = False
-                        if complete:
-                            preds = [{'tactic': {'ident': tactic.tactic_id},
-                                      'arguments': resolved_args,
-                                      'confidence': 1}]
-                            break
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
-                msg = messages_generator.send(response)
+            prediction_requests.send(TacticPredictionsText(preds))
+        elif isinstance(msg, CheckAlignmentMessage):
+            alignment = CheckAlignmentResponse([], [])
+            prediction_requests.send(alignment)
+        elif isinstance(msg, GlobalContextMessage):
+            text_prediction_loop(text_oracle_data, msg)
         else:
-            return msg
+            raise Exception("Capnp protocol error")
 
-def graph_initialize_loop(oracle_data, known_definitions, known_tactics, messages_generator):
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                raise Exception('Predict message received without a preceding initialize message')
-            elif msg.is_synchronize:
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-                msg = messages_generator.send(response)
-            elif msg.is_check_alignment:
-                check_alignment = msg.check_alignment
-                with online_definitions_initialize(
-                        check_alignment.graph,
-                        check_alignment.representative) as definitions:
-                    unknown_definitions = [ d.node.nodeid for d in definitions.definitions
-                                            if d.node.identity not in known_definitions ]
-                    unknown_tactics = [ t.ident for t in check_alignment.tactics
-                                        if t.ident not in known_tactics ]
-                    alignment = {'unalignedTactics': unknown_tactics,
-                                'unalignedDefinitions': unknown_definitions}
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-                    msg = messages_generator.send(response)
-            elif msg.is_initialize:
-                init = msg.initialize
-                with online_definitions_initialize(init.graph, init.representative) as definitions:
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-                    msg = prediction_loop(messages_generator.send(response),
-                                          oracle_data, definitions, init.tactics, messages_generator)
-            else:
-                raise Exception("Capnp protocol error")
+def graph_prediction_loop(context: GlobalContextMessage, oracle_data, known_definitions, known_tactics):
+    available_tacticids = set([ t.ident for t in context.tactics ])
+    available_definitions = { d.node.identity : d.node for d in context.definitions.definitions() }
+    prediction_requests = context.prediction_requests
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            def resolve_arg(arg):
+                if isinstance(arg, LocalArgument):
+                    return proof_state.context[arg.context_index]
+                elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
+                    return available_definitions[arg.identity]
+                else:
+                    return None
+            possible_tactics = [
+                TacticPredictionGraph(t.tactic_id,
+                                    [resolve_arg(arg) for arg in t.arguments],
+                                    1 if t.clean else 0.95)
+                for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
+                if t.tactic_id in available_tacticids and
+                all([resolve_arg(arg) is not None for arg in t.arguments])]
+            prediction_requests.send(TacticPredictionsGraph(possible_tactics))
+        elif isinstance(msg, CheckAlignmentMessage):
+            unknown_definitions = [ d for d in context.definitions.definitions()
+                                    if d.node.identity not in known_definitions ]
+            unknown_tactics = [ t.ident for t in context.tactics
+                                if t.ident not in known_tactics ]
+            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
+            prediction_requests.send(alignment)
+        elif isinstance(msg, GlobalContextMessage):
+            graph_prediction_loop(msg, oracle_data, known_definitions, known_tactics)
+        else:
+            raise Exception("Capnp protocol error")
 
 def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics, args, capnp_socket, record_file):
     messages_generator = capnp_message_generator(capnp_socket, record_file)
@@ -116,7 +82,7 @@ def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
         text_prediction_loop(text_oracle_data, messages_generator)
     elif args.mode == 'graph':
         print('Python server running in graph mode')
-        graph_initialize_loop(oracle_data, known_definitions, known_tactics, messages_generator)
+        graph_prediction_loop(messages_generator, oracle_data, known_definitions, known_tactics)
     else:
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 
@@ -131,7 +97,9 @@ def main():
                         help='"graph" to communicate in graph-mode, "text" to communicate in text-mode')
     parser.add_argument('dataset',
                         type=str,
-                        help='The location of the dataset from which to extract the oracle information')
+                        help=('The location of the dataset from which to extract the oracle information. ' +
+                              'Either a dataset directory, or a SquashFS image, ' +
+                              'which will be automatically mounted.'))
     parser.add_argument('--tcp',
                         dest='port',
                         type = int,
@@ -147,8 +115,8 @@ def main():
 
     print("Building oracle data...")
     dataset_path = Path(cmd_args.dataset).resolve()
-    oracle_data = defaultdict(list)
-    text_oracle_data = defaultdict(list)
+    oracle_data = defaultdict(set)
+    text_oracle_data = defaultdict(set)
     known_definitions = set()
     known_tactics = set()
     with data_reader(dataset_path) as data:
@@ -169,7 +137,7 @@ def main():
                                 if outcome.before.root.identity == outcome.after[0].root.identity:
                                     # This tactic did something, but very minimally, usually just an identity cast
                                     continue
-                            text_oracle_data[outcome.before.text].append(outcome.tactic.text_non_anonymous)
+                            text_oracle_data[outcome.before.text].add(outcome.tactic.text_non_anonymous)
                             tactic_args = outcome.tactic_arguments
                             if any(arg is None for arg in tactic_args):
                                 continue # If an argument is unknown we are screwed
@@ -179,8 +147,9 @@ def main():
                                     args.append(GlobalArgument(arg_def.node.identity))
                                 else:
                                     args.append(LocalArgument(list(outcome.before.context).index(arg)))
-                            oracle_tactic = OracleTactic(outcome.tactic.ident, args)
-                            oracle_data[outcome.before.root.identity].append(oracle_tactic)
+                            oracle_tactic = OracleTactic(outcome.tactic.ident, tuple(args),
+                                                         outcome.tactic.text == outcome.tactic.interm_text)
+                            oracle_data[outcome.before.root.identity].add(oracle_tactic)
     print("Oracle data built, ready for incoming connections")
 
     if cmd_args.record_file is not None:
@@ -189,17 +158,18 @@ def main():
         record_context = contextlib.nullcontext()
     with record_context as record_file:
         if cmd_args.port is not None:
-            addr = ('localhost', cmd_args.port)
-            server_sock = socket.create_server(addr)
-            try:
-                while True:
-                    capnp_socket, remote_addr = server_sock.accept()
-                    print(f"coq client connected {remote_addr}")
+            class Handler(socketserver.BaseRequestHandler):
+                def handle(self):
                     run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
-                                cmd_args, capnp_socket, record_file)
-            finally:
-                print(f'closing the server on port {addr[1]}')
-                server_sock.close()
+                                cmd_args, self.request, record_file)
+            class Server(socketserver.ThreadingTCPServer):
+                def __init__(self, *kwargs):
+                    self.allow_reuse_address = True
+                    self.daemon_threads = True
+                    super().__init__(*kwargs)
+            addr = ('localhost', cmd_args.port)
+            with Server(addr, Handler) as server:
+                server.serve_forever()
         else:
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
             run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,

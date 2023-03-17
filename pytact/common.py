@@ -16,9 +16,6 @@ import functools
 from typing import List
 import capnp
 
-graph_api_filename = pkg_resources.resource_filename('pytact','graph_api.capnp')
-api_filename = graph_api_filename
-
 test_filename_stdin = pkg_resources.resource_filename('pytact','tests/TestReinforceStdin.v')
 test_filename_tcp  =  pkg_resources.resource_filename('pytact','tests/TestReinforceTcp.v')
 
@@ -76,9 +73,8 @@ class Connection:
 
         logger.debug("starting capnp client")
 
-        logger.info("loading %s", api_filename)
-        capnp.remove_import_hook()
-        self.api = capnp.load(api_filename)
+        import pytact.graph_api_capnp as api
+        self.api = api
 
         self.client = capnp.TwoPartyClient()
 
@@ -117,15 +113,15 @@ class Connection:
         if proc_task.done():
             logger.debug("process with capnp ended %s", repr(proc_task))
             if proc_task.exception():
-                logger.error("EXCEPTION in connection task; this is not expected, debug: %s",
-                             repr(proc_task))
+                raise Exception("EXCEPTION in connection task; this is not expected, debug: %s",
+                                repr(proc_task))
 
         else:
             if read_task.done():
-                logger.error("reading_socket ended before reinforce ended: "
+                raise Exception("reading_socket ended before reinforce ended: "
                              "possibly terminated from other side")
             if write_task.done():
-                logger.error("_writing_socket ended ended before reinforce ended: "
+                raise Exception("_writing_socket ended ended before reinforce ended: "
                              "possibly connection broken")
 
         read_task.cancel()

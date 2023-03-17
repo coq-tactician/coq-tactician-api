@@ -28,13 +28,13 @@ def capnp2cython():
         Extension(
             name = "pytact.graph_api_capnp_cython",
             sources = [cython_file_pyx],
-            extra_compile_args=["-O3"],
+            extra_compile_args=["-O3", "-std=c++14"],
             include_dirs=[capnp_loc]
         ),
         Extension(
             name = "pytact.data_reader",
             sources = ['pytact/data_reader.pyx'],
-            extra_compile_args=["-O3"],
+            extra_compile_args=["-O3", "-std=c++14"],
             include_dirs=[capnp_loc]
         )])
 

@@ -21,7 +21,7 @@ let with_depth f =
     (fun () -> Topfmt.set_depth_boxes (Some 32); f ())
 
 let constr_str env evar_map t = Pp.string_of_ppcmds (Sexpr.format_oneline (
-    Printer.safe_pr_constr_env env evar_map t))
+    Printer.pr_constr_env env evar_map t))
 
 let hyp_to_string_safe env evar_map =
   let id_str id = Names.Id.to_string id.binder_name in
@@ -39,10 +39,17 @@ let proof_state_to_string_safe (hyps, concl) env evar_map =
   String.concat ", " hyps ^ " |- " ^ goal
 
 type single_proof_state = (Constr.t, Constr.t) Named.Declaration.pt list * Constr.t * Evar.t
-type proof_state = Evd.evar_map * unit (* single_proof_state Evar.Map.t *) * single_proof_state
-type outcome = proof_state * Constr.t * proof_state list
+type proof_state = Evd.evar_map * (Evar.t -> single_proof_state) * single_proof_state
+type outcome = proof_state * Constr.t * Evd.evar_map * (Evar.t -> single_proof_state) * proof_state list
 type tactical_proof = (outcome list * glob_tactic_expr option) list
 type env_extra = tactical_proof Id.Map.t * tactical_proof Cmap.t
+
+(* TODO: All this conversion of proof states, sigmas and other things is really convoluted *)
+let sigma_to_proof_state_lookup sigma (e : Evar.t) : single_proof_state =
+  let info = Evd.find_undefined sigma e in
+  List.map (map_named (EConstr.to_constr ~abort_on_undefined_evars:false sigma)) @@ Evd.evar_filtered_context info,
+  EConstr.to_constr ~abort_on_undefined_evars:false sigma info.evar_concl,
+  e
 
 module type CICGraphMonadType = sig
 
@@ -83,28 +90,32 @@ module type CICGraphMonadType = sig
   val get_previous_definition : node option t
   val drain_external_previous_definitions : node list t
 
+  val find_evar     : Evar.t -> (node * node option array) option t
+  val register_evar : Evar.t -> node -> node option array -> unit t
+
   (** Managing the local context *)
   val lookup_relative     : int -> node t
+  val lookup_relative_opt : int -> node option t
   val lookup_named        : Id.t -> node t
       (* The array is the local context associated with the section, in the same ordering as would be given
         by an Evar node. If an element in the node is None, it is a section variable. *)
-  val lookup_evar         : Evar.t -> (node * node option array) option t
   val lookup_named_map    : node Id.Map.t t
   val lookup_def_depth    : int option t
-  val lookup_def_truncate : bool t
   val lookup_env          : Environ.env t
   val lookup_env_extra    : env_extra t
   val lookup_include_metadata : bool t
   val lookup_include_opaque : bool t
+  val lookup_proof_state  : Evar.t -> single_proof_state t
 
   val with_relative       : node -> 'a t -> 'a t
   val with_relatives      : node list -> 'a t -> 'a t
   val with_named          : Id.t -> node -> 'a t -> 'a t
-  val with_evar           : Evar.t -> node -> node option array -> 'a t -> 'a t
+  val with_empty_evars    : 'a t -> 'a t
   val with_empty_contexts : 'a t -> 'a t
   val with_decremented_def_depth : 'a t -> 'a t
   val with_env            : Environ.env -> 'a t -> 'a t
   val with_env_extra      : env_extra -> 'a t -> 'a t
+  val with_evar_map       : (Evar.t -> single_proof_state) -> 'a t -> 'a t
 
   type definitions =
     { constants            : node_status Cmap.t
@@ -118,10 +129,10 @@ module type CICGraphMonadType = sig
     ; definition_nodes : definitions}
 
   val run :
-    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int -> state:state ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_depth:int -> state:state ->
     'a t -> (state * 'a) repr_t
   val run_empty :
-    ?include_metadata:bool -> ?include_opaque:bool -> ?def_truncate:bool -> ?def_depth:int ->
+    ?include_metadata:bool -> ?include_opaque:bool -> ?def_depth:int ->
     'a t -> (state * 'a) repr_t
 end
 module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
@@ -145,23 +156,23 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   type context =
     { relative     : node list
     ; named        : node Id.Map.t
-    ; sigma        : (node * node option array) Evar.Map.t
     ; def_depth    : int option
-    ; def_truncate : bool
     ; env          : Environ.env option
     ; env_extra    : env_extra option
     ; metadata     : bool
-    ; opaque       : bool }
+    ; opaque       : bool
+    ; evar_map     : Evar.t -> single_proof_state }
   type state =
     { previous : node option
     ; external_previous : node list
     ; section_nodes : node Id.Map.t
-    ; definition_nodes : definitions}
+    ; definition_nodes : definitions }
+    type full_state = state * (node * node option array) Evar.Map.t
 
   module M = Monad_util.ReaderStateMonadT
       (G)
       (struct type r = context end)
-      (struct type s = state end)
+      (struct type s = full_state end)
   module OList = List
   open M
   include Monad_util.WithMonadNotations(M)
@@ -173,21 +184,9 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
         G.map (fun (s, (a, nl, ch)) -> (s, a), nl, ch) (run (f n) c s))
 
   (* This is a typical function that would benefit greatly from having sized vectors! *)
-  let with_delayed_nodes ?definition i f =
-    let rec aux i nodes =
-      if i = 0 then
-        f nodes
-      else
-        with_delayed_node ?definition @@ fun n ->
-          let+ a, chs = aux (i - 1) (n::nodes) in
-          match chs with
-          | [] -> CErrors.anomaly Pp.(str "with_delayed_nodes received to few children nodes")
-          | (nl, ch)::chs -> (a, chs), nl, ch
-    in
-    let+ a, chs = aux i [] in
-    match chs with
-    | [] -> a
-    | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
+  let with_delayed_nodes ?definition i f = unrun @@ fun c s ->
+    with_delayed_nodes ?definition i (fun n ->
+        G.map (fun (s, (a, chls)) -> (s, a), chls) (run (f n) c s))
 
   (** Registering and lookup of definitions *)
 
@@ -200,86 +199,95 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     | Some ((NDischarged | NSubstituted), _) -> Some x
 
   let register_constant c n =
-    let* ({ definition_nodes = ({ constants; _ } as dn); _ } as s) = get in
-    put { s with
+    let* ({ definition_nodes = ({ constants; _ } as dn); _ } as s, se) = get in
+    put ({ s with
           previous = Some n
         ; definition_nodes =
-            { dn with constants = Cmap.update c (update_error2 (Constant.print c) (NActual, n)) constants }}
+            { dn with constants = Cmap.update c (update_error2 (Constant.print c) (NActual, n)) constants }}, se)
   let find_constant c =
-    let+ { definition_nodes = { constants; _ }; _ } = get in
+    let+ { definition_nodes = { constants; _ }; _ }, _ = get in
     Cmap.find_opt c constants
 
   let register_inductive i n =
-    let* ({ definition_nodes = ({ inductives; _ } as dn); _ } as s) = get in
-    put { s with
+    let* ({ definition_nodes = ({ inductives; _ } as dn); _ } as s, se) = get in
+    put ({ s with
           previous = Some n
         ; definition_nodes =
-            { dn with inductives = Indmap.update i (update_error2 (Pp.str "ind") (NActual, n)) inductives }}
+            { dn with inductives = Indmap.update i (update_error2 (Pp.str "ind") (NActual, n)) inductives }}, se)
   let find_inductive i =
-    let+ { definition_nodes = { inductives; _ }; _ } = get in
+    let+ { definition_nodes = { inductives; _ }; _ }, _ = get in
     Indmap.find_opt i inductives
 
   let register_constructor c n =
-    let* ({ definition_nodes = ({ constructors; _ } as dn); _ } as s) = get in
-    put { s with
+    let* ({ definition_nodes = ({ constructors; _ } as dn); _ } as s, se) = get in
+    put ({ s with
           previous = Some n
         ; definition_nodes =
-            { dn with constructors = Constrmap.update c (update_error2 (Pp.str "constr") (NActual, n)) constructors }}
+            { dn with constructors =
+                        Constrmap.update c (update_error2 (Pp.str "constr") (NActual, n)) constructors }}, se)
   let find_constructor c =
-    let+ { definition_nodes = { constructors; _ }; _ } = get in
+    let+ { definition_nodes = { constructors; _ }; _ }, _ = get in
     Constrmap.find_opt c constructors
 
   let register_projection p n =
-    let* ({ definition_nodes = ({ projections; _ } as dn); _ } as s) = get in
-    put { s with
+    let* ({ definition_nodes = ({ projections; _ } as dn); _ } as s, se) = get in
+    put ({ s with
           previous = Some n
         ; definition_nodes =
-            { dn with projections = ProjMap.update p (update_error2 (Pp.str "proj") (NActual, n)) projections  }}
+            { dn with projections = ProjMap.update p (update_error2 (Pp.str "proj") (NActual, n)) projections  }}, se)
   let find_projection p =
-    let+ { definition_nodes = { projections; _ }; _ } = get in
+    let+ { definition_nodes = { projections; _ }; _ }, _ = get in
     ProjMap.find_opt p projections
 
   let register_section_variable id n =
-    let* ({ section_nodes; _ } as s) = get in
-    put { s with
+    let* ({ section_nodes; _ } as s), se = get in
+    put ({ s with
           previous = Some n
-        ; section_nodes = Id.Map.update id (update_error n) section_nodes }
+        ; section_nodes = Id.Map.update id (update_error n) section_nodes }, se)
   let find_section_variable id =
-    let+ { section_nodes; _ } = get in
+    let+ { section_nodes; _ }, _ = get in
     Id.Map.find_opt id section_nodes
 
   let get_previous_definition =
-    let+ { previous; _ } = get in
+    let+ { previous; _ }, _ = get in
     previous
   let drain_external_previous_definitions =
     let open Monad.Make(M) in
-    let* ({ external_previous; _ } as s) = get in
-    let+ () = put { s with external_previous = [] } in
+    let* ({ external_previous; _ } as s, se) = get in
+    let+ () = put ({ s with external_previous = [] }, se) in
     external_previous
 
+  let find_evar e =
+    let+ _, sigma = get in
+    Evar.Map.find_opt e sigma
+  let register_evar e n ns =
+    let* s, sigma = get in
+    put (s, Evar.Map.update e (update_error (n, ns)) sigma)
+
   (** Managing the local context *)
-  let lookup_relative i =
+  let lookup_relative_opt i =
     let+ { relative; _ } = ask in
     let rec find ctx i = match ctx, i with
-      | node::_, 1 -> node
+      | node::_, 1 -> Some node
       | _::ctx, n -> find ctx (n - 1)
-      | [], _ -> CErrors.anomaly (Pp.str "Invalid relative context") in
+      | [], _ -> None in
     find relative i
+  let lookup_relative i =
+    let+ no = lookup_relative_opt i in
+    match no with
+    | None -> CErrors.anomaly (Pp.str "Invalid relative context")
+    | Some n -> n
   let lookup_named_map =
     let+ { named; _ } = ask in
     named
   let lookup_named id =
     let+ named = lookup_named_map in
-    Id.Map.find id named
-  let lookup_evar e =
-    let+ { sigma; _ } = ask in
-    Evar.Map.find_opt e sigma
+    try
+      Id.Map.find id named
+    with Not_found -> CErrors.anomaly Pp.(str "Variable name could not be resolved")
   let lookup_def_depth =
     let+ { def_depth; _ } = ask in
     def_depth
-  let lookup_def_truncate =
-    let+ { def_truncate; _ } = ask in
-    def_truncate
   let lookup_env =
     let+ { env; _ } = ask in
     match env with
@@ -296,6 +304,9 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
   let lookup_include_opaque =
     let+ { opaque; _ } = ask in
     opaque
+  let lookup_proof_state e =
+    let+ { evar_map; _ } = ask in
+      evar_map e
 
   let with_relative n =
     local (fun ({ relative; _ } as c) -> { c with relative = n::relative })
@@ -303,10 +314,15 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     local (fun ({ relative; _ } as c) -> { c with relative = ns@relative })
   let with_named id n =
     local (fun ({ named; _ } as c) -> { c with named = Id.Map.update id (update_error n) named })
-  let with_evar e n ns =
-    local (fun ({ sigma; _ } as c) -> { c with sigma = Evar.Map.update e (update_error (n, ns)) sigma })
+  let with_empty_evars m =
+    let* (s, se) = get in
+    let* () = put (s, Evar.Map.empty) in
+    let* a = m in
+    let* (s, _) = get in
+    let+ () = put (s, se) in
+    a
   let with_empty_contexts m =
-    local (fun c -> { c with named = Id.Map.empty; sigma = Evar.Map.empty; relative = [] }) m
+    local (fun c -> { c with named = Id.Map.empty; relative = [] }) m
   let with_decremented_def_depth m =
     local (fun ({ def_depth; _ } as c) ->
         { c with def_depth = Option.map (fun def_depth -> assert (def_depth > 0); def_depth - 1) def_depth }) m
@@ -314,15 +330,18 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
     local (fun c -> { c with env = Some env })
   let with_env_extra env_extra =
     local (fun c -> { c with env_extra = Some env_extra })
+  let with_evar_map evar_map m =
+    with_empty_evars @@ local (fun c -> { c with evar_map }) m
 
-  let run ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth ~state m =
+  let run ?(include_metadata=false) ?(include_opaque=true) ?def_depth ~state m =
     G.run @@
     let context =
-      { relative = []; named = Id.Map.empty; sigma = Evar.Map.empty
-      ; def_depth; def_truncate; env = None; env_extra = None; metadata = include_metadata
+      { relative = []; named = Id.Map.empty
+      ; evar_map = (fun e -> CErrors.anomaly Pp.(str "Evar " ++ Evar.print e ++ str " not found"))
+      ; def_depth; env = None; env_extra = None; metadata = include_metadata
       ; opaque = include_opaque } in
-    run m context state
-  let run_empty ?(include_metadata=false) ?(include_opaque=true) ?(def_truncate=false) ?def_depth m =
+    G.map (fun ((s, se), a) -> s, a) @@ run m context (state, Evar.Map.empty)
+  let run_empty ?(include_metadata=false) ?(include_opaque=true) ?def_depth m =
     let definition_nodes =
       { constants = Cmap.empty
       ; inductives = Indmap.empty
@@ -333,7 +352,7 @@ module CICGraphMonad (G : GraphMonadType) : CICGraphMonadType
       ; external_previous = []
       ; section_nodes = Id.Map.empty
       ; definition_nodes } in
-    run ~include_metadata ~include_opaque ~def_truncate ?def_depth ~state m
+    run ~include_metadata ~include_opaque ?def_depth ~state m
 end
 
 module GraphBuilder
@@ -354,7 +373,8 @@ module GraphBuilder
   val gen_constr              : (Constr.t -> node t) with_envs
   val gen_section_var         : (Id.t -> node t) with_envs
   val with_named_context      : ((Constr.t, Constr.t) Named.pt -> 'a t -> ((edge_type * node) list * 'a) t) with_envs
-  val gen_proof_state         : env_extra -> node t Proofview.tactic
+  val gen_proof_state         : (proof_state -> node Graph_def.proof_state t) with_envs
+  val gen_proof_state_tactic  : env_extra -> node Graph_def.proof_state t Proofview.tactic
   val gen_globref             : (GlobRef.t -> node t) with_envs
 end = struct
 
@@ -368,7 +388,7 @@ end = struct
     let* n = find_constant c in
     match n with
     | Some (NActual, c) -> return c
-    | _ -> with_empty_contexts gen
+    | _ -> with_empty_evars @@ with_empty_contexts gen
 
   let with_named_context gen_constr c (m : 'a t) =
     let* env = lookup_env in
@@ -487,13 +507,24 @@ end = struct
     | Some follow_defs ->
       if follow_defs > 0 then with_decremented_def_depth m else alt
 
-  let if_not_truncate alt m =
-    let* truncate = lookup_def_truncate in
-    if truncate then alt else m
-
-  let rec gen_proof_step (outcomes, tactic) =
+  let rec gen_proof_state (evd, _, (hyps, concl, evar)) =
     let* env = lookup_env
     and+ metadata = lookup_include_metadata in
+    let if_metadata f = if metadata then f () else "" in
+    let env = Environ.push_named_context hyps @@ Environ.reset_context env in
+    let+ root, arr = gen_evar evar in
+    let ps_string = if_metadata @@ fun () -> proof_state_to_string_safe (hyps, concl) env evd in
+    let concl_string = if_metadata @@ fun () -> constr_str env evd concl in
+    let context = OList.rev @@ OList.filter_map (fun (hyp, node) ->
+        let id = Named.Declaration.get_id hyp in
+        Option.map (fun node -> { id; node
+                                ; text = if_metadata @@ fun () ->hyp_to_string_safe env evd hyp }) node) @@
+      OList.combine hyps @@ Array.to_list arr in
+    { ps_string; concl_string; root; context; evar }
+  and gen_proof_step (outcomes, tactic) =
+    let* env = lookup_env
+    and+ metadata = lookup_include_metadata in
+    let if_metadata f = if metadata then f () else "" in
     let tactic, args = match tactic with
       | None -> None, []
       | Some tac ->
@@ -503,66 +534,55 @@ end = struct
         let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac_orig in
         let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
         let base_tactic = Tactic_one_variable.tactic_strip tac in
-        let tactic_hash = Hashtbl.hash_param 255 255 base_tactic in
-        let tactic =
-          if metadata then
-            Some { tactic = pr_tac tac_orig
-                 ; tactic_non_anonymous = pr_tac tactic_non_anonymous
-                 ; base_tactic = pr_tac base_tactic
-                 ; interm_tactic = pr_tac interm_tactic
-                 ; tactic_hash
-                 ; tactic_exact }
-          else
-            Some { tactic = ""
-                 ; tactic_non_anonymous = ""
-                 ; base_tactic = ""
-                 ; interm_tactic = ""
-                 ; tactic_hash
-                 ; tactic_exact } in
-        tactic, args in
-    let gen_outcome (((before_sigma, _, (before_hyps, before_concl, before_evar)), term, after) : outcome) =
+        let tactic_hash = Tactic_hash.tactic_hash env base_tactic in
+        try
+          let tactic =
+            if metadata then
+              Some { tactic = pr_tac tac_orig
+                   ; tactic_non_anonymous = pr_tac tactic_non_anonymous
+                   ; base_tactic = pr_tac base_tactic
+                   ; interm_tactic = pr_tac interm_tactic
+                   ; tactic_hash
+                   ; tactic_exact }
+            else
+              Some { tactic = ""
+                   ; tactic_non_anonymous = ""
+                   ; base_tactic = ""
+                   ; interm_tactic = ""
+                   ; tactic_hash
+                   ; tactic_exact } in
+          tactic, args
+        with e when CErrors.noncritical e || CErrors.is_anomaly e ->
+          (* Aggressively catch errors during tactic printing.
+             Sometimes the printing just errors out, mostly due to notations that no longer exist *)
+          None, [] in
+    let gen_outcome (((before_sigma, before_proof_states, (before_hyps, before_concl, before_evar)),
+                      term, term_sigma, term_proof_states, after) : outcome) =
       let term_text =
-        (* TODO: Some evil hacks to work around the fact that we don't have a sigma here *)
+        (* Note: We intentionally butcher evars here, because we want all evars of a term to be printed
+           as underscores. This increases the chance that the term can be parsed back, because un-named
+           evars can usually not be parsed, but underscores can. *)
         let beauti_evar c =
           let rec aux c =
-            match Constr.kind c with
-            | Constr.Evar (x, _) -> Constr.mkEvar (x, [||])
-            | _ -> Constr.map aux c in
+            match CAst.(c.v) with
+            | Constrexpr.CEvar (x, _) -> CAst.make @@ Constrexpr.CHole (None, IntroAnonymous, None)
+            | _ -> Constrexpr_ops.map_constr_expr_with_binders (fun _ () -> ()) (fun () c -> aux c) () c in
           aux c in
-        if metadata then
-          Pp.string_of_ppcmds @@ Sexpr.format_oneline @@ Constrextern.with_meta_as_hole (fun () ->
-              Flags.with_option Flags.in_toplevel (fun () ->
-                  with_depth (fun () ->
-                      Printer.safe_pr_constr_env (Global.env()) Evd.empty (beauti_evar term))) ()) ()
-        else "" in
-      let with_proof_state evd (hyps, concl, evar) m =
-        let* ctx, (subject, map) = with_named_context gen_constr hyps @@
-          let* subject = gen_constr concl in
-          let+ map = lookup_named_map in
-          subject, map in
-        let* root = mk_node ProofState ((ContextSubject, subject)::ctx) in
-        let arr = Array.of_list @@ OList.map (fun id -> Id.Map.find_opt id map) @@
-          OList.map Named.Declaration.get_id hyps in
-        let+ cont = with_evar evar root arr m in
-        (* TODO: Look into what we should give as the evd here *)
-        let ps_string = proof_state_to_string_safe (hyps, concl) env evd in
-        let concl_string = constr_str env evd concl in
-        let context = OList.rev @@ OList.filter_map (fun hyp ->
-            let id = Named.Declaration.get_id hyp in
-            match Id.Map.find_opt id map with
-            | None -> None
-            | Some node -> Some { id; node; text = hyp_to_string_safe env evd hyp }) hyps in
-        { ps_string; concl_string; root; context; evar }, cont in
-      let with_after_states after m =
-        OList.fold_left (fun m (evd, _, st) ->
-            let+ ps, (ls, res) = with_proof_state evd st m in
-            ps::ls, res
-          ) (let+ m = m in [], m) after in
-      let+ (proof_states_after, (proof_state_before, arguments, term)) =
-        with_after_states after @@
-        let* ctx, (subject, arguments, map, term) = with_named_context gen_constr before_hyps @@
+        if_metadata @@ fun () ->
+          let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
+          let cexpr = beauti_evar @@ Constrextern.extern_constr false env term_sigma (EConstr.of_constr term) in
+          Pp.string_of_ppcmds @@ Sexpr.format_oneline @@
+          with_depth (fun () -> Ppconstr.pr_constr_expr env term_sigma cexpr) in
+      let+ proof_states_after, proof_state_before, arguments, term =
+        with_evar_map before_proof_states @@
+        let* ctx, (proof_states_after, subject, arguments, map, term) =
+          with_named_context gen_constr before_hyps @@
           let* subject = gen_constr before_concl
-          and+ term = gen_constr term
+          and+ proof_states_after, term =
+            with_evar_map term_proof_states @@
+            let+ proof_states_after = List.map gen_proof_state after
+            and+ term = gen_constr term in
+            proof_states_after, term
           and+ map = lookup_named_map in
           let warn_arg id = () in
             (* let tac = match tactic with *)
@@ -602,16 +622,18 @@ end = struct
                   )
                 | TOther -> return None
               ) args in
-          subject, arguments, map, term in
-        let+ root = mk_node ProofState ((ContextSubject, subject)::ctx) in
-        let ps_string = proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
-        let concl_string = constr_str env before_sigma before_concl in
+          proof_states_after, subject, arguments, map, term in
+        let env = Environ.push_named_context before_hyps @@ Environ.reset_context env in
+        let+ root = mk_node (ProofState before_evar) ((ContextSubject, subject)::ctx) in
+        let ps_string = if_metadata @@ fun () ->
+          proof_state_to_string_safe (before_hyps, before_concl) env before_sigma in
+        let concl_string = if_metadata @@ fun () -> constr_str env before_sigma before_concl in
         let context = OList.rev @@ OList.filter_map (fun hyp ->
             let id = Named.Declaration.get_id hyp in
-            match Id.Map.find_opt id map with
-            | None -> None
-            | Some node -> Some { id; node; text = hyp_to_string_safe env before_sigma hyp }) before_hyps in
-        { ps_string; concl_string; root; context; evar = before_evar }, arguments, term in
+            Option.map (fun node -> { id; node
+                                    ; text = if_metadata @@ fun () -> hyp_to_string_safe env before_sigma hyp }) @@
+              Id.Map.find_opt id map) before_hyps in
+        proof_states_after, { ps_string; concl_string; root; context; evar = before_evar }, arguments, term in
       { term; term_text; arguments; proof_state_before; proof_states_after } in
     let+ outcomes = List.map gen_outcome outcomes in
     { tactic; outcomes }
@@ -623,7 +645,7 @@ end = struct
     let gen_const_aux d p =
       let* env = lookup_env in
       let { const_body; const_type; _ } = Environ.lookup_constant c env in
-      let* children = if_not_truncate (return []) @@
+      let* children =
         let bt, b = match const_body with
           | Undef _ -> ConstUndef, mk_node ConstEmpty []
           | Def c -> ConstDef, gen_constr @@ Mod_subst.force_constr c
@@ -684,6 +706,7 @@ end = struct
     match c with
     | Some (NActual, _) -> return ()
     | _ ->
+      with_empty_evars @@ with_empty_contexts @@
       let* env = lookup_env in
 
       (* We have to ensure that all dependencies of the inductive are written away before
@@ -692,15 +715,15 @@ end = struct
          We only do this when we are still following definitions though, because otherwise
          we get dangling definition nodes. *)
       let* follow_defs = lookup_def_depth in
-      (match follow_defs with
-      | Some follow_defs when follow_defs > 0 ->
-        let dependencies = Definition_order.mutinductive_in_order_traverse env GlobRef.Set.empty
-            (fun c set -> GlobRef.Set.add (GlobRef.ConstRef c) set)
-            (fun m set -> GlobRef.Set.add (GlobRef.IndRef (m, 0)) set)
-            (fun id set -> GlobRef.Set.add (GlobRef.VarRef id) set) m in
-        List.iter (fun r -> map (fun _ -> ()) @@ gen_globref r) @@
-        GlobRef.Set.elements dependencies
-      | _ -> return ()) >>
+      let follow_defs = Option.default true @@ (Option.map (fun follow_defs -> follow_defs > 0)) follow_defs in
+      (if follow_defs then
+         let dependencies = Definition_order.mutinductive_in_order_traverse env GlobRef.Set.empty
+             (fun c set -> GlobRef.Set.add (GlobRef.ConstRef c) set)
+             (fun m set -> GlobRef.Set.add (GlobRef.IndRef (m, 0)) set)
+             (fun id set -> GlobRef.Set.add (GlobRef.VarRef id) set) m in
+         List.iter (fun r -> map (fun _ -> ()) @@ gen_globref r) @@
+         GlobRef.Set.elements dependencies
+       else return ()) >>
 
       with_empty_contexts @@
       let ({ mind_params_ctxt; mind_packets; mind_record; _ } as mb) =
@@ -764,7 +787,7 @@ end = struct
     | None ->
       let gen_aux c =
         follow_def (mk_fake_definition (fun _self -> c) (GlobRef.VarRef id)) @@
-        let* children = if_not_truncate (return []) @@
+        let* children =
           match def with
           | Named.Declaration.LocalAssum (_, typ) ->
             let+ typ = gen_constr typ
@@ -785,6 +808,22 @@ end = struct
          let* proof = List.map gen_proof_step proof in
          gen_aux (TacticalSectionConstant (id, proof)))
     | Some sv -> return sv
+  and gen_evar e : (node * node option array) t =
+    let* n = find_evar e in
+    match n with
+    | Some c -> return c
+    | None ->
+      let* hyps, concl, _ = lookup_proof_state e in
+      with_empty_contexts @@
+      let* ctx, (subject, map) = with_named_context gen_constr hyps @@
+        let* subject = gen_constr concl in
+        let+ map = lookup_named_map in
+        subject, map in
+      let* root = mk_node (ProofState e) ((ContextSubject, subject)::ctx) in
+      let arr = Array.of_list @@ OList.map (fun id -> Id.Map.find_opt id map) @@
+        OList.map Named.Declaration.get_id hyps in
+      let+ () = register_evar e root arr in
+      root, arr
   and gen_constr c = gen_kind_of_term @@ Constr.kind c
   and gen_kind_of_term = function
     | Rel i ->
@@ -800,23 +839,33 @@ end = struct
     | Meta i ->
       CErrors.anomaly (Pp.str "Unexpected meta")
     | Evar (ev, substs) ->
-      let* subject = lookup_evar ev in
-      let ev = Evar.repr ev in
-      (match subject with
-       | None -> (* TODO: This should be properly resolved at some point *)
-         let* undef = mk_node UndefProofState [] in
-         mk_node (Evar ev) [ EvarSubject, undef ]
-       | Some (n, ctx) ->
-         if not (Array.length ctx = Array.length substs) then
-           CErrors.anomaly Pp.(str "Array length difference " ++
-                               int (Array.length ctx) ++ str " " ++ int (Array.length substs));
-         let substs = OList.filter_map (fun (x, y) -> Option.map (fun y -> x, y) y) @@
-           OList.combine (Array.to_list substs) (Array.to_list ctx) in
-         let* substs = List.map (fun (c, t) ->
-             let* c = gen_constr c in
-             map (fun n -> EvarSubstPointer, n) @@
-             mk_node EvarSubst [EvarSubstTerm, c; EvarSubstTarget, t]) substs in
-         mk_node (Evar ev) ((EvarSubject, n)::substs))
+      let* n, ctx = gen_evar ev in
+      if not (Array.length ctx = Array.length substs) then
+        CErrors.anomaly Pp.(str "Array length difference " ++
+                            int (Array.length ctx) ++ str " " ++ int (Array.length substs));
+      let substs = OList.filter_map (fun (x, y) -> Option.map (fun y -> x, y) y) @@
+        OList.combine (Array.to_list substs) (Array.to_list ctx) in
+      let* substs = List.map (fun (c, t) ->
+          let* valid = match Constr.kind c with
+            | Constr.Rel i ->
+              let+ no = lookup_relative_opt i in
+              (match no with
+               | None ->
+                 Feedback.msg_warning Pp.(str "Invalid term detected due to https://github.com/coq/coq/issues/17314");
+                 false
+               | Some _ -> true)
+            | Constr.Var id ->
+              let+ named = lookup_named_map in
+              if Names.Id.Map.mem id named then true else
+                (Feedback.msg_warning Pp.(str "Invalid term detected due to https://github.com/coq/coq/issues/17295");
+                 false)
+            | _ -> return true in
+          if not valid then return (EvarSubstPointer, n)
+          else
+            let* c = gen_constr c in
+            map (fun n -> EvarSubstPointer, n) @@
+            mk_node EvarSubst [EvarSubstTerm, c; EvarSubstTarget, t]) substs in
+      mk_node Evar ((EvarSubject, n)::substs)
     | Sort s ->
       mk_node (match s with
           | Sorts.SProp -> SortSProp
@@ -907,20 +956,22 @@ end = struct
 
   let with_envs f env env_extra x = with_env env (with_env_extra env_extra (f x))
 
-  let gen_proof_state env_extra =
+  let gen_proof_state_tactic env_extra =
     (* NOTE: We intentionally get retrieve then environment here, because we don't want any of the
        local context elements of the proof state to be in the environment. If they are, they will be
        extracted as definitions instead of local variables. *)
     Proofview.tclBIND Proofview.tclENV @@ fun env ->
-    Proofview.Goal.enter_one (fun g ->
-        let concl = Proofview.Goal.concl g in
-        let hyps = Proofview.Goal.hyps g in
-        let sigma = Proofview.Goal.sigma g in
-        let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
-        Proofview.tclUNIT @@
-        with_env env @@ with_env_extra env_extra @@
-        let* hyps, concl = with_named_context hyps @@ gen_constr (EConstr.to_constr sigma concl) in
-        mk_node ProofState ((ContextSubject, concl)::hyps))
+    Proofview.Goal.enter_one @@ fun g ->
+    let sigma = Proofview.Goal.sigma g in
+    let concl = EConstr.to_constr sigma @@ Proofview.Goal.concl g in
+    let hyps = Proofview.Goal.hyps g in
+    let evar = Proofview.Goal.goal g in
+    let hyps = OList.map (map_named (EConstr.to_constr sigma)) hyps in
+    Proofview.tclUNIT @@
+    with_env env @@ with_env_extra env_extra @@
+    let proof_state_lookup = sigma_to_proof_state_lookup sigma in
+    with_evar_map proof_state_lookup @@
+    gen_proof_state (sigma, proof_state_lookup, (hyps, concl, evar))
 
   let gen_section_var =
     with_envs @@ fun id ->
@@ -928,6 +979,7 @@ end = struct
     let def = Environ.lookup_named id env in
     gen_section_var id def
 
+  let gen_proof_state = with_envs gen_proof_state
   let gen_const = with_envs gen_const
   let gen_mutinductive_helper = with_envs gen_mutinductive_helper
   let gen_inductive = with_envs gen_inductive

@@ -3,16 +3,15 @@ open Names
 open Ltac_plugin
 open Graph_def
 
-module OList = CList
-
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
+module W = Graph_capnp_generator.Writer(Api)
 open Capnp_rpc_lwt
 
 module G = Neural_learner.G
 module CICGraph = Neural_learner.CICGraphMonad
 open Neural_learner.GB
 
-module TacticMap = Int.Map
+module TacticMap = Neural_learner.TacticMap
 
 
 exception NoSuchTactic
@@ -20,38 +19,21 @@ exception MismatchedArguments
 exception IllegalArgument
 exception ParseError
 
-let gen_proof_state env (hyps : (Constr.t, Constr.t) Context.Named.pt) (concl : Constr.t) =
-  let open CICGraph in
-  let open Monad_util.WithMonadNotations(CICGraph) in
-  let* hyps, (concl, map) = with_named_context env (Id.Map.empty, Cmap.empty) hyps @@
-    let* map = lookup_named_map in
-    let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
-    concl, map in
-  let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
-  root, map
-
-let write_execution_result env sigma res hyps concl obj =
+let write_execution_result env res ps obj =
   let module ExecutionResult = Api.Builder.ExecutionResult in
   let module Graph = Api.Builder.Graph in
   let module ProofState = Api.Builder.ProofState in
   let module Node = Api.Builder.Node in
 
   (* Obtain the graph *)
-  let updater = gen_proof_state env hyps concl in
-  let (_, (root, context_map)), { def_count; node_count; edge_count; defs; nodes; edges } =
-    CICGraph.run_empty ~def_truncate:true updater
-      (G.HashMap.create 100) G.builder_nil Local in
+  let (_, ps), { def_count; node_count; edge_count; defs; nodes; edges } =
+    CICGraph.run_empty ps
+      (G.HashMap.create 100) G.builder_nil 0 in
   let node_local_index (_, (def, i)) =
     if def then i else def_count + i in
-  let context_map = Id.Map.map (fun n ->
-      let (p, n), _ = G.lower n in
-      p, node_local_index (p, n)) context_map in
-  let context_range = List.rev @@ List.filter_map (fun hyp ->
-      let id = Context.Named.Declaration.get_id hyp in
-      match Id.Map.find_opt id context_map with
-      | None -> None
-      | Some (_, n) -> Some n
-    ) hyps in
+  let context_map = List.fold_left (fun map { id; node; _ } ->
+      let (p, n), _ = G.lower node in
+      Id.Map.add id (p, node_local_index (p, n)) map) Id.Map.empty ps.context in
   let context_map_inv = Names.Id.Map.fold_left (fun id (_, node) m -> Int.Map.add node id m) context_map Int.Map.empty in
 
   (* Write graph to capnp structure *)
@@ -59,21 +41,14 @@ let write_execution_result env sigma res hyps concl obj =
   let capnp_graph = ExecutionResult.NewState.graph_init new_state in
   let node_hash n = snd @@ G.transform_node_type n in
   let node_label n = fst @@ G.transform_node_type n in
-  Graph_capnp_generator.write_graph
+  W.write_graph
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
     ~node_dep_index:(fun _ -> 0) ~node_local_index
     ~node_count:(def_count + node_count) ~edge_count (Graph_def.AList.append defs nodes) edges capnp_graph;
   let state = ExecutionResult.NewState.state_init new_state in
-  let capnp_root = ProofState.root_init state in
-  ProofState.Root.dep_index_set_exn capnp_root 0;
-  ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index @@ fst @@ G.lower root;
-  let context_arr = ProofState.context_init state @@ List.length context_range in
-  List.iteri (fun i arg ->
-      let arri = Capnp.Array.get context_arr i in
-      Node.dep_index_set_exn arri 0;
-      Node.node_index_set_int_exn arri arg
-    ) context_range;
-  ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env sigma;
+  W.write_proof_state
+    { node_depindex = (fun n -> 0)
+    ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps;
   let capability = obj context_map_inv in
   ExecutionResult.NewState.obj_set new_state (Some capability);
   Capability.dec_ref capability
@@ -87,13 +62,8 @@ let write_execution_result env res obj =
     ExecutionResult.complete_set res; tclUNIT () in
   tclFOCUS ~nosuchgoal:complete 1 1 @@
   (Tactician_util.pr_proof_tac () >>= fun () ->
-   Goal.enter_one (fun gl ->
-       let hyps = Goal.hyps gl in
-       let concl = Goal.concl gl in
-       let sigma = Proofview.Goal.sigma gl in
-       let hyps = OList.map (Graph_extractor.map_named (EConstr.to_constr sigma)) hyps in
-       let concl = EConstr.to_constr sigma concl in
-       write_execution_result env sigma res hyps concl obj; tclUNIT ()))
+   gen_proof_state_tactic (Names.Id.Map.empty, Names.Cmap.empty) >>= fun ps ->
+   write_execution_result env res ps obj; tclUNIT ())
 
 let write_execution_result env state res obj =
   ignore (Pfedit.solve Goal_select.SelectAll None (write_execution_result env res obj) state)
@@ -125,7 +95,7 @@ let rec proof_object env state tacs context_map =
       let response, results = Service.Response.create Results.init_pointer in
       let res = Results.result_init results in
       let tac = Params.tactic_get params in
-      let tac_id = Tactic.ident_get_int_exn tac in
+      let tac_id = Tactic.ident_get tac in
       let tac_args = Params.arguments_get_list params in
       begin
         try
@@ -211,7 +181,7 @@ let available_tactics tacs =
       let tac_arr = Results.tactics_init results (TacticMap.cardinal tacs) in
       List.iteri (fun i (hash, (_tac, params)) ->
           let arri = Capnp.Array.get tac_arr i in
-          Api.Builder.AbstractTactic.ident_set_int_exn arri hash;
+          Api.Builder.AbstractTactic.ident_set arri hash;
           Api.Builder.AbstractTactic.parameters_set_exn arri (List.length params))
         (TacticMap.bindings tacs);
       Service.return response
@@ -220,7 +190,7 @@ let available_tactics tacs =
       let open AvailableTactics.PrintTactic in
       release_param_caps ();
       let response, results = Service.Response.create Results.init_pointer in
-      let id = Params.tactic_get_int_exn params in
+      let id = Params.tactic_get params in
       let tac, params = find_tactic tacs id in
       let str =
         try Pp.string_of_ppcmds @@ pp_tac tac
@@ -242,14 +212,15 @@ let pull_reinforce =
       Tactic_learner_internal.process_queue ();
       let tacs = Neural_learner.(!last_model) in
       print_endline (string_of_int (List.length tacs));
-      let tacs = List.map (fun t -> t, Hashtbl.hash_param 255 255 t) tacs in
+      let tacs = List.map (fun t -> t, Tactic_hash.tactic_hash (Global.env ()) t) tacs in
       let map = List.fold_left (fun map tac ->
           let open Tactic_learner_internal.TS in
+          (* TODO: Convert this to the same tactic argument extraction procedure as in neural_learner.ml *)
           let tac = tactic_repr tac in
           let tac = Tactic_normalize.tactic_strict tac in
           let args, tac = Tactic_abstract.tactic_abstract tac in
           TacticMap.add
-            (tactic_hash (tactic_make tac)) (tac, args) map)
+            (Int64.of_int (tactic_hash (tactic_make tac))) (tac, args) map)
           TacticMap.empty tacs in
       let capability = available_tactics map in
       Results.available_set results (Some capability);

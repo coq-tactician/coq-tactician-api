@@ -1,112 +1,65 @@
 import contextlib
 import sys
 import socket
+import socketserver
 import argparse
 import pytact.graph_visualize as gv
-import capnp
-import pytact.graph_api_capnp as graph_api_capnp
-from pytact.data_reader import online_definitions_initialize, online_data_predict, capnp_message_generator
+from pytact.data_reader import (capnp_message_generator, ProofState,
+                                TacticPredictionGraph, TacticPredictionsGraph,
+                                TacticPredictionText, TacticPredictionsText,
+                                GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
 
-def text_prediction_loop(messages_generator):
+def text_prediction_loop(context : GlobalContextMessage):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                print(msg.predict.state.text)
-                preds = [
-                    {'tacticText': t,
-                    'confidence': 0.5} for t in tactics ]
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
-            elif msg.is_synchronize:
-                print(msg)
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-            elif msg.is_initialize:
-                print(msg)
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-            elif msg.is_check_alignment:
-                alignment = {'unalignedTactics': [],
-                             'unalignedDefinitions': []}
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-            else:
-                raise Exception("Capnp protocol error")
-            print(response)
-            msg = messages_generator.send(response)
-
-def prediction_loop(definitions, tactics, msg, messages_generator):
-    while True:
-        if msg.is_predict:
-            with online_data_predict(
-                    definitions,
-                    msg.predict) as proof_state:
-                gv.visualize_proof_state(proof_state)
-                singleArgs = [t.ident for t in tactics if t.parameters == 0]
-                preds = [{'tactic': {'ident': t}, 'arguments': [], 'confidence': 0.5} for t in singleArgs]
-                if len(proof_state.context) > 0:
-                    oneArg = [t.ident for t in tactics if t.parameters == 1]
-                    hyp_node = proof_state.context[0]
-                    preds2 = [
-                        {'tactic': {'ident': t},
-                         'arguments': [{'term' : {'depIndex': 0, 'nodeIndex': hyp_node.nodeid}}],
-                         'confidence': 0.5} for t in oneArg ]
-                    preds += preds2
-                for d in definitions.definitions:
-                    if d.name == "Coq.Init.Logic.I":
-                        oneArg = [t.ident for t in tactics if t.parameters == 1]
-                        preds2 = [
-                            {'tactic': {'ident': t },
-                             'arguments': [{'term' : {'depIndex': 1, 'nodeIndex': d.node.nodeid}}],
-                             'confidence': 0.5} for t in oneArg ]
-                        preds += preds2
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
-                print(response)
-                msg = messages_generator.send(response)
+    prediction_requests = context.prediction_requests
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            print(proof_state.text)
+            preds = [TacticPredictionText(t, 0.5) for t in tactics]
+            prediction_requests.send(TacticPredictionsText(preds))
+        elif isinstance(msg, CheckAlignmentMessage):
+            alignment = CheckAlignmentResponse([], [])
+            prediction_requests.send(alignment)
+        elif isinstance(msg, GlobalContextMessage):
+            text_prediction_loop(msg)
         else:
-            return msg
+            raise Exception("Capnp protocol error")
 
-def graph_initialize_loop(messages_generator):
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            if msg.is_predict:
-                raise Exception('Predict message received without a preceding initialize message')
-            elif msg.is_synchronize:
-                print(msg)
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-                print(response)
-                msg = messages_generator.send(response)
-            elif msg.is_check_alignment:
-                check_alignment = msg.check_alignment
-                with online_definitions_initialize(
-                        check_alignment.graph,
-                        check_alignment.representative) as definitions:
-                    for cluster in definitions.clustered_definitions:
-                        print('cluster:')
-                        for d in cluster:
-                            print(f'    {d.name}')
-                    for t in check_alignment.tactics:
-                        print(t)
-                    alignment = {'unalignedTactics': [ t.ident for t in check_alignment.tactics],
-                                'unalignedDefinitions': [d.node.nodeid for d in definitions.definitions]}
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-                    msg = messages_generator.send(response)
-            elif msg.is_initialize:
-                print('---------------- New prediction context -----------------')
-                init = msg.initialize
-                with online_definitions_initialize(init.graph, init.representative) as definitions:
-                    for cluster in definitions.clustered_definitions:
-                        print('cluster:')
-                        for d in cluster:
-                            print(f'    {d.name}')
-                    for t in init.tactics:
-                        print(t)
-                    print(init.log_annotation)
-                    response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-                    print(response)
-                    msg = prediction_loop(definitions, init.tactics,
-                                          messages_generator.send(response), messages_generator)
-            else:
-                raise Exception("Capnp protocol error")
+def graph_initialize_loop(context : GlobalContextMessage, level):
+    print(f"level {level}")
+    for cluster in context.definitions.clustered_definitions(full = False):
+        print('cluster:')
+        for d in cluster:
+            print(f'    {d.name}')
+    for t in context.tactics:
+        print(t)
+    print(context.log_annotation)
+    prediction_requests = context.prediction_requests
+    for msg in prediction_requests:
+        if isinstance(msg, ProofState):
+            proof_state = msg
+            gv.visualize_proof_state(proof_state)
+            zeroArgs = [t.ident for t in context.tactics if t.parameters == 0]
+            preds = [TacticPredictionGraph(t, [], 0.5) for t in zeroArgs]
+            if len(proof_state.context) > 0:
+                oneArg = [t.ident for t in context.tactics if t.parameters == 1]
+                hyp_node = proof_state.context[0]
+                preds += [TacticPredictionGraph(t, [hyp_node], 0.5) for t in oneArg]
+            for d in context.definitions.definitions():
+                if d.name == "Coq.Init.Logic.I":
+                    oneArg = [t.ident for t in context.tactics if t.parameters == 1]
+                    preds += [TacticPredictionGraph(t, [d.node], 0.5) for t in oneArg]
+            prediction_requests.send(TacticPredictionsGraph(preds))
+        elif isinstance(msg, CheckAlignmentMessage):
+            unknown_definitions = list(context.definitions.definitions())
+            unknown_tactics = [t.ident for t in context.tactics]
+            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
+            prediction_requests.send(alignment)
+        elif isinstance(msg, GlobalContextMessage):
+            graph_initialize_loop(msg, level + 1)
+        else:
+            raise Exception("Capnp protocol error")
 
 def run_session(args, capnp_socket, record_file):
     messages_generator = capnp_message_generator(capnp_socket, record_file)
@@ -115,7 +68,7 @@ def run_session(args, capnp_socket, record_file):
         text_prediction_loop(messages_generator)
     elif args.mode == 'graph':
         print('Python server running in graph mode')
-        graph_initialize_loop(messages_generator)
+        graph_initialize_loop(messages_generator, 0)
     else:
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 
@@ -146,16 +99,18 @@ def main():
         record_context = contextlib.nullcontext()
     with record_context as record_file:
         if args.tcp != 0:
+            class Handler(socketserver.BaseRequestHandler):
+                def handle(self):
+                    run_session(args, self.request, record_file)
+            class Server(socketserver.ThreadingTCPServer):
+                def __init__(self, *kwargs):
+                    self.allow_reuse_address = True
+                    self.daemon_threads = True
+                    super().__init__(*kwargs)
             addr = ('localhost', args.tcp)
-            server_sock = socket.create_server(addr)
-            try:
-                while True:
-                    capnp_socket, remote_addr = server_sock.accept()
-                    print(f"coq client connected {remote_addr}")
-                    run_session(args, capnp_socket, record_file)
-            finally:
-                print(f'closing the server on port {addr[1]}')
-                server_sock.close()
+            with Server(addr, Handler) as server:
+                server.daemon_threads = True
+                server.serve_forever()
         else:
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
             run_session(args, capnp_socket, record_file)

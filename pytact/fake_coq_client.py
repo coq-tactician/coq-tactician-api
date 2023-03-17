@@ -1,6 +1,5 @@
 import socket
 import argparse
-import contextlib
 import signal
 from subprocess import Popen
 import capnp
@@ -10,14 +9,12 @@ from pytact.data_reader import capnp_message_generator_from_file
 def run_fake_client(server_socket, messages_generator):
     socket_reader = graph_api_capnp.PredictionProtocol.Response.read_multiple_packed(
         server_socket, traversal_limit_in_words=2**64-1)
-    with contextlib.suppress(StopIteration):
-        msg = next(messages_generator)
-        while True:
-            msg.dynamic.as_builder().write_packed(server_socket)
-            prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-            response = next(socket_reader, None)
-            signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
-            msg = messages_generator.send(response)
+    for msg in messages_generator:
+        msg.dynamic.as_builder().write_packed(server_socket)
+        prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+        response = next(socket_reader, None)
+        signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
+        messages_generator.send(response)
 
 def main():
     parser = argparse.ArgumentParser(

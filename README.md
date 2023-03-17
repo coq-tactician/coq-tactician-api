@@ -29,7 +29,7 @@ sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev 
 After installing the prerequisites, you'll need a Python virtualenv and an Opam switch to install the software.
 To create the virtualenv, run
 ```
-python -m venv <desired-location-of-virtualenv>`
+python3.10 -m venv <desired-location-of-virtualenv>
 ```
 To activate the virtualenv run `source <location-of-virtualenv>/bin/activate`.
 
@@ -111,8 +111,8 @@ To make the `synth` command available, your Coq file will have to start with
 From Tactician Require Import Ltac1.
 ```
 The following settings govern the data that Coq will send to the server:
-- `Set Tactician Truncate` determines wether the bodies of definitions will get truncated or not (on by default).
-- `Set Tactician Textmode` determines wether Coq is communicating with a graph-based server or a text-based server (graph-based by default).
+- `Set Tactician Neural Truncate` determines wether the bodies of definitions will get truncated or not (on by default).
+- `Set Tactician Neural Textmode` determines wether Coq is communicating with a graph-based server or a text-based server (graph-based by default).
 To let Coq take care of starting and stopping the server, use the command
 ```
 Set Tactician Neural Executable "external-server-executable --argument1 --argument2".
@@ -122,10 +122,13 @@ If you have a prediction server already running somewhere over TCP, you can make
 Set Tactician Neural Server "<address>:<port>".
 ```
 At this point, you have the following commands available which will interact with the server:
-- `Check Neural Alignment` will ask the which tactics and definitions currently in scope are unknown to it.
+- `Tactician Neural Alignment` will ask the which tactics and definitions currently in scope are unknown to it.
   This is meant as a sanity check.
 - `Suggest` and `Debug Suggest` will ask the server for predictions for the current proof state.
 - `synth` and `debug synth` will perform a proof search by repeatedly asking the server for predictions.
+- `Tactician Neural Cache` will preemptively send a lot of required data to the prediction server and keeps that
+  information cached. This will make the commands above run much faster. This command can be issued multiple times
+  in a document, creating multiple nested caches.
 
 ## Reinforcement interaction
 

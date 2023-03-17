@@ -27,7 +27,7 @@ dev-repo: "git+https://github.com/coq-tactician/coq-tactician-reinforce.git"
 pin-depends: [
   [
     "coq-tactician.8.11.dev"
-    "git+https://github.com/coq-tactician/coq-tactician.git#d46eea21558d382888fc5a25e238af3be31c9a00"
+    "git+https://github.com/coq-tactician/coq-tactician.git#125ec9c1f7e14b62bf9c7f809b4277e2e6055d53"
   ]
 ]
 
@@ -48,6 +48,7 @@ depends: [
   "fmt"
   "capnp-rpc-unix"
   "capnp-rpc-lwt"
+  "capnp" {>= "3.4.0"}
   "ppx_deriving"
   "ocamlgraph"
   "xxhash"

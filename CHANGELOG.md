@@ -1,3 +1,24 @@
+# v15
+Changes to the graph
+- Fix a bug in the graph sharing algorithm. This causes the identity hash of nodes to be different from v14
+- Proof states are now properly discharged at section end, instead of just a copy of the proof state
+  inside of the section
+- Improve the decomposition of the `destruct` and `induction` tactics
+- Tactic identifiers have been changed to use a better hash function. The old hash function produced collisions.
+
+Changes to the Capn'proto format:
+- All `evar` nodes are now properly resolved towards a `proofState` node, even when that proof state is
+  never solved using a tactic but rather through unification. This changes makes the `undefProofState` node
+  redundant, and as such it has been removed.
+- Moved the `ProofStateId` identifier of the `evar` node to the `proofState` node. This is a unique
+  identifier to distinquish existential variables that have the same proof state but not the same identity.
+  Note that this id is not currently taken into account in the graph sharing algorithm because it is too
+  non-deterministic during proof search. This is a known deficiency.
+
+Changes to the communication protocol:
+- The global context can now be cached through the command `Tactician Neural Cache`. This command can be
+  repeated multiple times and creates a stack of updated global context messages.
+
 # v14
 Changes to the Capn'proto format:
 - Upgraded magic id to v14
@@ -16,6 +37,7 @@ Changes to the graph:
   some language models.
 
 # v13
+
 Changes to the Capn'proto format:
 - Upgraded magic id to v13
 - Added a backwards-compatible field `Dataset.moduleName`

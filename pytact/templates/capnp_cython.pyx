@@ -138,6 +138,24 @@ cdef class Uint64_List:
     def __len__(self):
         return self.source.size()
 
+cdef class Int64_List:
+
+    @staticmethod
+    cdef init(C_Int64_List source, object root):
+        cdef Int64_List wrapper = Int64_List.__new__(Int64_List)
+        wrapper.source = source
+        wrapper.root = root
+        return wrapper
+
+    def __getitem__(self, uint index):
+        source = self.source
+        if index >= source.size():
+            raise IndexError('Out of bounds')
+        return source[index]
+
+    def __len__(self):
+        return self.source.size()
+
 cdef class String_List:
 
     @staticmethod

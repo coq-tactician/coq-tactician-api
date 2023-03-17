@@ -1,7 +1,6 @@
 # distutils: language = c++
 # cython: c_string_type = str
 # cython: c_string_encoding = default
-# cython: embedsignature = True
 # cython: language_level = 3
 # distutils: libraries = capnpc capnp capnp-rpc
 # distutils: sources = pytact/graph_api.capnp.cpp
@@ -15,14 +14,14 @@ The dataset is mapped into memory using mmap, allowing random access to it's
 structures while keeping memory low. This file contains three entry-points to a
 dataset in order of preference:
 
-1. Contextmanager `data_reader(path)` provides high-level access to the data
+1. Contextmanager `data_reader` provides high-level access to the data
    in directory `path`. This is the preferred entry-point unless you need
    something special.
-2. Contextmanager `lowlevel_data_reader(path)` provides low-level access to
+2. Contextmanager `lowlevel_data_reader` provides low-level access to
    the data in directory `path`, giving direct access to the Cap'n Proto structures
    of the dataset. Use this when `data_reader` is too slow or you need access
    to data not provided by `data_reader`.
-3. Contextmanager `file_dataset_reader(file)` provides low-level access to
+3. Contextmanager `file_dataset_reader` provides low-level access to
    the Cap'n Proto structures of a single file. Using this is usually not
    advisable.
 
@@ -34,31 +33,48 @@ Additionally, some indexing helpers are defined:
 
 # Communicating with a Coq process
 
-The function `capnp_message_generator` converts a socket into a generator that
+Communication with a Coq process can be done either through a high-level or
+low-level interface.
+
+## Highlevel interface
+
+The function `capnp_message_generator` converts a socket into a nested generator that
 yields request messages for predictions and expects to be sent response messages
-in return. There are four types of messages `msg` Coq sends. A simple example of
-how to handle these messages is in `fake_python_server.py`.
+in return. A simple example of how to handle these messages is in `fake_python_server.py`.
+Some docs can be found with `capnp_message_generator`.
+
+## Lowlevel interface
+
+The function `capnp_message_generator_lowlevel` converts a socket into a generator that
+yields lowlevel cap'n proto request messages for predictions and expects to be sent cap'n proto
+messages in return. There are four types of messages `msg` Coq sends.
 1. Synchronize: If `msg.is_synchronize` is true, Coq is attempting to synchronize
-   it's state with the server. See `fake_python_server.py` for how to respond.
+   it's state with the server. A `PredictionProtocol.Response.synchronized` message is expected
+   in return.
 2. Initialize: If `msg.is_initialize` is true, Coq is sending a list of available
-   tactics and the current global context. You can conveniently read this global context using
+   tactics and the current global context to be added to an existing stack of global context
+   information. An empty stack can be created through `empty_online_definitions_initialize`.
+   To add an initialize message to the stack, you can use
    ```
-   with online_definitions_initialize(msg.initialize.graph,
-                                      msg.initialize.representative) as definitions:
+   with online_definitions_initialize(existing_stack, msg) as definitions:
        print(type(definitions))
    ```
-   Any subsequent prediction request (see (4)) will be made in the context of the
-   tactics and predictions sent in this message, until a new initialize message
-   is received.
+   Any subsequent messages will be made in the context of the
+   tactics and predictions sent in this message, until an initialize message is received
+   such that `msg.initialize.stack_size` is smaller than the current stack size.
+
+   A `PredictionProtocol.Response.initialized` message is expected in response of this message.
 4. Predict: If `msg.is_predict` is true, Coq is asking to predict a list of plausible
    tactics given a proof state. The proof state can be easily accessed using
    ```
    with online_data_predict(definitions, msg.predict) as proof_state:
        print(dir(proof_state))
    ```
-5. Check Alignment: If `msg.check_alignment` is true, then Coq is asking the server
-   to check which tactics and definitions are known to it. See `fake_python_server.py`
-   for how to respond.
+   A `PredictionProtocol.Response.prediction` or `PredictionProtocol.Response.textPrediction`
+   message is expected in return.
+5. Check Alignment: If `msg.is_check_alignment` is true, then Coq is asking the server
+   to check which tactics and definitions are known to it. A
+   `PredictionProtocol.Response.alignment` message is expected in return.
 
 The `capnp_message_generator` function can also dump the sequence of messages send
 and received to a file. One can then use `capnp_message_generator_from_file` to replay
@@ -85,6 +101,11 @@ from libcpp.stack cimport stack
 from pytact.graph_api_capnp_cython cimport *
 import mmap
 import itertools
+import resource
+import threading
+import subprocess
+import shutil
+import time
 
 T = TypeVar('T')
 class TupleLike():
@@ -197,27 +218,71 @@ cdef class LowlevelDataReader:
     def __len__(self) -> int:
         return len(self.graphs)
 
+def setup_dataset(dataset_path: Path):
+    if not dataset_path.exists():
+        raise ValueError(f"Dataset does not exist: {dataset_path}")
+    if dataset_path.is_file():
+        mountpoint = dataset_path.with_suffix('')
+        if not mountpoint.is_dir():
+            raise ValueError(f"Unable to mount dataset. Mountpoint does not exist: {mountpoint}")
+        if not mountpoint.is_mount():
+            if shutil.which('squashfuse') is None:
+                raise ValueError(f"Unable to mount dataset. Executable 'squashfuse' not found.")
+            args = ['squashfuse', str(dataset_path), str(mountpoint)]
+            result = subprocess.run(args,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                raise ValueError(f"Unable to mount dataset. Squashfuse invocation:\n" +
+                                 ' '.join(args) +
+                                 f"\nSquashfuse error: \n" +
+                                 result.stderr.decode())
+            for _ in range(100):
+                if mountpoint.is_mount(): break
+                time.sleep(0.01)
+            if not mountpoint.is_mount():
+                raise ValueError(f"Unable to mount dataset {dataset_path}. Mount did not appear.")
+        return mountpoint
+    else:
+        return dataset_path
+
 @contextmanager
 def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, None, None]:
-    """Load a directory of dataset files into memory, and expose their raw Cap'n Proto structures.
+    """Map a directory of dataset files into memory, and expose their raw Cap'n Proto structures.
+
+    Arguments:
+    `dataset_path`: Can either be a dataset directory, or a SquashFS image file. In case of an image
+                    file `dataset.squ`, the image will be mounted using `squashfuse` on directory
+                    `dataset/`, after which the contents of that directory will be read.
 
     This is a low-level function. Prefer to use `data_reader`. See `LowlevelDataReader` for
     further documentation.
     """
-    fnames = [f for f in dataset_path.glob('**/*.bin') if f.is_file()]
-    with ExitStack() as stack:
-        dataset = [(fname.relative_to(dataset_path),
-                    stack.enter_context(file_dataset_reader(fname)))
-                   for fname in fnames]
-        # CAREFUL: LowlevelDataReader contains critical C++ structures that are not being
-        # tracked by the garbage collector. As soon as this object gets destroyed, those
-        # structures will also be destroyed, even if other objects still reference it.
-        # This variable assignment makes sure that the reader will exist until the end of
-        # the `with` block.
-        # If the Python runtime ever becomes clever and eliminates this variable, a different
-        # method of keeping the object around should be found.
-        dr = LowlevelDataReader(dataset_path, dataset)
-        yield dr
+
+    mountpoint = setup_dataset(dataset_path)
+    fnames = [f for f in mountpoint.glob('**/*.bin') if f.is_file()]
+
+    # Increase the open file limit, because we could be intentionally mapping a large number of files
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    new_soft = min(soft + len(fnames), hard)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+
+    try:
+        with ExitStack() as stack:
+            dataset = [(fname.relative_to(mountpoint),
+                        stack.enter_context(file_dataset_reader(fname)))
+                    for fname in fnames]
+            # CAREFUL: LowlevelDataReader contains critical C++ structures that are not being
+            # tracked by the garbage collector. As soon as this object gets destroyed, those
+            # structures will also be destroyed, even if other objects still reference it.
+            # This variable assignment makes sure that the reader will exist until the end of
+            # the `with` block.
+            # If the Python runtime ever becomes clever and eliminates this variable, a different
+            # method of keeping the object around should be found.
+            dr = LowlevelDataReader(mountpoint, dataset)
+            yield dr
+    finally:
+        # Reset open file limit to original
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
 
 ProofStateId = int
 TacticId = int
@@ -341,7 +406,7 @@ cdef class EdgeTarget_List:
         wrapper.count = count
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> tuple[int, Node]:
         if index >= self.count:
             raise IndexError('Out of bounds')
         cdef C_Graph_EdgeTarget_Reader edge = self.edges[self.start+index]
@@ -367,7 +432,7 @@ cdef class Node_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Node:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -425,14 +490,24 @@ cdef class ProofState:
 
     @property
     def context_names(self) -> Sequence[str]:
+        """The names of the local context nodes of the proof state, as they originally appeared in the proof.
+
+        These names should be used for debugging and viewing purposes only, because hypothesis-generating tactics have
+        been modified to use auto-generated names. Hence, tactics should not be concerned about the names of
+        the context.
+        """
         return String_List.init(self.reader.getContextNames(), None)
 
     @property
     def context_text(self) -> Sequence[str]:
+        """A textual representation of the type/definition of context nodes
+        """
         return String_List.init(self.reader.getContextText(), None)
 
     @property
     def conclusion_text(self) -> str:
+        """A textual representation of the conclusion of the proof state.
+        """
         temp = self.reader.getConclusionText()
         return (<char*>temp.begin())[:temp.size()]
 
@@ -469,7 +544,7 @@ cdef class ProofState_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> ProofState:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -491,7 +566,7 @@ cdef class Argument_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Node | None:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -592,7 +667,7 @@ cdef class Outcome_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Outcome:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -659,7 +734,7 @@ cdef class ProofStep_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> ProofStep:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -681,7 +756,7 @@ cdef class Representative_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Definition:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -824,11 +899,15 @@ cdef class Definition:
         constructor or projection. Because those are mutually recursive objects, they reference themselves
         and are therefore part of their own global context.
 
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of the
+        stream. An exception to this rule are mutually recursive definitions, because no topological sort
+        is possible there (see also `clustered_global_context`).
+
         Arguments:
-        * across_files -- if False, outputs only the definitions from the local file, default True
-        * inclusive -- if True, outputs also itself, default False
-        Note: if it is a self-recursive definition,
-        the inclusive argument is ignored, and considered as True
+        * `across_files`: if `False`, outputs only the definitions from the local file, default `True`.
+        * `inclusive`: if `True`, outputs also itself, default `False`.
+        Note: if it is a self-recursive definition, the `inclusive` argument is ignored, and considered as `True`
         """
         return self._global_context(
             across_files = across_files,
@@ -840,11 +919,14 @@ cdef class Definition:
         """All of the definitions in the global context when this definition was created, clustered into
         mutually recursive cliques.
 
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of the
+        stream.
+
         Arguments:
-        * across_files -- if False, outputs only the definitions from the local file, default True
-        * inclusive -- if True, outputs also the cluster of itself, default False
-        Note: if it is a self-recursive definition,
-        the inclusive argument is ignored, and considered as True
+        * `across_files`: if `False`, outputs only the definitions from the local file, default `True`.
+        * `inclusive`: if `True`, outputs also the cluster of itself, default `False`.
+        Note: if it is a self-recursive definition, the `inclusive` argument is ignored, and considered as `True`.
         """
         return self._group_by_clusters(self.global_context(
             across_files = across_files,
@@ -1002,7 +1084,7 @@ cdef class Dataset_Definition_List:
         wrapper.graph = graph
         return wrapper
 
-    def __getitem__(self, uint index):
+    def __getitem__(self, uint index) -> Definition:
         reader = self.reader
         if index >= reader.size():
             raise IndexError('Out of bounds')
@@ -1039,7 +1121,10 @@ cdef class Dataset:
 
     @property
     def dependencies(self) -> Sequence[Path]:
-        """A list of physical paths of data files that are direct dependencies of this file."""
+        """A list of physical paths of data files that are direct dependencies of this file.
+
+        It is guaranteed that no cycles exist in the dependency relation between files induced by this field.
+        """
         dependencies = self.reader.getDependencies()
         # The first dependency is the file itself, which we do not want to expose here.
         count = dependencies.size() - 1
@@ -1069,9 +1154,14 @@ cdef class Dataset:
         of sections or module functors.
 
         Arguments:
-        * across_files -- if True, outputs also definitions from dependent files, default False
-        * spine_only -- if True, outputs only the definitions on the main spine, default False
-        Note: across_files = True is incompatible with spine_only = False
+        * `across_files`: if `True`, outputs also definitions from dependent files, default `False`.
+        * `spine_only`: if True, outputs only the definitions on the main spine, default `False`.
+        Note: `across_files = True` is incompatible with `spine_only = False`.
+
+        When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
+        any definition in the stream, any definition reachable from the forward closure of the definition
+        also exists in the remainder of the stream. An exception to this rule are mutually recursive definitions,
+        because no topological sort is possible there (see also `clustered_definitions`).
         """
         if across_files and not spine_only:
             raise Exception("Options across_files = True and spine_only = False are incompatible")
@@ -1090,9 +1180,13 @@ cdef class Dataset:
         of sections or module functors.
 
         Arguments:
-        * across_files -- if True, outputs also definitions from dependent files, default False
-        * spine_only -- if True, outputs only the definitions on the main spine, default False
-        Note: across_files = True is incompatible with spine_only = False
+        * `across_files`: if `True`, outputs also definitions from dependent files, default `False`.
+        * `spine_only`: if `True`, outputs only the definitions on the main spine, default `False`.
+        Note: `across_files = True` is incompatible with `spine_only = False`.
+
+        When `spine_only = True`, the resulting iterable is topologically sorted. That is, for
+        any definition in the stream, any definition reachable from the forward closure of the definition
+        also exists in the remainder of the stream.
         """
         return Definition._group_by_clusters(
             self.definitions(
@@ -1119,6 +1213,12 @@ def lowlevel_to_highlevel(LowlevelDataReader lreader) -> dict[Path, Dataset]:
 def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None]:
     """Load a directory of dataset files into memory, and expose the data they contain.
     The result is a dictionary that maps physical paths to `Dataset` instances that allow access to the data.
+
+    Arguments:
+    `dataset_path`: Can either be a dataset directory, or a SquashFS image file. In case of an image
+                    file `dataset.squ`, the image will be mounted using `squashfuse` on directory
+                    `dataset/`, after which the contents of that directory will be read.
+
     """
     with lowlevel_data_reader(dataset_path) as lreader:
         yield lowlevel_to_highlevel(lreader)
@@ -1126,23 +1226,26 @@ def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None
 cdef class OnlineDefinitionsReader:
 
     cdef GraphIndex graph_index
-    cdef C_Graph_Reader graph
-    cdef uint32_t representative_int
 
     @staticmethod
-    cdef init(C_Graph_Reader graph, uint32_t representative):
+    cdef init(GraphIndex graph_index, C_PredictionProtocol_Request_Initialize_Reader init):
         cdef OnlineDefinitionsReader wrapper = OnlineDefinitionsReader.__new__(OnlineDefinitionsReader)
 
-        wrapper.graph = graph
-        wrapper.representative_int = representative
-        cdef vector[C_Graph_Node_Reader_List] c_nodes
-        c_nodes.push_back(graph.getNodes())
-        cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
-        c_edges.push_back(graph.getEdges())
-        cdef vector[uint32_t] c_representatives = [representative]
+        graph_index.nodes.push_back(init.getGraph().getNodes())
+        graph_index.edges.push_back(init.getGraph().getEdges())
+        graph_index.representatives.push_back(init.getRepresentative())
+        graph_index.local_to_global.push_back(reversed(range(graph_index.nodes.size())))
+        wrapper.graph_index = graph_index
+        return wrapper
 
-        local_to_global = [[0]]
-        wrapper.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, local_to_global)
+    @staticmethod
+    cdef init_empty():
+        cdef OnlineDefinitionsReader wrapper = OnlineDefinitionsReader.__new__(OnlineDefinitionsReader)
+
+        cdef vector[C_Graph_Node_Reader_List] c_nodes
+        cdef vector[C_Graph_EdgeTarget_Reader_List] c_edges
+        cdef vector[uint32_t] c_representatives
+        wrapper.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, [])
         return wrapper
 
     def local_to_global(self, graph: int, dep_index: int) -> int:
@@ -1156,27 +1259,51 @@ cdef class OnlineDefinitionsReader:
         This is a low-level property.
         Prefer to use `definitions` and `clustered_definitions`.
         """
-        representative = self.representative_int
-        if self.graph.getNodes().size() == representative:
-            return None
-        else:
-            return Node.init(0, representative, &self.graph_index).definition
+        graph_index = self.graph_index
+        for i in reversed(range(graph_index.representatives.size())):
+            representative = graph_index.representatives[i]
+            if graph_index.nodes[i].size() == representative:
+                continue
+            else:
+                return Node.init(i, representative, &self.graph_index).definition
+        return None
 
-    @property
-    def definitions(self) -> Iterable[Definition]:
+    def definitions(self, full : bool = True) -> Iterable[Definition]:
         """The list of definitions that are currently in the global context.
-        """
-        if self.representative is None: return ()
-        return self.representative.global_context(inclusive = True)
 
-    @property
-    def clustered_definitions(self) -> Iterable[list[Definition]]:
-        """All of the definitions present in the global context, clustered by mutually recursive definitions.
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of
+        the stream. An exception to this rule are mutually recursive definitions,
+        because no topological sort is possible there (see also `clustered_definitions`).
         """
-        return Definition._group_by_clusters(self.definitions)
+        if full:
+            representative = self.representative
+        else:
+            graph_index = self.graph_index
+            size = graph_index.representatives.size()
+            if size == 0:
+                representative = None
+            else:
+                representative = graph_index.representatives[size - 1]
+                if graph_index.nodes[size - 1].size() == representative:
+                    representative = None
+                else:
+                    representative = Node.init(size - 1, representative, &self.graph_index).definition
+        if representative is None: return ()
+        return representative.global_context(inclusive = True, across_files = full)
+
+    def clustered_definitions(self, full : bool = True) -> Iterable[list[Definition]]:
+        """All of the definitions present in the global context, clustered by mutually recursive definitions.
+
+        The resulting iterable is topologically sorted. That is, for any definition in the stream, any
+        definition reachable from the forward closure of the definition also exists in the remainder of
+        the stream.
+        """
+        return Definition._group_by_clusters(self.definitions(full))
 
 @contextmanager
-def online_definitions_initialize(Graph_Reader graph, uint32_t representative) -> Generator[OnlineDefinitionsReader, None, None]:
+def online_definitions_initialize(OnlineDefinitionsReader stack,
+                                  PredictionProtocol_Request_Initialize_Reader init) -> Generator[OnlineDefinitionsReader, None, None]:
     """Given a new initialization message sent by Coq, construct a `OnlineDefinitiosnReader` object. This can be used
     to inspect the definitions currently available. Additionally, using `online_data_predict` it can
     be combined with a subsequent prediction request received from Coq to build a `ProofState`.
@@ -1188,8 +1315,12 @@ def online_definitions_initialize(Graph_Reader graph, uint32_t representative) -
     # the `with` block.
     # If the Python runtime ever becomes clever and eliminates this variable, a different
     # method of keeping the object around should be found.
-    dr = OnlineDefinitionsReader.init(graph.source, representative)
+    graph_index = stack.graph_index
+    dr = OnlineDefinitionsReader.init(graph_index, init.source)
     yield dr
+
+def empty_online_definitions_initialize() -> OnlineDefinitionsReader:
+    defs = OnlineDefinitionsReader.init_empty()
 
 @contextmanager
 def online_data_predict(OnlineDefinitionsReader base,
@@ -1210,15 +1341,69 @@ def online_data_predict(OnlineDefinitionsReader base,
     graph_index.nodes.push_back(p.getGraph().getNodes())
     graph_index.edges.push_back(p.getGraph().getEdges())
     graph_index.representatives.push_back(p.getGraph().getNodes().size())
-    graph_index.local_to_global = [[0], [1, 0]]
-    yield ProofState.init(predict.source.getState(), 1, &graph_index)
+    graph_index.local_to_global.push_back(reversed(range(graph_index.nodes.size())))
+    yield ProofState.init(predict.source.getState(), graph_index.nodes.size() - 1, &graph_index)
 
-def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> (
-        Generator[PredictionProtocol_Request_Reader, capnp.lib.capnp._DynamicStructBuilder, None]):
+@dataclass
+class TacticPredictionGraph:
+    ident : int
+    arguments : list[Node]
+    confidence : float
+
+@dataclass
+class TacticPredictionsGraph:
+    predictions : list[TacticPredictionsGraph]
+
+@dataclass
+class TacticPredictionText:
+    tactic_text : str
+    confidence : float
+
+@dataclass
+class TacticPredictionsText:
+    predictions : list[TacticPredictionsText]
+
+@dataclass
+class CheckAlignmentMessage:
+    pass
+
+@dataclass
+class CheckAlignmentResponse:
+    unknown_definitions : list[Definition]
+    unknown_tactics : list[int]
+
+@dataclass
+class GlobalContextMessage:
+    definitions : OnlineDefinitionsReader
+    tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
+    log_annotation : str
+    prediction_requests : Generator[GlobalContextMessage | ProofState | CheckAlignmentMessage,
+                                    None | TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
+                                    None]
+
+def convert_predictions(preds, stack_size):
+    if isinstance(preds, TacticPredictionsText):
+        preds = [{'tacticText': pred.tactic_text,
+                  'confidence': pred.confidence} for pred in preds.predictions]
+        return graph_api_capnp.PredictionProtocol.Response.new_message(textPrediction=preds)
+    elif isinstance(preds, TacticPredictionsGraph):
+        preds = [{'tactic': {'ident': pred.ident},
+                  'arguments': [{'term' : {'depIndex': stack_size - a.graph,
+                                           'nodeIndex': a.nodeid}}
+                            for a in pred.arguments],
+                  'confidence': pred.confidence} for pred in preds.predictions]
+        return graph_api_capnp.PredictionProtocol.Response.new_message(prediction=preds)
+    else:
+        raise Exception("Incorrect predictions received")
+
+def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | None = None) -> (
+        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                  capnp.lib.capnp._DynamicStructBuilder, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
 
     Given a `socket`, this function creates a generator that yields messages of type
-    `PredictionProtocol_Request_Reader` after which a `_DynamicStructBuilder` message needs to be `send` back.
+    `pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader` after which a
+    `capnp.lib.capnp._DynamicStructBuilder` message needs to be `send` back.
 
     When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
     descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
@@ -1236,24 +1421,101 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
         Note that the proper solution to this is to read messages in async mode, but pycapnp currently doesn't
         support this.
         """
-        prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-        msg = next(reader, None)
-        signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
-        return msg
+        if threading.current_thread() is threading.main_thread():
+            prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+            msg = next(reader, None)
+            signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
+            return msg
+        else:
+            return next(reader, None)
     msg = next_disabled_sigint()
     while msg is not None:
         if record is not None:
             msg.as_builder().write_packed(record)
         cython_msg = PredictionProtocol_Request_Reader(msg)
         response = yield cython_msg
+        yield
         response.write_packed(socket)
         if record is not None:
             response.clear_write_flag()
             response.write_packed(record)
         msg = next_disabled_sigint()
 
+
+def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
+    msg = next(lgenerator, None)
+    while msg is not None:
+        if msg.is_synchronize:
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
+            lgenerator.send(response)
+            msg = next(lgenerator, None)
+        elif msg.is_initialize:
+            init = msg.initialize
+            if init.data_version.major != graph_api_capnp.currentVersion.major:
+                raise ValueError(
+                    f"This library is compiled for a dataset containing data versioned as "
+                    f"{graph_api_capnp.currentVersion} but file Coq sent a message versioned as "
+                    f"{init.data_version}.")
+            if init.stack_size != defs.graph_index.nodes.size():
+                return msg
+            else:
+                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
+                lgenerator.send(response)
+                with online_definitions_initialize(defs, init) as definitions:
+                    def prediction_generator_sub():
+                        nonlocal msg
+                        msg = yield from prediction_generator(lgenerator, definitions)
+                    pg = prediction_generator_sub()
+                    yield GlobalContextMessage(definitions, init.tactics, init.log_annotation, pg)
+                    if next(pg, None) is not None:
+                        raise Exception("Not all prediction requests were consumed")
+        elif msg.is_predict:
+            with online_data_predict(defs, msg.predict) as proof_state:
+                preds = yield proof_state
+                response = convert_predictions(preds, defs.graph_index.nodes.size())
+            lgenerator.send(response)
+            yield
+            msg = next(lgenerator, None)
+        elif msg.is_check_alignment:
+            alignment = yield CheckAlignmentMessage()
+            alignment = {'unalignedTactics': alignment.unknown_tactics,
+                         'unalignedDefinitions':
+                         [{'depIndex': defs.graph_index.nodes.size() - 1 - d.node.graph, 'nodeIndex': d.node.nodeid}
+                           for d in alignment.unknown_definitions]}
+            response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
+            lgenerator.send(response)
+            yield
+            msg = next(lgenerator, None)
+        else:
+            raise Exception("Capnp protocol error")
+
+def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> GlobalContextMessage:
+    """A generator that facilitates communication between a prediction server and a Coq process.
+
+    Given a `socket`, this function creates a `GlobalContextMessage` `context`. This message contains an
+    initially empty list of available tactics and definitions in the global context. Through
+    `context.prediction_requests` one can access a generator that yields prediction requests and expects
+    predictions to be sent in response. The possible messages are as follows:
+    - `GlobalContextMessage`: An additional, nested global context message that adds in additional tactics
+       and definitions. The prediction requests of this nested context need to be exhausted before continuing
+       with messages from the current context.
+    - `CheckAlignmentMessage`: A request to check which of Coq's current tactics and definitions the
+      prediction server currently "knows about". The generator expects a `CheckAlignmentResponse` to be
+      sent in response.
+    - `ProofState`: A request to make tactic predictions for a given proof state. Either a
+      `TacticPredictionsGraph` or a `TacticPredictionsText` message is expected in return.
+
+    When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
+    descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
+    """
+    lgenerator = capnp_message_generator_lowlevel(socket, record)
+    defs = OnlineDefinitionsReader.init_empty()
+    pg = prediction_generator(lgenerator, defs)
+    return GlobalContextMessage(defs, [], None, pg)
+
 def capnp_message_generator_from_file(message_file: BinaryIO) -> (
-        Generator[PredictionProtocol_Request_Reader, capnp.lib.capnp._DynamicStructBuilder, None]):
+        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                  capnp.lib.capnp._DynamicStructBuilder, None]):
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
     Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
@@ -1267,6 +1529,7 @@ def capnp_message_generator_from_file(message_file: BinaryIO) -> (
     for request in message_reader:
         cython_msg = PredictionProtocol_Request_Reader(request)
         response = yield cython_msg
+        yield
         # A bit of a hack, we temporarily change the schema of the reader to `Response`
         message_reader.schema = graph_api_capnp.PredictionProtocol.Response.schema
         recorded_response = next(message_reader)
@@ -1307,12 +1570,12 @@ class GlobalContextSets:
         self.parent = parent
         self.should_propagate = should_propagate
 
-    def _propagate(self, d: Definition, context: PSet):
+    def _propagate(self, d: Definition, context: Map):
         self.cache = self.cache.set(d, context)
         if self.should_propagate(d) and (parent := self.parent):
             parent._propagate(d, context)
 
-    def _global_context_set(self, d: Definition) -> PSet:
+    def _global_context_set(self, d: Definition) -> Map:
         try:
             return self.cache[d]
         except KeyError:
@@ -1330,7 +1593,7 @@ class GlobalContextSets:
             self._propagate(d, new_set)
             return new_set
 
-    def global_context_set(self, d: Definition) -> PSet:
+    def global_context_set(self, d: Definition) -> Map:
         """Retrieve the global context of a definition, caching the result, and intermediate results."""
         start = d.cluster_representative
         context = self._global_context_set(start)

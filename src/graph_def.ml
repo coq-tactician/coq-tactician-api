@@ -44,6 +44,7 @@ type constructor = Names.constructor [@printer print_constructor] [@@deriving sh
 type constant = Constant.t
                 [@printer fun fmt c -> fprintf fmt "%s" (Label.to_string @@ Constant.label c)][@@deriving show]
 type id = Id.t [@printer fun fmt id -> fprintf fmt "%s" (Id.to_string id)] [@@deriving show]
+type evar = Evar.t [@printer fun fmt id -> fprintf fmt "%d" (Evar.repr id)] [@@deriving show]
 
 type 'node context_item =
   { id : Id.t
@@ -69,7 +70,7 @@ type tactic =
   ; tactic_non_anonymous : string
   ; base_tactic   : string
   ; interm_tactic : string
-  ; tactic_hash   : int
+  ; tactic_hash   : int64
   ; tactic_exact  : bool }
 
 type 'node tactical_step =
@@ -114,8 +115,7 @@ type 'node definition = 'node definition'
                         [@printer fun fmt c -> fprintf fmt "%s" (print_definition c)][@@deriving show]
 
 type 'node node_type =
-  | ProofState
-  | UndefProofState
+  | ProofState of evar
 
   (* Context *)
   | ContextDef of int * id
@@ -133,7 +133,7 @@ type 'node node_type =
 
   (* Constr nodes *)
   | Rel
-  | Evar of int
+  | Evar
   | EvarSubst
   | Cast (* TODO: Do we want cast kind? *)
   | Prod of name
@@ -286,6 +286,7 @@ module type GraphMonadType = sig
   type 'a repr_t
   val mk_node : node_label -> children -> node t
   val with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t
+  val with_delayed_nodes : ?definition:bool -> int -> (node list -> ('a * (node_label * children) list) t) -> 'a t
   val run : 'a t -> 'a repr_t
 end
 
@@ -350,6 +351,24 @@ module SimpleGraph
     pass @@
     let+ (v, nl, ch) = f i in
     v, fun (ec, nls) -> (ec + List.length ch), fun c r -> c (nls c r) nl ch
+
+  (* This is a typical function that would benefit greatly from having sized vectors! *)
+  let with_delayed_nodes ?definition i f =
+    let rec aux i nodes =
+      if i = 0 then
+        f nodes
+      else
+        with_delayed_node ?definition @@ fun n ->
+        let+ a, chs = aux (i - 1) (n::nodes) in
+        match chs with
+        | [] -> CErrors.anomaly Pp.(str "with_delayed_nodes received to few children nodes")
+        | (nl, ch)::chs -> (a, chs), nl, ch
+    in
+    let+ a, chs = aux i [] in
+    match chs with
+    | [] -> a
+    | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
+
   let run m : 'a repr_t =
     let node_count, ((edge_count, ns), res) = run m 0 in
     res, fun mki c -> let r = mki ~node_count ~edge_count in ns c r
@@ -502,6 +521,24 @@ end = struct
           defs, AList.cons (nl, { start = edge_count; size = edge_count' }) nodes
         | _, _ -> assert false in
       { defs; nodes; edges = AList.append edges (AList.of_list ch) }
+
+  (* This is a typical function that would benefit greatly from having sized vectors! *)
+  let with_delayed_nodes ?definition i f =
+    let rec aux i nodes =
+      if i = 0 then
+        f nodes
+      else
+        with_delayed_node ?definition @@ fun n ->
+        let+ a, chs = aux (i - 1) (n::nodes) in
+        match chs with
+        | [] -> CErrors.anomaly Pp.(str "with_delayed_nodes received to few children nodes")
+        | (nl, ch)::chs -> (a, chs), nl, ch
+    in
+    let+ a, chs = aux i [] in
+    match chs with
+    | [] -> a
+    | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
+
   let run m { def_count; node_count; edge_count; defs; nodes; edges } current =
     let { def_count; node_count; edge_count }, ({ defs; nodes; edges }, result) =
       let m = tell { defs; nodes; edges } >> m in
@@ -582,8 +619,12 @@ module CICHasher
   let update_node_label ~physical p =
     let u = update_int in
     match p with
-    | ProofState -> u 0
-    | UndefProofState -> u 1
+    | ProofState e ->
+      (* TODO: Take the evar into account. Evars are somewhat non-deterministic during proof search,
+         so we cannot hash them. But morally we should has them, because it is possible to have two evars
+         with the same hyps and conclusion that are nontheless different. *)
+      (* fun s -> u 0 @@ u (Evar.repr e) s *)
+      u 0
     | ContextDef (idx, _) -> fun s -> u 2 @@ update_int idx s
     | ContextAssum (idx, _) -> fun s -> u 3 @@ update_int idx s
     | Definition { path; previous; external_previous; status; _ } -> fun s ->
@@ -611,7 +652,7 @@ module CICHasher
     | SortSet -> u 8
     | SortType -> u 9
     | Rel -> u 10
-    | Evar e -> fun s -> u 11 @@ u e s (* Special care needs to be taken because two evars are never equal *)
+    | Evar -> u 11
     | EvarSubst -> u 12
     | Cast -> u 13
     | Prod _ -> u 14
@@ -756,8 +797,9 @@ module GraphHasher
   type binder_info =
     { is_definition : bool option
     ; final : bool
-    ; seen : bool }
-  type node_info =
+    ; seen : bool
+    ; extra_child : node option }
+  and node_info =
     { label : node_label
     ; children : (edge_label * node) list
     ; hash : hashes
@@ -793,13 +835,15 @@ module GraphHasher
   open Monad.Make(M)
   include Monad_util.WithMonadNotations(M)
 
-  let physical_hash n =
-    let which = fun { physical; _ } -> physical in
+  let get_hash ~physical n =
+    let which = if physical then fun { physical; _ } -> physical else fun { structural; _ } -> structural in
     match !n with
-      | Written (_, hash) -> which hash
-      | BinderPlaceholder _ -> H.with_state @@ fun x -> x
-      | Normal { hash; _ } -> which hash
-      | Binder ({ hash; _ }, _) -> which hash
+    | Written (_, hash) -> which hash
+    | BinderPlaceholder _ -> H.with_state @@ fun x -> x
+    | Normal { hash; _ } -> which hash
+    | Binder ({ hash; _ }, _) -> which hash
+
+  let physical_hash n = get_hash ~physical:true n
 
   let calc_hash curr_depth nl ch =
     (* Technically speaking, we should sort the hashes to make the final hash invariant w.r.t. child ordering.
@@ -809,13 +853,12 @@ module GraphHasher
       OList.fold_left (fun state (el, n) ->
         let n = match !n with
           | Written (_, hash) -> which hash
-          | BinderPlaceholder _ -> H.with_state @@ fun x -> x
+          | BinderPlaceholder { depth } ->
+            H.with_state @@ fun state -> H.update_int (curr_depth - depth) state
           | Normal { hash; _ } -> which hash
           | Binder ({ hash; _ }, { seen = false; _ }) -> which hash
           | Binder ({ depth; label; _ }, { seen = true; final = false; _ }) ->
-              H.with_state @@ fun state ->
-              (* Careful to include the label of the binder as well as its de Bruijn index *)
-              H.update_node_label ~physical label @@ H.update_int (curr_depth - depth) state
+              H.with_state @@ fun state -> H.update_int (curr_depth - depth) state
           | Binder ({ hash; _ }, { seen = true; final = true; _ }) -> which hash
         in
         H.update_edge ~physical el n state
@@ -825,12 +868,15 @@ module GraphHasher
     { structural = final ~physical:false
     ; physical = final ~physical:true }
 
-  let calc_min_binder_referenced ch =
-    OList.fold_left (fun acc (_, n) -> match !n with
-        | BinderPlaceholder { depth } -> min acc depth
-        | Normal { min_binder_referenced; _ } | Binder ({ min_binder_referenced; _}, _) ->
-          min acc min_binder_referenced
-        | Written _ -> acc) max_int ch
+  let calc_min_binder_referenced ?extra_child ch =
+    let calc acc n =
+      match !n with
+      | BinderPlaceholder { depth } -> min acc depth
+      | Normal { min_binder_referenced; _ } | Binder ({ min_binder_referenced; _}, _) ->
+        min acc min_binder_referenced
+      | Written _ -> acc in
+    let min = OList.fold_left (fun acc (_, n) -> calc acc n) max_int ch in
+    Option.fold_left calc min extra_child
 
   (** `node_size n` is not really the size of the forward closure, but rather a metric such that
       `node_size n != node_size m` implies that n and m are not bisimilar and for any subterm n'
@@ -893,12 +939,18 @@ module GraphHasher
       ; physical =
           (H.with_state @@ fun state ->
            H.update connected_component_hash.physical @@ H.update physical state) } in
-  let rec aux n =
+    let rec aux n =
+      let proc_children ?extra_child children =
+        let* ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
+        (match extra_child with
+         | Some n -> let+ _ = aux n in ()
+         | None -> return ()) >>
+        return ch in
       match !n with
       | Written (n, _) -> return n
-      | Normal { label; children; hash; _ } ->
-        let hash = tag_connected_component hash in
-        let* ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
+      | Normal { label; children; hash; depth; _ } ->
+        let* ch = proc_children children in
+        let hash = tag_connected_component @@ calc_hash depth label children in
         share_node label hash
           (fun add ->
              let* node = lift @@ make_lower_node label hash ch in
@@ -906,7 +958,7 @@ module GraphHasher
              n.contents <- Written (node, hash);
              node)
           (fun hash node -> n.contents <- Written (node, hash); return node)
-      | Binder ({ label; children; hash; _ }, { final = true; is_definition; _ }) ->
+      | Binder ({ label; children; hash; id; _ }, { final = true; is_definition; extra_child; _ }) ->
         let hash = tag_connected_component hash in
         share_node label hash
           (fun add ->
@@ -915,13 +967,13 @@ module GraphHasher
                let computation =
                  let* hash = add node in
                  n.contents <- Written (node, hash);
-                 let+ ch = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
+                 let+ ch = proc_children ?extra_child children in
                  node, (label, hash.structural), ch in
                run computation (map, depth (* depth really doesn't matter*)) in
              node)
           (fun hash node ->
              n.contents <- Written (node, hash);
-             let+ _ = List.map (fun (el, n) -> let+ n = aux n in el, n) children in
+             let+ _ = proc_children ?extra_child children in
              node)
       | Binder (_, { final = false; _ }) | BinderPlaceholder _ -> assert false in
     aux n
@@ -945,17 +997,19 @@ module GraphHasher
     let connected_component_hash = match !node with
       | Binder ({ hash; _}, _) -> hash
       | _ -> assert false in
-    let add_filtered_children ch rem = OList.fold_left
-        (fun rem (_, ch) -> match !ch with
-           | Binder (_, { seen = true; _ }) | Written _ -> rem
-           | _ -> NodeSet.add ch rem) rem ch in
+    let add_filtered_children ?extra_child ch rem =
+      let add rem ch = match !ch with
+        | Binder (_, { seen = true; _ }) | Written _ -> rem
+        | _ -> NodeSet.add ch rem in
+      let rem = OList.fold_left (fun rem (_, ch) -> add rem ch) rem ch in
+      Option.fold_left (fun rem ch -> add rem ch) rem extra_child in
     let decompose_node n rem =
       match n.contents with
       | Written (_, _) | Binder (_, { seen = true; _ }) | BinderPlaceholder _ -> assert false
       | Normal { children; _ } -> add_filtered_children children rem
-      | Binder (({ label; children; _ } as i), ({ seen = false; _ } as bi)) ->
+      | Binder (({ label; children; _ } as i), ({ seen = false; extra_child; _ } as bi)) ->
         n.contents <- Binder (i, { bi with final = true; seen = true });
-        add_filtered_children children rem in
+        add_filtered_children ?extra_child children rem in
     let rec decompose_queue q =
       match NodeSet.max_elt_opt q with
       | None -> return ()
@@ -978,10 +1032,13 @@ module GraphHasher
     let* () = decompose_queue @@ NodeSet.singleton node in
     write_node_and_children connected_component_hash node
 
-  let children_converged =
+  let children_converged ?extra_child ch =
+    let init = match extra_child with
+      | None | Some { contents = Written _; _ } -> Some []
+      | _ -> None in
     CList.fold_left (fun ch -> function
         | el, { contents = Written (n, _); _ } -> Option.map (fun ls -> (el, n)::ls) ch
-        | _ -> None) (Some [])
+        | _ -> None) init ch
 
   let mk_node : node_label -> children -> node t = fun nl ch ->
     let* _, depth = ask in
@@ -1007,14 +1064,24 @@ module GraphHasher
         ; min_binder_referenced } in
       return node
 
-  let with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t =
+  let with_delayed_node : ?definition:bool -> (node -> ('a * node option * node_label * children) t) -> 'a t =
     fun ?definition f ->
     local (fun (map, d) -> map, d + 1) @@
     let* _, depth = ask in
     let node = ref @@ BinderPlaceholder { depth } in
-    let* v, nl, ch = f node in
+    let* v, extra_child, nl, ch = f node in
     let hash = calc_hash depth nl ch in
-    match children_converged ch with
+    (* We need to include the hash of an extra_child, because it needs to be part of the
+       connected_component hash. *)
+    let hash = match extra_child with
+      | None -> hash
+      | Some n -> { physical =
+                      (H.with_state @@ fun state ->
+                       H.update hash.physical @@ H.update (get_hash ~physical:true n) state)
+                  ; structural =
+                      (H.with_state @@ fun state ->
+                       H.update hash.structural @@ H.update (get_hash ~physical:false n) state) } in
+    match children_converged ?extra_child ch with
     | Some ch ->
       share_node nl hash
        (fun add ->
@@ -1027,7 +1094,7 @@ module GraphHasher
           return v)
     | None ->
       let size = calc_size ch in
-      let min_binder_referenced = calc_min_binder_referenced ch in
+      let min_binder_referenced = calc_min_binder_referenced ?extra_child ch in
       node.contents <- Binder
           ({ label = nl
            ; hash
@@ -1038,13 +1105,38 @@ module GraphHasher
            ; id = gen_id () },
            { is_definition = definition
            ; final = false
-           ; seen = false });
+           ; seen = false;
+           extra_child });
       let+ () =
-        (* We could use [dept = min_binder] here, except for mutual fixpoints *)
+        (* We could use [depth = min_binder] here, except for mutual fixpoints *)
         if depth <= min_binder_referenced then
           map (fun (_ : G.node) -> ()) @@ converge_hashes node
         else return () in
       v
+
+  (* This is a typical function that would benefit greatly from having sized vectors! *)
+  let with_delayed_nodes ?definition i f =
+    let rec aux (i : int) (nodes : node list) =
+      if i = 0 then
+        map (fun (a, chls) -> a, None, chls) @@ f nodes
+      else
+        with_delayed_node ?definition @@ fun n ->
+        let+ a, next, chs = aux (i - 1) (n::nodes) in
+        match chs with
+        | [] -> CErrors.anomaly Pp.(str "with_delayed_nodes received to few children nodes")
+        | (nl, ch)::chs -> (a, Some n, chs), next, nl, ch
+    in
+    let+ a, _, chs = aux i [] in
+    match chs with
+    | [] -> a
+    | _ -> CErrors.anomaly Pp.(str "with_delayed_nodes received to many children nodes")
+
+  let with_delayed_node : ?definition:bool -> (node -> ('a * node_label * children) t) -> 'a t =
+    fun ?definition f ->
+    let f n =
+      let+ v, nl, ch = f n in
+      v, None, nl, ch in
+    with_delayed_node ?definition f
 
   let run = fun m hashed ->
     G.run @@ run m (hashed, 0)

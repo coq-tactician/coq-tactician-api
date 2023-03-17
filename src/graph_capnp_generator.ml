@@ -1,15 +1,41 @@
 open Graph_def
 open Names
 
-module K = Graph_api.Make(Capnp.BytesMessage)
-
 type graph_state = { node_index : int; edge_index : int }
 
-let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a node_type) cnt =
+type 'a conversion_info =
+  { node_depindex : 'a -> int
+  ; node_local_index : 'a -> int }
+
+module Writer(K : Graph_api.S) = struct
+
+let write_proof_state ?(include_metadata=false) { node_depindex; node_local_index }
+    capnp_state { root; context; ps_string; concl_string; evar } =
+  let capnp_root = K.Builder.ProofState.root_init capnp_state in
+  K.Builder.ProofState.Root.dep_index_set_exn capnp_root @@ node_depindex root;
+  K.Builder.ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index root;
+  let context_arr = K.Builder.ProofState.context_init capnp_state @@ List.length context in
+  List.iteri (fun i { node; _ } ->
+      let arri = Capnp.Array.get context_arr i in
+      K.Builder.Node.dep_index_set_exn arri @@ node_depindex node;
+      K.Builder.Node.node_index_set_int_exn arri @@ node_local_index node
+    ) context;
+  if include_metadata then begin
+    ignore(K.Builder.ProofState.context_names_set_list capnp_state
+              (List.map (fun { id; _ } -> Id.to_string id) context));
+    ignore(K.Builder.ProofState.context_text_set_list capnp_state
+              (List.map (fun { text; _ } -> text) context));
+    K.Builder.ProofState.text_set capnp_state ps_string;
+    K.Builder.ProofState.conclusion_text_set capnp_state concl_string
+  end;
+  K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar
+
+let nt2nt ~include_metadata none_index ({ node_depindex; node_local_index } as ci) (nt : 'a node_type) cnt =
   let open K.Builder.Graph.Node.Label in
   match nt with
-  | ProofState -> proof_state_set cnt
-  | UndefProofState -> undef_proof_state_set cnt
+  | ProofState evar ->
+    let ps = proof_state_init cnt in
+    K.Builder.IntP.value_set ps @@ Stdint.Uint64.of_int @@ Evar.repr evar
   | ContextDef _ -> context_def_set cnt
   | ContextAssum _ -> context_assum_set cnt
   | Definition { previous; external_previous; def_type; path; status; type_text; term_text } ->
@@ -32,32 +58,13 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
        Status.Substituted.dep_index_set_exn capnp_node @@ node_depindex n;
        Status.Substituted.node_index_set_int_exn capnp_node @@ node_local_index n);
     let write_proof arr proof =
-      let write_proof_state capnp_state { root; context; ps_string; concl_string; evar } =
-        let capnp_root = K.Builder.ProofState.root_init capnp_state in
-        K.Builder.ProofState.Root.dep_index_set_exn capnp_root @@ node_depindex root;
-        K.Builder.ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index root;
-        let context_arr = K.Builder.ProofState.context_init capnp_state @@ List.length context in
-        List.iteri (fun i { node; _ } ->
-            let arri = Capnp.Array.get context_arr i in
-            K.Builder.Node.dep_index_set_exn arri @@ node_depindex node;
-            K.Builder.Node.node_index_set_int_exn arri @@ node_local_index node
-          ) context;
-        if include_metadata then begin
-          ignore(K.Builder.ProofState.context_names_set_list capnp_state
-                   (List.map (fun { id; _ } -> Id.to_string id) context));
-          ignore(K.Builder.ProofState.context_text_set_list capnp_state
-                   (List.map (fun { text; _ } -> text) context));
-          K.Builder.ProofState.text_set capnp_state ps_string;
-          K.Builder.ProofState.conclusion_text_set capnp_state concl_string
-        end;
-        K.Builder.ProofState.id_set_int_exn capnp_state @@ Evar.repr evar in
       let write_outcome capnp { term; term_text; arguments; proof_state_before; proof_states_after } =
         let capnp_state_before = K.Builder.Outcome.before_init capnp in
-        write_proof_state capnp_state_before proof_state_before;
+        write_proof_state ~include_metadata ci capnp_state_before proof_state_before;
         let after_arr = K.Builder.Outcome.after_init capnp (List.length proof_states_after) in
         List.iteri (fun i ps ->
             let capnp_state = Capnp.Array.get after_arr i in
-            write_proof_state capnp_state ps;
+            write_proof_state ~include_metadata ci capnp_state ps;
           ) proof_states_after;
         let capnp_term = K.Builder.Outcome.term_init capnp in
         K.Builder.Outcome.Term.dep_index_set_exn capnp_term @@ node_depindex term;
@@ -81,7 +88,7 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
            | None -> K.Builder.ProofStep.Tactic.unknown_set capnp_tactic
            | Some { tactic; tactic_non_anonymous; base_tactic; interm_tactic; tactic_hash; tactic_exact } ->
              let capnp_tactic = K.Builder.ProofStep.Tactic.known_init capnp_tactic in
-             K.Builder.Tactic.ident_set_int_exn capnp_tactic tactic_hash;
+             K.Builder.Tactic.ident_set capnp_tactic tactic_hash;
              K.Builder.Tactic.exact_set capnp_tactic tactic_exact;
              if include_metadata then begin
                K.Builder.Tactic.text_set capnp_tactic tactic;
@@ -120,7 +127,7 @@ let nt2nt ~include_metadata none_index node_depindex node_local_index (nt : 'a n
   | SortSet -> sort_set_set cnt
   | SortType -> sort_type_set cnt
   | Rel -> rel_set cnt
-  | Evar i -> evar_set_int_exn cnt i
+  | Evar -> evar_set cnt
   | EvarSubst -> evar_subst_set cnt
   | Cast -> cast_set cnt
   | Prod _ -> prod_set cnt
@@ -196,8 +203,8 @@ let write_graph ?(include_metadata=false)
   let _ = AList.fold (fun node_index (label, Graph_def.{ start; size }) ->
       let node = Capnp.Array.get cnodes node_index in
       nt2nt ~include_metadata node_count
-        (fun n -> node_dep_index @@ node_lower n)
-        (fun n -> node_local_index @@ node_lower n)
+        { node_depindex = (fun n -> node_dep_index @@ node_lower n)
+        ; node_local_index = (fun n -> node_local_index @@ node_lower n) }
         (node_label label) (K.Builder.Graph.Node.label_init node);
       K.Builder.Graph.Node.children_count_set_exn node size;
       K.Builder.Graph.Node.children_index_set_int_exn node (if size = 0 then 0 else start);
@@ -213,3 +220,6 @@ let write_graph ?(include_metadata=false)
       ei + 1
     ) edges 0 in
   ()
+
+end
+

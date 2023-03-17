@@ -31,5 +31,9 @@ VERNAC COMMAND EXTEND Reinforce CLASSIFIED AS QUERY
 END
 
 VERNAC COMMAND EXTEND CheckNeuralAlignment CLASSIFIED AS QUERY
-| [ "Check" "Neural" "Alignment" ] -> { Neural_learner.check_neural_alignment () }
+| [ "Tactician" "Neural" "Alignment" ] -> { Neural_learner.check_neural_alignment () }
+END
+
+VERNAC COMMAND EXTEND TacticianNeuralCache CLASSIFIED AS SIDEFF
+| [ "Tactician" "Neural" "Cache" ] -> { Neural_learner.push_cache () }
 END

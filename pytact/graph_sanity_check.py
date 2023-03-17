@@ -45,6 +45,7 @@ def open_dataset(dataset_path: Path):
 #     return deps
 
 def process1(args, fname: Path):
+    file_errors = []
     file_definitions = 0
     file_original_definitions = 0
     file_base_tactics_text = set()
@@ -52,6 +53,7 @@ def process1(args, fname: Path):
     file_tactics = Counter()
     file_original_tactics = Counter()
     file_tactic_arguments = {}
+    file_tactic_ident_to_base = {}
     proof_steps = 0
     original_proof_steps = 0
     original_proof_steps_faithful = 0
@@ -61,6 +63,7 @@ def process1(args, fname: Path):
     original_proofs = 0
     original_proofs_faithful = 0
     unresolvable = 0
+    file_disappearing_proof_states = 0
     graphid = data.graphid_by_filename[fname]
     freader = data[graphid]
     graph = freader.graph
@@ -72,7 +75,7 @@ def process1(args, fname: Path):
     # Check correctness of Graph struct
     for n in graph.nodes:
         if not (n.children_index + n.children_count <= edges_count):
-            raise Exception(f"{fname}: Children of node {n} are not valid indices of Graph.edges")
+            file_errors.append(f"{fname}: Children of node {n} are not valid indices of Graph.edges")
         if n.label.is_definition:
             file_definitions += 1
 
@@ -80,22 +83,22 @@ def process1(args, fname: Path):
         target = t.target
         dep_index = target.dep_index
         if dep_index >= dependency_count:
-            raise Exception(f"{fname}: target.depIndex {t.target.dep_index} "
+            file_errors.append(f"{fname}: target.depIndex {t.target.dep_index} "
                   f"but len(g.dependencies) is {dependency_count} "
                   f"and g.dependencies = {freader.dependencies}")
         if target.node_index >= node_counts[data.local_to_global(graphid, dep_index)]:
-            raise Exception(f"{fname}: Reference for target {t} is out of bounds")
+            file_errors.append(f"{fname}: Reference for target {t} is out of bounds")
 
     # Check correctness of Dataset struct
     if file_definitions != len(freader.definitions):
-        raise Exception(f"{fname}: Counted {file_definitions} definitions in the file, "
+        file_errors.append(f"{fname}: Counted {file_definitions} definitions in the file, "
                         f"but Dataset.definitions has size {len(freader.definitions)}")
 
     hreader = hdata[fname]
     with global_contexts.sub_context(lambda d: d.is_file_representative) as sub_global_contexts:
         for d in hreader.definitions():
             if not d.node.definition:
-                raise Exception(f"{fname}: Node {d.node} should be a definition but is not")
+                file_errors.append(f"{fname}: Node {d.node} should be a definition but is not")
 
             # Check correctness of Definition struct
             match d.status:
@@ -103,18 +106,18 @@ def process1(args, fname: Path):
                     file_original_definitions += 1
                 case Discharged(original):
                     if not original.node.definition:
-                        raise Exception(f"{fname}: Discharged node of definition {d.name} "
+                        file_errors.append(f"{fname}: Discharged node of definition {d.name} "
                                         f"is not a definition")
                 case Substituted(original):
                     if not original.node.definition:
-                        raise Exception(f"{fname}: Substituted node of definition {d.name} "
+                        file_errors.append(f"{fname}: Substituted node of definition {d.name} "
                                         f"is not a definition")
 
             def check_in_global_context(s):
                 global_context = sub_global_contexts.global_context_set(d)
                 for dd in s:
                     if dd not in global_context:
-                        raise Exception(f"{fname}: Definition {d.name} has dependency {dd.name} "
+                        file_errors.append(f"{fname}: Definition {d.name} has dependency {dd.name} "
                                         f"which is not part of its global context")
 
             if not args.quick:
@@ -122,18 +125,18 @@ def process1(args, fname: Path):
 
             crepr = d.cluster_representative
             if d not in d.cluster:
-                raise Exception(f"{fname}: Cluster represented by {crepr.name}"
+                file_errors.append(f"{fname}: Cluster represented by {crepr.name}"
                                 f"does not contain {d.name}")
             for cd in d.cluster:
                 if crepr != cd.cluster_representative:
-                    raise Exception(f"{fname}: Cluster represented by {crepr.name} contains unrelated "
+                    file_errors.append(f"{fname}: Cluster represented by {crepr.name} contains unrelated "
                                     f"definition {cd.name}")
             if prev := d.previous:
                 if not prev.node.definition:
-                    raise Exception(f"{fname}: Previous node of definition {d.name} is not a definition")
+                    file_errors.append(f"{fname}: Previous node of definition {d.name} is not a definition")
             for ep in d.external_previous:
                 if not ep.node.definition:
-                    raise Exception(f"{fname}: External dependency of definition {d.name} is "
+                    file_errors.append(f"{fname}: External dependency of definition {d.name} is "
                                     f"not a definition")
             if ps := d.proof:
                 proofs += 1
@@ -161,40 +164,39 @@ def process1(args, fname: Path):
                     for outcome in p.outcomes:
                         for after in outcome.after:
                             if after.id not in before_states:
-                                raise Exception(
-                                    f"{fname}: After state {after} with tactic {p.tactic} "
-                                    f"of definition {d.name} does not have a corresponding "
-                                    f"before state")
+                                file_disappearing_proof_states += 1
 
                         if not args.quick:
                             check_in_global_context(node_dependencies(outcome.term))
                         for state in [outcome.before] + list(outcome.after):
                             root_label = state.root.label
                             if not root_label.is_proof_state:
-                                raise Exception(f"{fname}: root is proof state {state} is {root_label}")
+                                file_errors.append(f"{fname}: root is proof state {state} is {root_label}")
 
                             if not args.quick:
                                 check_in_global_context(node_dependencies(state.root))
                             if len(state.context) != len(state.context_names):
-                                raise Exception(f"{fname}: Length of context is different from length of"
+                                file_errors.append(f"{fname}: Length of context is different from length of"
                                                 f"context_names in proof state {state}")
                             if len(state.context) != len(state.context_text):
-                                raise Exception(f"{fname}: Length of context is different from length of"
+                                file_errors.append(f"{fname}: Length of context is different from length of"
                                                 f"context_text in proof state {state}")
                             root_children = [child for _, child in state.root.children]
                             for c in state.context:
                                 if c not in root_children:
-                                    raise Exception(
+                                    file_errors.append(
                                         f"{fname}: hyp {c} of state {state} in def {d.name} is not "
                                         f"reachable from the root")
                                 if not (c.label.is_context_def or c.label.is_context_assum):
-                                    raise Exception(
+                                    file_errors.append(
                                         f"{fname}: ctx {state.context} of a state {state} "
                                         f"has the wrong node classification {c.label}")
 
                         file_tactic_arguments.setdefault(ident, len(outcome.tactic_arguments))
+                        if t := p.tactic:
+                            file_tactic_ident_to_base.setdefault(ident, t.base_text)
                         if file_tactic_arguments[ident] != len(outcome.tactic_arguments):
-                            raise Exception(f"{fname}: Tactic with two different argument lengths detected")
+                            file_errors.append(f"{fname}: Tactic with two different argument lengths detected. : Original: {file_tactic_arguments[ident]} : {file_tactic_ident_to_base[ident]}. New {len(outcome.tactic_arguments)} : {t.text} : {t.base_text}")
                         outcomes += 1
                         if isinstance(d.status, Original):
                             original_outcomes += 1
@@ -210,10 +212,10 @@ def process1(args, fname: Path):
                         original_proofs_faithful += 1
     if freader.representative != len(graph.nodes):
         if not graph.nodes[freader.representative].label.is_definition:
-            raise Exception(f"{fname}: Representative {freader.representative} is not a definition")
+            file_errors.append(f"{fname}: Representative {freader.representative} is not a definition")
     for dep in freader.dependencies:
         if Path(dep) not in data.graphid_by_filename:
-            raise Exception(f"{fname}: Dependency {dep} could not be found")
+            file_errors.append(f"{fname}: Dependency {dep} could not be found")
 
 
     return (fname, nodes_count, edges_count,
@@ -221,7 +223,7 @@ def process1(args, fname: Path):
             file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
             proof_steps, original_proof_steps, original_proof_steps_faithful,
             outcomes, original_outcomes, proofs, original_proofs,
-            original_proofs_faithful, unresolvable)
+            original_proofs_faithful, unresolvable, file_errors, file_disappearing_proof_states)
 
 def entropy(d):
     n = sum(d.values())
@@ -232,9 +234,11 @@ def main2():
         description = 'Run sanity checks on a dataset and print some statistics.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('dir',
+    parser.add_argument('dataset',
                         type=str,
-                        help='the directory of the dataset')
+                        help=('The location of the dataset to check. ' +
+                              'Either a dataset directory, or a SquashFS image, ' +
+                              'which will be automatically mounted.'))
     parser.add_argument('--jobs',
                         type=int,
                         default=None,
@@ -252,8 +256,9 @@ def main2():
     import sys
     sys.setrecursionlimit(10000)
 
-    dataset_path = Path(args.dir).resolve()
+    dataset_path = Path(args.dataset).resolve()
 
+    errors = []
     tactics = Counter()
     original_tactics = Counter()
     tactic_arguments = {}
@@ -272,6 +277,7 @@ def main2():
     original_proofs_total = 0
     original_proofs_faithful_total = 0
     unresolvable_total = 0
+    disappearing_proof_states = 0
 
     with lowlevel_data_reader(dataset_path) as data:
         file_list = data.graph_files
@@ -290,7 +296,7 @@ def main2():
          file_base_tactics_intermtext, file_tactics, file_original_tactics, file_tactic_arguments,
          proof_steps, original_proof_steps, original_proof_steps_faithful,
          outcomes, original_outcomes, proofs, original_proofs,
-         original_proofs_faithful, unresolvable) = res
+         original_proofs_faithful, unresolvable, file_errors, file_disappearing_proof_states) = res
         nodes_total += nodes_count
         edges_total += edges_count
         proof_steps_total += proof_steps
@@ -307,13 +313,19 @@ def main2():
         base_tactics_intermtext.update(file_base_tactics_intermtext)
         tactics += file_tactics
         original_tactics += file_original_tactics
+        disappearing_proof_states += file_disappearing_proof_states
+        errors += file_errors
         for tac, length in file_tactic_arguments.items():
             tactic_arguments.setdefault(tac, length)
             if tactic_arguments[tac] != length:
-                raise Exception(f'{fname}: Tactic with two different argument lengths detected')
+                errors.append(f'{fname}: Tactic with two different argument lengths detected: {tac}')
 
         unresolvable_total += unresolvable
 
+    for error in errors:
+        print(error)
+
+    print(f"Errors encountered {len(errors)}")
     print(f"Nodes total {nodes_total}")
     print(f"Edges total {edges_total}")
     print(f"Tactics total {len(tactics)}")
@@ -333,6 +345,7 @@ def main2():
     print(f"Original proofs total {original_proofs_total}")
     print(f"Faithful original proofs total {original_proofs_faithful_total}")
     print(f"Unresolvable tactic arguments {unresolvable_total}")
+    print(f"Disappearing proof states (spooky action at a distance) {disappearing_proof_states}")
 
     if (args.verbose >= 1):
         print("Tactics base text:")
@@ -341,6 +354,9 @@ def main2():
         print("Tactics intermtext text:")
         for t in base_tactics_intermtext:
             print(t)
+
+    if len(errors) > 0:
+        raise Exception("Errors occurred")
 
 def main():
     # import pstats, cProfile

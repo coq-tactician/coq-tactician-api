@@ -40,14 +40,13 @@ let declare_string_option ~name ~default =
     } in
   optread
 
-let truncate_option = declare_bool_option ~name:"Truncate" ~default:true
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
 let tcp_option = declare_string_option ~name:"Server" ~default:""
 let executable_option = declare_string_option ~name:"Executable" ~default:""
 
 let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
 
-type location = Local | Global
+type location = int
 module Hashable = struct
   type t = location
   let hash _ = XXHasher.with_state @@ fun h -> h
@@ -63,12 +62,14 @@ module GB = GraphBuilder(CICGraphMonad)
 
 exception NoSuchTactic
 exception UnknownLocalArgument
-exception UnknownArgument of int
+exception UnknownArgument of int * int
 exception IllegalArgument
 
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
+module W = Graph_capnp_generator.Writer(Api)
 
-module TacticMap = Int.Map
+open Stdint
+module TacticMap = Map.Make(struct type t = int64 let compare = Stdint.Int64.compare end)
 let find_tactic tacs id =
   match TacticMap.find_opt id tacs with
   | None -> raise NoSuchTactic
@@ -83,34 +84,41 @@ let find_local_argument context_map =
     | None -> raise UnknownLocalArgument
     | Some x -> x
 
+module IntPairMap = Map.Make(struct
+  type t = int * int
+  let compare (a1, b1) (a2, b2) =
+    let c1 = Int.compare a1 a2 in
+    if c1 = 0 then Int.compare b1 b2 else c1
+  end)
+
 let find_global_argument
     CICGraphMonad.{ section_nodes; definition_nodes = { constants; inductives; constructors; projections }; _ } =
   let open Tactic_one_variable in
   let map = Cmap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.ConstRef c)) m)
-      constants Int.Map.empty in
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.ConstRef c)) m)
+      constants IntPairMap.empty in
   let map = Indmap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.IndRef c)) m)
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.IndRef c)) m)
       inductives map in
   let map = Constrmap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.ConstructRef c)) m)
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.ConstructRef c)) m)
       constructors map in
   let map = ProjMap.fold (fun c (_, n) m ->
-      let (_, (_, node)), _ = G.lower n in
+      let (sid, (_, node)), _ = G.lower n in
       (* TODO: At some point we have to deal with this. One possibility is using `Projection.Repr.constant` *)
-      Int.Map.add node (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
+      IntPairMap.add (sid, node) (TRef (GlobRef.ConstRef (Projection.Repr.constant c))) m)
       projections map in
   let map = Id.Map.fold (fun c n m ->
-      let (_, (_, node)), _ = G.lower n in
-      Int.Map.add node (TRef (GlobRef.VarRef c)) m)
+      let (sid, (_, node)), _ = G.lower n in
+      IntPairMap.add (sid, node) (TRef (GlobRef.VarRef c)) m)
       section_nodes map in
-  fun id ->
-    match Int.Map.find_opt id map with
+  fun (sid, nid) ->
+    match IntPairMap.find_opt (sid, nid) map with
     | None ->
-      raise (UnknownArgument id)
+      raise (UnknownArgument (sid, nid))
     | Some x -> x
 
 (* Whenever we write a message to the server, we prevent a timeout from triggering.
@@ -237,6 +245,7 @@ let init_predict_text rc wc =
   let request = Request.init_root () in
   let init = Request.initialize_init request in
   Request.Initialize.log_annotation_set init @@ log_annotation ();
+  ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -245,8 +254,25 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentative cversion =
-  ignore(cversion Api.Reader.current_version);
+type cache_info = { stack_size : int
+                  ; state : CICGraphMonad.state }
+
+let graph_cache =
+  let (empty_state, ()), _ = CICGraphMonad.run_empty (CICGraphMonad.return ())
+      (G.HashMap.create 0) G.builder_nil 0 in
+  Summary.ref ~name:"neural-learner-graph-cache"
+    { stack_size = 0
+    ; state = empty_state }
+
+let init_predict rc wc tacs env { stack_size; state } =
+  let module Request = Api.Builder.PredictionProtocol.Request in
+  let module Response = Api.Reader.PredictionProtocol.Response in
+  let request = Request.init_root () in
+  let init = Request.initialize_init request in
+  Request.Initialize.log_annotation_set init @@ log_annotation ();
+
+  ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
+  Request.Initialize.stack_size_set_int_exn init stack_size;
   let { def_count; node_count; edge_count; defs; nodes; edges }, state =
     let globrefs = Environ.Globals.view Environ.(env.env_globals) in
     (* We are only interested in canonical constants *)
@@ -258,7 +284,7 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
     let minductives = Mindset.elements @@ List.fold_left (fun m c ->
         let c = MutInd.make1 @@ MutInd.canonical c in
         Mindset.add c m) Mindset.empty minductives in
-    let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context @@ Global.env () in
+    let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context env in
     let open Monad_util.WithMonadNotations(CICGraphMonad) in
     let open Monad.Make(CICGraphMonad) in
 
@@ -270,8 +296,8 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraphMonad.run_empty ~include_opaque:false ~def_truncate:(truncate_option ()) updater
-        (G.HashMap.create 100) G.builder_nil Global in
+      CICGraphMonad.run ~include_opaque:false ~state updater
+        (G.HashMap.create 100) G.builder_nil stack_size in
     builder, state in
 
   let tacs = List.fold_left (fun map tac ->
@@ -280,12 +306,13 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
       let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
       let base_tactic = Tactic_one_variable.tactic_strip tac in
       TacticMap.add
-        (Hashtbl.hash_param 255 255 base_tactic) (base_tactic, List.length args) map)
+        (Tactic_hash.tactic_hash env base_tactic) (base_tactic, List.length args) map)
       TacticMap.empty tacs in
-  let tac_arr = ctacs @@ TacticMap.cardinal tacs in
+
+  let tac_arr = Request.Initialize.tactics_init init @@ TacticMap.cardinal tacs in
   List.iteri (fun i (hash, (_tac, params)) ->
       let arri = Capnp.Array.get tac_arr i in
-      Api.Builder.AbstractTactic.ident_set_int_exn arri hash;
+      Api.Builder.AbstractTactic.ident_set arri hash;
       Api.Builder.AbstractTactic.parameters_set_exn arri params)
     (TacticMap.bindings tacs);
 
@@ -293,50 +320,23 @@ let populate_global_context_info tacs env ctacs cgraph cdefinitions crepresentat
     if def then i else def_count + i in
   let node_hash n = snd @@ G.transform_node_type n in
   let node_label n = fst @@ G.transform_node_type n in
-  Graph_capnp_generator.write_graph
+  W.write_graph
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
-    ~node_dep_index:(fun _ -> 0) ~node_local_index
-    ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges cgraph;
-
-  let definitions =
-    let f (_, (_, n)) =
-      let (_, (def, n)), _ = G.lower n in
-      assert def; Stdint.Uint32.of_int n in
-    (List.map f @@ Cmap.bindings state.definition_nodes.constants) @
-    (List.map f @@ Indmap.bindings state.definition_nodes.inductives) @
-    (List.map f @@ Constrmap.bindings state.definition_nodes.constructors) @
-    (List.map f @@ ProjMap.bindings state.definition_nodes.projections) @
-    (List.map (fun (_, n) ->
-         let (_, (def, n)), _ = G.lower n in
-         assert def; Stdint.Uint32.of_int n) @@ Id.Map.bindings state.section_nodes)
-  in
-  ignore(cdefinitions definitions);
+    ~node_dep_index:(fun (stack_id, _) -> stack_size - stack_id) ~node_local_index
+    ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges
+    (Request.Initialize.graph_init init);
 
   let representative = match state.previous with
     | None -> def_count + node_count
     | Some i -> node_local_index @@ fst @@ G.transform_node_type @@ G.lower i in
-  crepresentative(representative);
+  Request.Initialize.representative_set_int_exn init representative;
 
-  state, tacs
-
-let init_predict rc wc tacs env =
-  let module Request = Api.Builder.PredictionProtocol.Request in
-  let module Response = Api.Reader.PredictionProtocol.Response in
-  let request = Request.init_root () in
-  let init = Request.initialize_init request in
-  Request.Initialize.log_annotation_set init @@ log_annotation ();
-  let state, tacs = populate_global_context_info tacs env
-    (Request.Initialize.tactics_init init)
-    (Request.Initialize.graph_init init)
-    (Request.Initialize.definitions_set_list init)
-    (Request.Initialize.representative_set_int_exn init)
-    (Request.Initialize.data_version_set_reader init) in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
     let response = Response.of_message response in
     match Response.get response with
-    | Response.Initialized -> tacs, state
+    | Response.Initialized -> tacs, { stack_size = stack_size + 1; state }
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
 let check_neural_alignment () =
@@ -346,13 +346,8 @@ let check_neural_alignment () =
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
   let request = Request.init_root () in
-  let init = Request.check_alignment_init request in
-  let state, tacs = populate_global_context_info !last_model env
-      (Request.CheckAlignment.tactics_init init)
-      (Request.CheckAlignment.graph_init init)
-      (Request.CheckAlignment.definitions_set_list init)
-      (Request.CheckAlignment.representative_set_int_exn init)
-      (Request.CheckAlignment.data_version_set_reader init) in
+  Request.check_alignment_set request;
+  let tacs, { stack_size; state } = init_predict rc wc !last_model env !graph_cache in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -360,9 +355,12 @@ let check_neural_alignment () =
     match Response.get response with
     | Response.Alignment alignment ->
       let find_global_argument = find_global_argument state in
-      let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs @@ Stdint.Uint64.to_int t) @@
+      let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs t) @@
         Response.Alignment.unaligned_tactics_get_list alignment in
-      let unaligned_defs = List.map (fun d -> find_global_argument @@ Stdint.Uint32.to_int d) @@
+      let unaligned_defs = List.map (fun node ->
+          let sid = stack_size - 1 - Api.Reader.Node.dep_index_get node in
+          let nid = Api.Reader.Node.node_index_get_int_exn node in
+          find_global_argument (sid, nid)) @@
         Response.Alignment.unaligned_definitions_get_list alignment in
       let tacs_msg = if CList.is_empty unaligned_tacs then Pp.mt () else
           Pp.(fnl () ++ str "Unaligned tactics: " ++ fnl () ++
@@ -377,33 +375,35 @@ let check_neural_alignment () =
                   | TRef r -> Libnames.pr_path @@ Nametab.path_of_global r
                   | TOther -> Pp.mt ())
                 unaligned_defs) in
+      let def_count = Id.Map.cardinal state.section_nodes +
+                      Cmap.cardinal state.definition_nodes.constants +
+                      Indmap.cardinal state.definition_nodes.inductives +
+                      Constrmap.cardinal state.definition_nodes.constructors +
+                      ProjMap.cardinal state.definition_nodes.projections in
       Feedback.msg_notice Pp.(
           str "There are " ++ int (List.length unaligned_tacs) ++ str "/" ++
-          int (Array.length @@ Request.CheckAlignment.tactics_get_array init) ++ str " unaligned tactics and " ++
+          int (TacticMap.cardinal tacs) ++ str " unaligned tactics and " ++
           int (List.length unaligned_defs) ++ str "/" ++
-          int (Array.length @@ Request.CheckAlignment.definitions_get_array init) ++ str " unaligned definitions." ++
+          int def_count ++ str " unaligned definitions." ++
           tacs_msg ++ defs_msg
         )
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
+let push_cache () =
+  if textmode_option () then () (* No caching needed for the text model at the moment *) else
+    let rc, wc = get_connection () in
+    drain rc wc;
+    let _, { stack_size; state } = init_predict rc wc !last_model (Global.env ()) !graph_cache in
+    Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size);
+    graph_cache :=
+      { stack_size
+      ; state = CICGraphMonad.{ state with
+                                previous = None
+                              ; external_previous = Option.fold_left (fun ls x -> x::ls) [] state.previous } }
+
 module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
   open TS
-
-  let gen_proof_state env ps =
-    let open GB in
-    let hyps = proof_state_hypotheses ps in
-    let concl = proof_state_goal ps in
-    let hyps = List.map (map_named term_repr) hyps in
-    let concl = term_repr concl in
-    let open CICGraphMonad in
-    let open Monad_util.WithMonadNotations(CICGraphMonad) in
-    let* hyps, (concl, map) = with_named_context env (Id.Map.empty, Cmap.empty) hyps @@
-      let* map = lookup_named_map in
-      let+ concl = gen_constr env (Id.Map.empty, Cmap.empty) concl in
-      concl, map in
-    let+ root = mk_node ProofState ((ContextSubject, concl)::hyps) in
-    root, map
 
   let predict_text rc wc env ps =
     let module Tactic = Api.Reader.Tactic in
@@ -437,7 +437,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
-  let predict rc wc find_global_argument state tacs env ps =
+  let predict rc wc find_global_argument { stack_size; state } tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
@@ -447,43 +447,33 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let module Response = Api.Reader.PredictionProtocol.Response in
     let request = Request.init_root () in
     let predict = Request.predict_init request in
-    let updater = gen_proof_state env ps in
-    let (_, (root, context_map)), { def_count; node_count; edge_count; defs; nodes; edges } =
+    let updater =
+      let open Graph_generator_learner.ConvertStructures(TS) in
+      let (_, evm, _) as ps = mk_proof_state ps in
+      CICGraphMonad.with_evar_map evm @@
+      GB.gen_proof_state env (Names.Id.Map.empty, Names.Cmap.empty) ps in
+    let (_, ps), { def_count; node_count; edge_count; defs; nodes; edges } =
       CICGraphMonad.run ~include_opaque:false ~state updater
-        (G.HashMap.create 100) G.builder_nil Local in
+        (G.HashMap.create 100) G.builder_nil stack_size in
     let node_local_index (_, (def, i)) =
       if def then i else def_count + i in
-    let context_map = Id.Map.map (fun n ->
-        let (p, n), _ = G.lower n in
-        p, node_local_index (p, n)) context_map in
-    let context_range = List.rev @@ List.filter_map (fun hyp ->
-        let id = Context.Named.Declaration.get_id hyp in
-        match Id.Map.find_opt id context_map with
-        | None -> None
-        | Some (_, n) -> Some n
-      ) @@ TS.proof_state_hypotheses ps in
+    let context_map = List.fold_left (fun map { id; node; _ } ->
+        let (p, n), _ = G.lower node in
+        Id.Map.add id (p, node_local_index (p, n)) map) Id.Map.empty ps.context in
     let find_local_argument = find_local_argument context_map in
     let graph = Request.Predict.graph_init predict in
 
-    let node_dep_index (p, _) = match p with
-      | Local -> 0
-      | Global -> 1 in
+    let node_dep_index (stack_id, _) = stack_size - stack_id in
     let node_hash n = snd @@ G.transform_node_type n in
     let node_label n = fst @@ G.transform_node_type n in
-    Graph_capnp_generator.write_graph
+    W.write_graph
       ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
       ~node_dep_index ~node_local_index
       ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph;
     let state = Request.Predict.state_init predict in
-    let capnp_root = ProofState.root_init state in
-    ProofState.Root.dep_index_set_exn capnp_root @@ node_dep_index @@ fst @@ G.lower root;
-    ProofState.Root.node_index_set_int_exn capnp_root @@ node_local_index @@ fst @@ G.lower root;
-    let context_arr = ProofState.context_init state @@ List.length context_range in
-    List.iteri (fun i arg ->
-        let arri = Capnp.Array.get context_arr i in
-        Node.dep_index_set_exn arri @@ node_dep_index (Local, arg);
-        Node.node_index_set_int_exn arri arg
-      ) context_range;
+    W.write_proof_state
+      { node_depindex = (fun n -> node_dep_index (fst @@ G.lower n))
+      ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps;
     match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
@@ -493,7 +483,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         let preds = Capnp.Array.to_list preds in
         let preds = CList.filter_map (fun (i, p) ->
             let tac = Prediction.tactic_get p in
-            let tid = Tactic.ident_get_int_exn tac in
+            let tid = Tactic.ident_get tac in
             let tac, params = find_tactic tacs tid in
             let convert_args args =
               List.mapi (fun j arg ->
@@ -504,23 +494,22 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
                   let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
                   match dep_index with
                   | 0 -> find_local_argument node_index
-                  | 1 ->
+                  | _ ->
                     (try
-                       find_global_argument node_index
-                     with UnknownArgument id ->
+                       find_global_argument (stack_size - dep_index, node_index)
+                     with UnknownArgument (sid, nid) ->
                        CErrors.anomaly
-                         Pp.(str "Unknown global argument " ++ int id ++ str " at index " ++ int j ++
-                             str " for prediction " ++ int i ++ str " which is tactic " ++
+                         Pp.(str "Unknown global argument (" ++ int sid ++ str ", " ++ int nid ++ str ") at index "
+                             ++ int j ++ str " for prediction " ++ int i ++ str " which is tactic " ++
                              Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                             str " with hash " ++ int tid))
-                  | _ -> raise IllegalArgument
+                             str " with hash " ++ str (Stdint.Int64.to_string tid)))
                 ) args in
             let args = convert_args @@ Prediction.arguments_get_list p in
             if params <> List.length args then begin
               CErrors.anomaly
                 Pp.(str "Mismatched argument length for prediction " ++ int i ++ str " which is tactic " ++
                     Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                    str " with hash " ++ int tid ++
+                    str " with hash " ++ str (Stdint.Int64.to_string tid) ++
                     str ". Number of arguments expected: " ++ int params ++
                     str ". Number of argument given: " ++ int (List.length args))
             end;
@@ -549,19 +538,18 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       { db with tactics }
   let predict { tactics; write_context; read_context } =
     drain read_context write_context;
+    let env = Global.env () in
     if not @@ textmode_option () then
-      let env = Global.env () in
-      let tacs, state = init_predict read_context write_context tactics env in
-      let find_global_argument = find_global_argument state in
+      let tacs, cache = init_predict read_context write_context tactics env !graph_cache in
+      let find_global_argument = find_global_argument cache.state in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict read_context write_context find_global_argument state tacs env
+          let preds = predict read_context write_context find_global_argument cache tacs env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
     else
-      let env = Global.env () in
-      init_predict_text read_context write_context;
+      let () = init_predict_text read_context write_context in
       fun f ->
         if f = [] then IStream.empty else
           let preds = predict_text read_context write_context env

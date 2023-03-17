@@ -84,7 +84,7 @@ async def search_dfs(result, tactics, limit) -> Optional[List[capnpLocalTactic]]
     elif result.which() == 'newState':
         logger.info('considering %s', result.which())
         root: int = result.newState.state.root
-        context: List[int] = result.newState.state.context
+        context: List[int] = [n.nodeIndex for n in result.newState.state.context]
         logger.info('root is %d, context is %s', root, repr(context))
 
         actions = []
@@ -331,6 +331,7 @@ async def a_main(args):
             stdin=coq_sock,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE)
+        coq_sock.close()
 
         reader, writer = await asyncio.open_connection(sock=py_sock)
         await call_back(reader, writer)
