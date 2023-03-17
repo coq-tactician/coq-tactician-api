@@ -1441,7 +1441,7 @@ def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | N
             response.write_packed(record)
         msg = next_disabled_sigint()
 
-def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO) -> (
+def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = True) -> (
         Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
                   capnp.lib.capnp._DynamicStructBuilder, None]):
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
@@ -1462,14 +1462,17 @@ def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO) -> (
         message_reader.schema = graph_api_capnp.PredictionProtocol.Response.schema
         recorded_response = next(message_reader)
         message_reader.schema = graph_api_capnp.PredictionProtocol.Request.schema
-        # if response.to_dict() == recorded_response.to_dict():
-        #     print(f'The servers response to a {cython_msg.which.name} message was equal to the recorded response')
-        # else:
-        #     raise ValueError(
-        #         f"The servers response to a {cython_msg.which.name} message was not equal to the recorded response.\n"
-        #         f"Recorded response: {recorded_response}\n"
-        #         f"Servers response: {response}\n"
-        #     )
+        if check:
+            if response.to_dict() == recorded_response.to_dict():
+                print(f'The servers response to a {cython_msg.which.name} message was equal to the '
+                      f'recorded response')
+            else:
+                raise ValueError(
+                    f"The servers response to a {cython_msg.which.name} message was not equal to the " +
+                    f"recorded response.\n"
+                    f"Recorded response: {recorded_response}\n"
+                    f"Servers response: {response}\n"
+                )
 
 
 def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
@@ -1543,7 +1546,7 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     pg = prediction_generator(lgenerator, defs)
     return GlobalContextMessage(defs, [], None, pg)
 
-def capnp_message_generator_from_file(message_file: BinaryIO) -> GlobalContextMessage:
+def capnp_message_generator_from_file(message_file: BinaryIO, check = True) -> GlobalContextMessage:
     """A generator that facilitates communication between a prediction server and a Coq process.
 
     Given a `socket`, this function creates a `GlobalContextMessage` `context`. This message contains an
@@ -1562,7 +1565,7 @@ def capnp_message_generator_from_file(message_file: BinaryIO) -> GlobalContextMe
     When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
     descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
     """
-    lgenerator = capnp_message_generator_from_file_lowlevel(message_file)
+    lgenerator = capnp_message_generator_from_file_lowlevel(message_file, check)
     defs = OnlineDefinitionsReader.init_empty()
     pg = prediction_generator(lgenerator, defs)
     return GlobalContextMessage(defs, [], None, pg)

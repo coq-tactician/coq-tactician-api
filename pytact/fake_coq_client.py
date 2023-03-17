@@ -25,6 +25,10 @@ def main():
                         type=str,
                         help='A file that contains a previously recorded communication sequence between Coq ' +
                              'and a prediction server.')
+    parser.add_argument('--check',
+                        action=argparse.BooleanOptionalAction,
+                        default = True,
+                        help='Start the specified prediction server and connect to it through stdin.')
     connect_group = parser.add_mutually_exclusive_group(required=True)
     connect_group.add_argument('--tcp',
                         dest='tcp_location',
@@ -39,7 +43,7 @@ def main():
     cmd_args = parser.parse_args()
 
     with open(cmd_args.data, 'rb') as message_file:
-        messages_generator = capnp_message_generator_from_file_lowlevel(message_file)
+        messages_generator = capnp_message_generator_from_file_lowlevel(message_file, check=cmd_args.check)
         if cmd_args.tcp_location is not None:
             addr, port = cmd_args.tcp_location.split(':')
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
