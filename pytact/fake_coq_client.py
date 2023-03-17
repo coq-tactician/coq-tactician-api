@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--check',
                         action=argparse.BooleanOptionalAction,
                         default = True,
-                        help='Start the specified prediction server and connect to it through stdin.')
+                        help='Wether or not to compare the response messages of the server to recorded messages.')
     connect_group = parser.add_mutually_exclusive_group(required=True)
     connect_group.add_argument('--tcp',
                         dest='tcp_location',
