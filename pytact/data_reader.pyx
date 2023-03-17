@@ -1446,11 +1446,16 @@ def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = T
                   capnp.lib.capnp._DynamicStructBuilder, None]):
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
+    Lowlevel variant of `capnp_message_generator_from_file`.
+
     Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
     `capnp_message_generator(s, record=message_file)`. The resulting generator acts just like the generator
     created by `capnp_message_generator` except that it is not connected to the socket but just replays the
     pre-recorded messages. Every responsemessage received by this generator through `send` will be compared against
     the recorded response and if they differ an error is thrown.
+
+    Arguments:
+    - `check` governs wether or not the response messages will be compared against recorded messages
     """
     message_reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
         message_file, traversal_limit_in_words=2**64-1)
@@ -1547,23 +1552,18 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     return GlobalContextMessage(defs, [], None, pg)
 
 def capnp_message_generator_from_file(message_file: BinaryIO, check = True) -> GlobalContextMessage:
-    """A generator that facilitates communication between a prediction server and a Coq process.
+    """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
-    Given a `socket`, this function creates a `GlobalContextMessage` `context`. This message contains an
-    initially empty list of available tactics and definitions in the global context. Through
-    `context.prediction_requests` one can access a generator that yields prediction requests and expects
-    predictions to be sent in response. The possible messages are as follows:
-    - `GlobalContextMessage`: An additional, nested global context message that adds in additional tactics
-       and definitions. The prediction requests of this nested context need to be exhausted before continuing
-       with messages from the current context.
-    - `CheckAlignmentMessage`: A request to check which of Coq's current tactics and definitions the
-      prediction server currently "knows about". The generator expects a `CheckAlignmentResponse` to be
-      sent in response.
-    - `ProofState`: A request to make tactic predictions for a given proof state. Either a
-      `TacticPredictionsGraph` or a `TacticPredictionsText` message is expected in return.
+    Highlevel variant of `capnp_message_generator_from_file_lowlevel`.
 
-    When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
-    descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
+    Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
+    `capnp_message_generator(s, record=message_file)`. The resulting generator acts just like the generator
+    created by `capnp_message_generator` except that it is not connected to the socket but just replays the
+    pre-recorded messages. Every responsemessage received by this generator through `send` will be compared against
+    the recorded response and if they differ an error is thrown.
+
+    Arguments:
+    - `check` governs wether or not the response messages will be compared against recorded messages
     """
     lgenerator = capnp_message_generator_from_file_lowlevel(message_file, check)
     defs = OnlineDefinitionsReader.init_empty()
