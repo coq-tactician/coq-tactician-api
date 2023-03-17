@@ -84,7 +84,7 @@ async def search_dfs(result, tactics, limit) -> Optional[List[capnpLocalTactic]]
     elif result.which() == 'newState':
         logger.info('considering %s', result.which())
         root: int = result.newState.state.root
-        context: List[int] = result.newState.state.context
+        context: List[int] = [n.nodeIndex for n in result.newState.state.context]
         logger.info('root is %d, context is %s', root, repr(context))
 
         actions = []
