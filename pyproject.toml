@@ -17,7 +17,7 @@ authors = [
     {name = "Vasily Pestun", email = "vasily.pestun@gmail.com"},
     {name = "Miroslav Olšák", email = "mirek@olsak.net"},
 ]
-readme = "README.md"
+readme = "pytact/README.md"
 requires-python = ">=3.10"
 license = {text = "MIT License"}
 classifiers = [
