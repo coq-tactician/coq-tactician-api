@@ -41,6 +41,7 @@ let declare_string_option ~name ~default =
   optread
 
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
+let debug_option = declare_bool_option ~name:"Debug" ~default:false
 let tcp_option = declare_string_option ~name:"Server" ~default:""
 let executable_option = declare_string_option ~name:"Executable" ~default:""
 
@@ -163,10 +164,12 @@ let connect_socket my_socket =
   Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
 
 let connect_stdin () =
-  Feedback.msg_debug Pp.(str "starting proving server with connection through their stdin");
+  if debug_option () then
+    Feedback.msg_debug Pp.(str "starting proving server with connection through their stdin");
   let my_socket, other_socket = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   let mode = if textmode_option () then "text" else "graph" in
-  Feedback.msg_debug Pp.(str "using textmode option" ++ str mode);
+  if debug_option () then
+    Feedback.msg_debug Pp.(str "using textmode option" ++ str mode);
   let pid =
     if CString.is_empty @@ executable_option () then
       Unix.create_process
@@ -194,7 +197,8 @@ let pp_addr Unix.{ ai_addr; ai_canonname; _ } =
   str "(canonical: " ++ str ai_canonname ++ str ")"
 
 let connect_tcpip host port =
-  Feedback.msg_debug Pp.(str "connecting to proving server on" ++ ws 1 ++ str host ++ str ":" ++ str port);
+  if debug_option () then
+    Feedback.msg_debug Pp.(str "connecting to proving server on" ++ ws 1 ++ str host ++ str ":" ++ str port);
   let addrs = Unix.(getaddrinfo host port [AI_SOCKTYPE SOCK_STREAM; AI_CANONNAME]) in
   if addrs = [] then
     CErrors.user_err Pp.(str "Could not resolve address" ++ ws 1 ++ str host ++ str ":" ++ str port);
@@ -204,9 +208,9 @@ let connect_tcpip host port =
     | addr::addrs ->
       let my_socket =  Unix.(socket addr.ai_family addr.ai_socktype addr.ai_protocol) in
       (try
-         Feedback.msg_debug Pp.(str "Attempting to connect to" ++ ws 1 ++ pp_addr addr);
+         if debug_option () then Feedback.msg_debug Pp.(str "Attempting to connect to" ++ ws 1 ++ pp_addr addr);
          Unix.(connect my_socket addr.ai_addr);
-         Feedback.msg_debug Pp.(str "connected to python server");
+         if debug_option () then Feedback.msg_debug Pp.(str "connected to server");
          my_socket
        with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
   let socket = connect addrs in
@@ -216,21 +220,6 @@ let connect_tcpip host port =
       Unix.close socket;
     );
   connection
-
-let get_connection =
-  let connection = ref None in
-  fun () ->
-    match !connection with
-    | None ->
-      let c =
-        if CString.is_empty @@ tcp_option () then
-          connect_stdin ()
-        else
-          let addr = Str.split (Str.regexp ":") (tcp_option()) in
-          connect_tcpip (List.nth addr 0) (List.nth addr 1) in
-      connection := Some c;
-      c
-    | Some c -> c
 
 let log_annotation () =
   let doc = Stm.get_doc 0 in
@@ -254,17 +243,22 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
-type cache_info = { stack_size : int
-                  ; state : CICGraphMonad.state }
+type context_state =
+  { request : Api.Builder.PredictionProtocol.Request.t
+  ; state : CICGraphMonad.state
+  ; id : int }
+type context_stack =
+  { stack : context_state list
+  ; stack_size : int }
 
-let graph_cache =
-  let (empty_state, ()), _ = CICGraphMonad.run_empty (CICGraphMonad.return ())
-      (G.HashMap.create 0) G.builder_nil 0 in
-  Summary.ref ~name:"neural-learner-graph-cache"
-    { stack_size = 0
-    ; state = empty_state }
+let update_context_stack id tacs env { stack_size; stack } =
+  let state = match stack with
+    | [] ->
+      let (empty_state, ()), _ = CICGraphMonad.run_empty (CICGraphMonad.return ())
+          (G.HashMap.create 0) G.builder_nil 0 in
+      empty_state
+    | { state; _ }::_ -> state in
 
-let init_predict rc wc tacs env { stack_size; state } =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
@@ -330,24 +324,89 @@ let init_predict rc wc tacs env { stack_size; state } =
     | None -> def_count + node_count
     | Some i -> node_local_index @@ fst @@ G.transform_node_type @@ G.lower i in
   Request.Initialize.representative_set_int_exn init representative;
+  let state = { state with
+                previous = None
+              ; external_previous = Option.fold_left (fun ls x -> x::ls) [] state.previous } in
+  tacs, state, { stack_size = stack_size + 1; stack = { request; state; id }::stack }
 
-  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
-  | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
-  | Some response ->
-    let response = Response.of_message response in
-    match Response.get response with
-    | Response.Initialized -> tacs, { stack_size = stack_size + 1; state }
-    | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
+let sync_context_stack rc wc =
+  let module Request = Api.Builder.PredictionProtocol.Request in
+  let module Response = Api.Reader.PredictionProtocol.Response in
+  let id = ref 0 in
+  let context_stack = Summary.ref ~name:"neural-learner-graph-cache"
+      { stack = []; stack_size = 0 } in
+  let remote_state = ref [] in
+  let remote_stack_size = ref 0 in
+  fun tacs env ->
+    if debug_option () then
+      Feedback.msg_notice Pp.(
+          str "old remote stack : " ++ prlist_with_sep (fun () -> str "-") int !remote_state ++ fnl () ++
+          str "old local stack : " ++ prlist_with_sep (fun () -> str "-")
+            (fun { id; _ } -> int id) !context_stack.stack);
+    let tacs, state, ({ stack_size; stack } as cache) = update_context_stack !id tacs env !context_stack in
+    context_stack := cache;
+    if debug_option () then
+      Feedback.msg_notice Pp.(str "new local stack : " ++ prlist_with_sep (fun () -> str "-")
+                                (fun { id; _ } -> int id) !context_stack.stack);
+    id := !id + 1;
+    let stack_diff = !remote_stack_size - stack_size in
+    let curtailed_remote_state = if stack_diff > 0 then
+        CList.skipn stack_diff !remote_state
+      else
+        CList.addn (abs stack_diff) (-1) !remote_state in
+    let rec loop = function
+      | [], [] -> []
+      | rid::rrem, { id; request; _ }::lrem ->
+        if rid = id then rid::rrem else
+          let rrem = loop (rrem, lrem) in
+          if debug_option () then
+            Feedback.msg_notice Pp.(str "writing message id " ++ int id);
+          (match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
+          | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
+          | Some response ->
+            let response = Response.of_message response in
+            match Response.get response with
+            | Response.Initialized -> ()
+            | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2"));
+          id::rrem
+      | _, _ -> assert false in
+    remote_state := loop (curtailed_remote_state, stack);
+    remote_stack_size := stack_size;
+    if debug_option () then
+      Feedback.msg_notice Pp.(str "new remote stack : " ++ prlist_with_sep (fun () -> str "-") int !remote_state);
+    tacs, state, stack_size
+
+type connection =
+  { rc : Unix.file_descr Capnp_unix.IO.ReadContext.t
+  ; wc : Unix.file_descr Capnp_unix.IO.WriteContext.t
+  ; sync_context_stack : glob_tactic_expr list -> Environ.env ->
+      (glob_tactic_expr * location) TacticMap.t * CICGraphMonad.state * int }
+
+let get_connection =
+  let connection = ref None in
+  fun () ->
+    match !connection with
+    | None ->
+      let rc, wc =
+        if CString.is_empty @@ tcp_option () then
+          connect_stdin ()
+        else
+          let addr = Str.split (Str.regexp ":") (tcp_option()) in
+          connect_tcpip (List.nth addr 0) (List.nth addr 1) in
+      let conn = { rc; wc; sync_context_stack = sync_context_stack rc wc } in
+      connection := Some conn;
+      conn
+    | Some conn -> conn
 
 let check_neural_alignment () =
-  let rc, wc = get_connection () in
+  let { rc; wc; sync_context_stack } = get_connection () in
   drain rc wc;
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
+  let tacs, state, stack_size = sync_context_stack !last_model env in
   let request = Request.init_root () in
   Request.check_alignment_set request;
-  let tacs, { stack_size; state } = init_predict rc wc !last_model env !graph_cache in
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
@@ -391,15 +450,11 @@ let check_neural_alignment () =
 
 let push_cache () =
   if textmode_option () then () (* No caching needed for the text model at the moment *) else
-    let rc, wc = get_connection () in
+    let { rc; wc; sync_context_stack } = get_connection () in
     drain rc wc;
-    let _, { stack_size; state } = init_predict rc wc !last_model (Global.env ()) !graph_cache in
-    Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size);
-    graph_cache :=
-      { stack_size
-      ; state = CICGraphMonad.{ state with
-                                previous = None
-                              ; external_previous = Option.fold_left (fun ls x -> x::ls) [] state.previous } }
+    let _, _, stack_size = sync_context_stack !last_model (Global.env ()) in
+    if debug_option () then
+      Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size)
 
 module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
@@ -437,7 +492,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
-  let predict rc wc find_global_argument { stack_size; state } tacs env ps =
+  let predict rc wc find_global_argument stack_size state tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
@@ -521,12 +576,11 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
 
   type model =
     { tactics : glob_tactic_expr list
-    ; read_context : Unix.file_descr Capnp_unix.IO.ReadContext.t
-    ; write_context : Unix.file_descr Capnp_unix.IO.WriteContext.t }
+    ; connection : connection }
 
   let empty () =
-    let read_context, write_context = get_connection () in
-    { tactics = []; read_context; write_context }
+    let connection = get_connection () in
+    { tactics = []; connection }
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with
@@ -536,23 +590,23 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let tactics = tac::tactics in
       last_model := tactics;
       { db with tactics }
-  let predict { tactics; write_context; read_context } =
-    drain read_context write_context;
+  let predict { tactics; connection = { rc; wc; sync_context_stack } } =
+    drain rc wc;
     let env = Global.env () in
     if not @@ textmode_option () then
-      let tacs, cache = init_predict read_context write_context tactics env !graph_cache in
-      let find_global_argument = find_global_argument cache.state in
+      let tacs, state, stack_size = sync_context_stack tactics env in
+      let find_global_argument = find_global_argument state in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict read_context write_context find_global_argument cache tacs env
+          let preds = predict rc wc find_global_argument stack_size state tacs env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
     else
-      let () = init_predict_text read_context write_context in
+      let () = init_predict_text rc wc in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict_text read_context write_context env
+          let preds = predict_text rc wc env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
