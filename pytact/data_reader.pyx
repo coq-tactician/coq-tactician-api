@@ -1396,7 +1396,7 @@ def convert_predictions(preds, stack_size):
     else:
         raise Exception("Incorrect predictions received")
 
-def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | None = None) -> (
+def capnp_message_generator_lowlevel(socket: socket.socket) -> (
         Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
                   capnp.lib.capnp._DynamicStructBuilder, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
@@ -1430,15 +1430,10 @@ def capnp_message_generator_lowlevel(socket: socket.socket, record: BinaryIO | N
             return next(reader, None)
     msg = next_disabled_sigint()
     while msg is not None:
-        if record is not None:
-            msg.as_builder().write_packed(record)
         cython_msg = PredictionProtocol_Request_Reader(msg)
         response = yield cython_msg
-        yield
         response.write_packed(socket)
-        if record is not None:
-            response.clear_write_flag()
-            response.write_packed(record)
+        yield
         msg = next_disabled_sigint()
 
 def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = True) -> (
@@ -1462,7 +1457,6 @@ def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = T
     for request in message_reader:
         cython_msg = PredictionProtocol_Request_Reader(request)
         response = yield cython_msg
-        yield
         # A bit of a hack, we temporarily change the schema of the reader to `Response`
         message_reader.schema = graph_api_capnp.PredictionProtocol.Response.schema
         recorded_response = next(message_reader)
@@ -1478,7 +1472,21 @@ def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = T
                     f"Recorded response: {recorded_response}\n"
                     f"Servers response: {response}\n"
                 )
+        yield
 
+def record_lowlevel_generator(
+        record_file: BinaryIO,
+        gen: Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                       capnp.lib.capnp._DynamicStructBuilder, None]) -> (
+                           Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                                     capnp.lib.capnp._DynamicStructBuilder, None]):
+    for msg in gen:
+        msg.dynamic.as_builder().write_packed(record_file)
+        response = yield msg
+        gen.send(response)
+        response.clear_write_flag()
+        response.write_packed(record_file)
+        yield
 
 def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
     msg = next(lgenerator, None)
@@ -1546,12 +1554,16 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
     descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
     """
-    lgenerator = capnp_message_generator_lowlevel(socket, record)
+    lgenerator = capnp_message_generator_lowlevel(socket)
+    if record is not None:
+        lgenerator = record_lowlevel_generator(record, lgenerator)
     defs = OnlineDefinitionsReader.init_empty()
     pg = prediction_generator(lgenerator, defs)
     return GlobalContextMessage(defs, [], None, pg)
 
-def capnp_message_generator_from_file(message_file: BinaryIO, check = True) -> GlobalContextMessage:
+def capnp_message_generator_from_file(message_file: BinaryIO,
+                                      check = True,
+                                      record: BinaryIO | None = None) -> GlobalContextMessage:
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
     Highlevel variant of `capnp_message_generator_from_file_lowlevel`.
@@ -1566,6 +1578,8 @@ def capnp_message_generator_from_file(message_file: BinaryIO, check = True) -> G
     - `check` governs wether or not the response messages will be compared against recorded messages
     """
     lgenerator = capnp_message_generator_from_file_lowlevel(message_file, check)
+    if record is not None:
+        lgenerator = record_lowlevel_generator(record, lgenerator)
     defs = OnlineDefinitionsReader.init_empty()
     pg = prediction_generator(lgenerator, defs)
     return GlobalContextMessage(defs, [], None, pg)

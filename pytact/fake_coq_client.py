@@ -1,10 +1,11 @@
+import contextlib
 import socket
 import argparse
 import signal
 from subprocess import Popen
 import capnp
 import pytact.graph_api_capnp as graph_api_capnp
-from pytact.data_reader import capnp_message_generator_from_file_lowlevel
+from pytact.data_reader import capnp_message_generator_from_file_lowlevel, record_lowlevel_generator
 
 def run_fake_client(server_socket, messages_generator):
     socket_reader = graph_api_capnp.PredictionProtocol.Response.read_multiple_packed(
@@ -12,9 +13,9 @@ def run_fake_client(server_socket, messages_generator):
     for msg in messages_generator:
         msg.dynamic.as_builder().write_packed(server_socket)
         prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-        response = next(socket_reader, None)
+        response = next(socket_reader)
         signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
-        messages_generator.send(response)
+        messages_generator.send(response.as_builder())
 
 def main():
     parser = argparse.ArgumentParser(
@@ -29,6 +30,12 @@ def main():
                         action=argparse.BooleanOptionalAction,
                         default = True,
                         help='Wether or not to compare the response messages of the server to recorded messages.')
+    parser.add_argument('--record',
+                        dest="record_file",
+                        type = str,
+                        default = None,
+                        help='Re-record the interaction with the server to a new file (useful when you want to ' +
+                    'update the trace with a new response behavior of a server)')
     connect_group = parser.add_mutually_exclusive_group(required=True)
     connect_group.add_argument('--tcp',
                         dest='tcp_location',
@@ -44,18 +51,25 @@ def main():
 
     with open(cmd_args.data, 'rb') as message_file:
         messages_generator = capnp_message_generator_from_file_lowlevel(message_file, check=cmd_args.check)
-        if cmd_args.tcp_location is not None:
-            addr, port = cmd_args.tcp_location.split(':')
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-                server_socket.connect((addr, int(port)))
-                run_fake_client(server_socket, messages_generator)
+        if cmd_args.record_file is not None:
+            record_context = open(cmd_args.record_file, 'wb')
         else:
-            our_sock, their_sock = socket.socketpair()
-            process = Popen(cmd_args.executable, shell=True, stdin=their_sock)
-            their_sock.close()
-            run_fake_client(our_sock, messages_generator)
-            our_sock.close()
-            process.communicate()
+            record_context = contextlib.nullcontext()
+        with record_context as record_file:
+            if record_file is not None:
+                messages_generator = record_lowlevel_generator(record_file, messages_generator)
+            if cmd_args.tcp_location is not None:
+                addr, port = cmd_args.tcp_location.split(':')
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+                    server_socket.connect((addr, int(port)))
+                    run_fake_client(server_socket, messages_generator)
+            else:
+                our_sock, their_sock = socket.socketpair()
+                process = Popen(cmd_args.executable, shell=True, stdin=their_sock)
+                their_sock.close()
+                run_fake_client(our_sock, messages_generator)
+                our_sock.close()
+                process.communicate()
 
 if __name__ == '__main__':
     main()
