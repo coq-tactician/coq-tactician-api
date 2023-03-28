@@ -1404,9 +1404,6 @@ def capnp_message_generator_lowlevel(socket: socket.socket) -> (
     Given a `socket`, this function creates a generator that yields messages of type
     `pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader` after which a
     `capnp.lib.capnp._DynamicStructBuilder` message needs to be `send` back.
-
-    When `record` is passed a file descriptor, all received and sent messages will be dumped into that file
-    descriptor. These messages can then be replayed later using `capnp_message_generator_from_file`.
     """
     reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
         socket, traversal_limit_in_words=2**64-1)
@@ -1480,6 +1477,11 @@ def record_lowlevel_generator(
                        capnp.lib.capnp._DynamicStructBuilder, None]) -> (
                            Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
                                      capnp.lib.capnp._DynamicStructBuilder, None]):
+    """Record a trace of the full interaction of a lowlevel generator to a file
+
+    Wrap a lowlevel generator (such as from `capnp_message_generator_lowlevel`) and dump all exchanged messages
+    to the given file. The file can later be replayed with `capnp_message_generator_from_file_lowlevel`.
+    """
     for msg in gen:
         msg.dynamic.as_builder().write_packed(record_file)
         response = yield msg
