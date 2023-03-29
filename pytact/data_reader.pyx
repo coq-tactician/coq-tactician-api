@@ -1433,7 +1433,9 @@ def capnp_message_generator_lowlevel(socket: socket.socket) -> (
         yield
         msg = next_disabled_sigint()
 
-def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = True) -> (
+def capnp_message_generator_from_file_lowlevel(
+        message_file: BinaryIO,
+        check : Callable[[Any, Any, Any], None] | None = None) -> (
         Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
                   capnp.lib.capnp._DynamicStructBuilder, None]):
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
@@ -1447,7 +1449,9 @@ def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = T
     the recorded response and if they differ an error is thrown.
 
     Arguments:
-    - `check` governs wether or not the response messages will be compared against recorded messages
+    - `check` is an optional callable that can be used to compare the response of the server to the recorded
+      response. It accepts three arguments: The recorded message that was sent by Coq, the response of the server
+      and the recorded response.
     """
     message_reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
         message_file, traversal_limit_in_words=2**64-1)
@@ -1458,17 +1462,8 @@ def capnp_message_generator_from_file_lowlevel(message_file: BinaryIO, check = T
         message_reader.schema = graph_api_capnp.PredictionProtocol.Response.schema
         recorded_response = next(message_reader)
         message_reader.schema = graph_api_capnp.PredictionProtocol.Request.schema
-        if check:
-            if response.to_dict() == recorded_response.to_dict():
-                print(f'The servers response to a {cython_msg.which.name} message was equal to the '
-                      f'recorded response')
-            else:
-                raise ValueError(
-                    f"The servers response to a {cython_msg.which.name} message was not equal to the " +
-                    f"recorded response.\n"
-                    f"Recorded response: {recorded_response}\n"
-                    f"Servers response: {response}\n"
-                )
+        if check is not None:
+            check(cython_msg, response, recorded_response)
         yield
 
 def record_lowlevel_generator(
@@ -1564,7 +1559,7 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     return GlobalContextMessage(defs, [], None, pg)
 
 def capnp_message_generator_from_file(message_file: BinaryIO,
-                                      check = True,
+                                      check : Callable[[Any, Any, Any], None] | None = None,
                                       record: BinaryIO | None = None) -> GlobalContextMessage:
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
@@ -1577,7 +1572,10 @@ def capnp_message_generator_from_file(message_file: BinaryIO,
     the recorded response and if they differ an error is thrown.
 
     Arguments:
-    - `check` governs wether or not the response messages will be compared against recorded messages
+    - `check` is an optional callable that can be used to compare the response of the server to the recorded
+      response. It accepts three arguments: The recorded message that was sent by Coq, the response of the server
+      and the recorded response.
+    - `record` is an optional file that re-records the interaction with the current server
     """
     lgenerator = capnp_message_generator_from_file_lowlevel(message_file, check)
     if record is not None:

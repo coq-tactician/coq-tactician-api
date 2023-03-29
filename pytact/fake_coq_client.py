@@ -17,6 +17,18 @@ def run_fake_client(server_socket, messages_generator):
         signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
         messages_generator.send(response.as_builder())
 
+def compare(request, response, recorded_response):
+    if not response.to_dict() == recorded_response.to_dict():
+        print(f'The servers response to a {request.which.name} message was equal to the '
+              f'recorded response')
+    else:
+        raise ValueError(
+            f"The servers response to a {request.which.name} message was not equal to the " +
+            f"recorded response.\n"
+            f"Recorded response: {recorded_response}\n"
+            f"Servers response: {response}\n"
+        )
+
 def main():
     parser = argparse.ArgumentParser(
         description = 'A fake Coq client that connects to a prediction server and feeds it a stream of previously ' +
@@ -50,7 +62,9 @@ def main():
     cmd_args = parser.parse_args()
 
     with open(cmd_args.data, 'rb') as message_file:
-        messages_generator = capnp_message_generator_from_file_lowlevel(message_file, check=cmd_args.check)
+        messages_generator = capnp_message_generator_from_file_lowlevel(
+            message_file,
+            check= compare if cmd_args.check else None)
         if cmd_args.record_file is not None:
             record_context = open(cmd_args.record_file, 'wb')
         else:
