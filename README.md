@@ -112,6 +112,9 @@ From Tactician Require Import Ltac1.
 ```
 The following settings govern the data that Coq will send to the server:
 - `Set Tactician Neural Textmode` determines wether Coq is communicating with a graph-based server or a text-based server (graph-based by default).
+- `Set Tactician Neural Metadata` adds text-based metadata to when communicating in graph-mode, such as
+  hypothesis names, textual representation of proof states and textual representations of definition.
+  This will slow down the communication protocol, and should only be enabled for debugging, or when otherwise needed.
 To let Coq take care of starting and stopping the server, use the command
 ```
 Set Tactician Neural Executable "external-server-executable --argument1 --argument2".

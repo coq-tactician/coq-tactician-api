@@ -41,6 +41,7 @@ let declare_string_option ~name ~default =
   optread
 
 let textmode_option = declare_bool_option ~name:"Textmode" ~default:false
+let include_metadata_option = declare_bool_option ~name:"Metadata" ~default:false
 let debug_option = declare_bool_option ~name:"Debug" ~default:false
 let tcp_option = declare_string_option ~name:"Server" ~default:""
 let executable_option = declare_string_option ~name:"Executable" ~default:""
@@ -290,7 +291,7 @@ let update_context_stack id tacs env { stack_size; stack } =
       let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
       List.map (gen_section_var env env_extra) section_vars in
     let (state, _), builder =
-      CICGraphMonad.run ~include_opaque:false ~state updater
+      CICGraphMonad.run ~include_metadata:(include_metadata_option ()) ~include_opaque:false ~state updater
         (G.HashMap.create 100) G.builder_nil stack_size in
     builder, state in
 
@@ -318,6 +319,7 @@ let update_context_stack id tacs env { stack_size; stack } =
     ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
     ~node_dep_index:(fun (stack_id, _) -> stack_size - stack_id) ~node_local_index
     ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges
+    ~include_metadata:(include_metadata_option ())
     (Request.Initialize.graph_init init);
 
   let representative = match state.previous with
@@ -508,7 +510,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       CICGraphMonad.with_evar_map evm @@
       GB.gen_proof_state env (Names.Id.Map.empty, Names.Cmap.empty) ps in
     let (_, ps), { def_count; node_count; edge_count; defs; nodes; edges } =
-      CICGraphMonad.run ~include_opaque:false ~state updater
+      CICGraphMonad.run ~include_metadata:(include_metadata_option ()) ~include_opaque:false ~state updater
         (G.HashMap.create 100) G.builder_nil stack_size in
     let node_local_index (_, (def, i)) =
       if def then i else def_count + i in
@@ -524,11 +526,13 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     W.write_graph
       ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
       ~node_dep_index ~node_local_index
-      ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph;
+      ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph
+      ~include_metadata:(include_metadata_option ());
     let state = Request.Predict.state_init predict in
     W.write_proof_state
       { node_depindex = (fun n -> node_dep_index (fst @@ G.lower n))
-      ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps;
+      ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps
+      ~include_metadata:(include_metadata_option ());
     match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
