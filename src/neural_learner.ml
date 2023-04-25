@@ -316,17 +316,19 @@ let sync_context_stack rc wc =
       { stack = []; stack_size = 0 } in
   let remote_state = ref [] in
   let remote_stack_size = ref 0 in
-  fun tacs env ->
+  fun ?(keep_cache=true) tacs env ->
     if debug_option () then
       Feedback.msg_notice Pp.(
           str "old remote stack : " ++ prlist_with_sep (fun () -> str "-") int !remote_state ++ fnl () ++
           str "old local stack : " ++ prlist_with_sep (fun () -> str "-")
             (fun { id; _ } -> int id) !context_stack.stack);
     let tacs, state, ({ stack_size; stack } as cache) = update_context_stack !id tacs env !context_stack in
-    context_stack := cache;
+    if keep_cache then
+      context_stack := cache;
     if debug_option () then
       Feedback.msg_notice Pp.(str "new local stack : " ++ prlist_with_sep (fun () -> str "-")
-                                (fun { id; _ } -> int id) !context_stack.stack);
+                                (fun { id; _ } -> int id) cache.stack ++
+                              if keep_cache then str " (cached)" else str " (not cached)");
     id := !id + 1;
     let stack_diff = !remote_stack_size - stack_size in
     let curtailed_remote_state = if stack_diff > 0 then
@@ -358,7 +360,7 @@ let sync_context_stack rc wc =
 type connection =
   { rc : Unix.file_descr Capnp_unix.IO.ReadContext.t
   ; wc : Unix.file_descr Capnp_unix.IO.WriteContext.t
-  ; sync_context_stack : glob_tactic_expr list -> Environ.env ->
+  ; sync_context_stack : ?keep_cache:bool -> glob_tactic_expr list -> Environ.env ->
       (glob_tactic_expr * location) TacticMap.t * CICGraphMonad.state * int }
 
 let get_connection =
@@ -382,7 +384,7 @@ let check_neural_alignment () =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
-  let tacs, state, stack_size = sync_context_stack !last_model env in
+  let tacs, state, stack_size = sync_context_stack ~keep_cache:false !last_model env in
   let request = Request.init_root () in
   Request.check_alignment_set request;
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
@@ -429,7 +431,9 @@ let check_neural_alignment () =
 let push_cache () =
   if textmode_option () then () (* No caching needed for the text model at the moment *) else
     let { rc; wc; sync_context_stack } = get_connection () in
-    let _, _, stack_size = sync_context_stack !last_model (Global.env ()) in
+    (* We don't send the list of tactics, hence the empty list. Tactics are only sent right before
+       prediction requests are made. *)
+    let _, _, stack_size = sync_context_stack [] (Global.env ()) in
     if debug_option () then
       Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size)
 
@@ -572,7 +576,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   let predict { tactics; connection = { rc; wc; sync_context_stack } } =
     let env = Global.env () in
     if not @@ textmode_option () then
-      let tacs, state, stack_size = sync_context_stack tactics env in
+      let tacs, state, stack_size = sync_context_stack ~keep_cache:false tactics env in
       let find_global_argument = find_global_argument state in
       fun f ->
         if f = [] then IStream.empty else
