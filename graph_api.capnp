@@ -596,6 +596,7 @@ struct PredictionProtocol {
         # The proof state for which a prediction is requested.
       }
       synchronize @8 :UInt64;
+      # TODO: Get rid of this in next version, no longer used.
       # Coq uses this message to synchronize the state of the protocol when exceptions have occurred.
       # The contract is that the given integer needs to be echo'd back verbatim.
 
@@ -621,7 +622,10 @@ struct PredictionProtocol {
       textPrediction @2 :List(TextPrediction);
       # Output is a list of predictions with a confidence. The list is expected to be
       # sorted by decreasing confidence.
+
       synchronized @3 :UInt64;
+      # TODO: Get rid of this in next version, no longer used.
+
       alignment :group {
         unalignedTactics @4 :List(TacticId);
         unalignedDefinitions @5 :List(Node);

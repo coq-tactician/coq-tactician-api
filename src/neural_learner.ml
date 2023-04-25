@@ -141,25 +141,6 @@ let write_read_capnp_message_uninterrupted rc wc m =
   with Fun.Finally_raised e ->
     raise e
 
-let drain =
-  let drainid = ref 0 in
-  fun rc wc ->
-    let module Request = Api.Builder.PredictionProtocol.Request in
-    let module Response = Api.Reader.PredictionProtocol.Response in
-    let request = Request.init_root () in
-    let hash = Hashtbl.hash_param 255 255 (!drainid, Unix.gettimeofday (), Unix.getpid ()) in
-    Request.synchronize_set_int_exn request hash;
-    drainid := !drainid + 1;
-    let rec loop msg =
-      match msg with
-      | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3c")
-      | Some response ->
-        let response = Response.of_message response in
-        match Response.get response with
-        | Response.Synchronized id when Stdint.Uint64.to_int id = hash -> ()
-        | _ -> loop @@ Capnp_unix.IO.ReadContext.read_message rc in
-    loop @@ write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request
-
 let connect_socket my_socket =
   Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing my_socket,
   Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
@@ -182,7 +163,6 @@ let connect_stdin () =
   in
   let (write_context, read_context) as connection = connect_socket my_socket in
   Declaremods.append_end_library_hook (fun () ->
-      drain write_context read_context;
       Unix.shutdown my_socket Unix.SHUTDOWN_SEND;
       Unix.shutdown my_socket Unix.SHUTDOWN_RECEIVE;
       Unix.close my_socket;
@@ -216,10 +196,7 @@ let connect_tcpip host port =
        with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
   let socket = connect addrs in
   let (read_context, write_context) as connection = connect_socket socket in
-  Declaremods.append_end_library_hook (fun () ->
-      drain read_context write_context;
-      Unix.close socket;
-    );
+  Declaremods.append_end_library_hook (fun () -> Unix.close socket);
   connection
 
 let log_annotation () =
@@ -402,7 +379,6 @@ let get_connection =
 
 let check_neural_alignment () =
   let { rc; wc; sync_context_stack } = get_connection () in
-  drain rc wc;
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
@@ -453,7 +429,6 @@ let check_neural_alignment () =
 let push_cache () =
   if textmode_option () then () (* No caching needed for the text model at the moment *) else
     let { rc; wc; sync_context_stack } = get_connection () in
-    drain rc wc;
     let _, _, stack_size = sync_context_stack !last_model (Global.env ()) in
     if debug_option () then
       Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size)
@@ -595,7 +570,6 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       last_model := tactics;
       { db with tactics }
   let predict { tactics; connection = { rc; wc; sync_context_stack } } =
-    drain rc wc;
     let env = Global.env () in
     if not @@ textmode_option () then
       let tacs, state, stack_size = sync_context_stack tactics env in
