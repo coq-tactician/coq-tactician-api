@@ -265,13 +265,13 @@ let update_context_stack id tacs env { stack_size; stack } =
   let new_constants = SDCmap.symmetric_diff
       ~eq:(fun _ _ -> true)
         (fun c -> function
-           | `Left _ -> fun s -> Cset.add c s (* We are only interested in canonical constants *)
-           | `Right _ | `Unequal _ -> assert false) globals.constants old_constants Cset.empty in
+          | `Left _ -> fun s -> Cset.add c s (* We are only interested in canonical constants *)
+          | `Right _ | `Unequal _ -> assert false) globals.constants old_constants Cset.empty in
   let new_inductives = SDMindmap.symmetric_diff
       ~eq:(fun _ _ -> true)
         (fun c -> function
-           | `Left _ -> fun s -> Mindset.add c s
-           | `Right _ | `Unequal _ -> assert false) globals.inductives old_inducives Mindset.empty in
+          | `Left _ -> fun s -> Mindset.add c s (* We are only interested in canonical inductives *)
+          | `Right _ | `Unequal _ -> assert false) globals.inductives old_inducives Mindset.empty in
   let new_section =
     if section == old_section then Id.Set.empty else
       let old_section = List.fold_left (fun m pt -> Id.Set.add (Context.Named.Declaration.get_id pt) m)
@@ -280,11 +280,16 @@ let update_context_stack id tacs env { stack_size; stack } =
         (fun s pt -> let id = Context.Named.Declaration.get_id pt in
         if Id.Set.mem id old_section then s else Id.Set.add id s) Id.Set.empty section in
 
-  Feedback.msg_notice Pp.(
-      pr_vertical_list Constant.print (Cset.elements new_constants)
-      ++ pr_vertical_list MutInd.print (Mindset.elements new_inductives)
-      ++ pr_vertical_list Id.print (Id.Set.elements new_section)
-    );
+  if debug_option () then
+    Feedback.msg_notice Pp.(
+        str "New definitions to be transmitted: " ++ fnl () ++
+        pr_vertical_list Constant.print (Cset.elements new_constants)
+        ++ pr_vertical_list MutInd.print (Mindset.elements new_inductives)
+        ++ pr_vertical_list Id.print (Id.Set.elements new_section)
+      );
+
+  if Cset.is_empty new_constants && Mindset.is_empty new_inductives && Id.Set.is_empty new_section &&
+     CList.is_empty tacs then TacticMap.empty, state, { stack_size; stack } else
 
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
