@@ -221,21 +221,70 @@ let init_predict_text rc wc =
     | Response.Initialized -> ()
     | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
 
+module SDCmap = Symmetric_diff.HMapMake(
+  struct
+    type t = constant
+    include Constant.UserOrd
+  end)(
+  struct
+    include Cmap_env
+    module Set = Cset_env
+  end)
+module SDMindmap = Symmetric_diff.HMapMake(
+  struct
+    type t = MutInd.t
+    include MutInd.UserOrd
+  end)(Mindmap_env)
+module SDIdmap = Symmetric_diff.Make(Id)(
+  struct
+    include Id.Map
+    module Set = Id.Set
+  end)
 type context_state =
   { request : Api.Builder.PredictionProtocol.Request.t
   ; state : CICGraphMonad.state
-  ; id : int }
+  ; id : int
+  ; constants : Environ.constant_key Cmap_env.t
+  ; inductives : Environ.mind_key Mindmap_env.t
+  ; section : Constr.named_context }
 type context_stack =
   { stack : context_state list
   ; stack_size : int }
 
 let update_context_stack id tacs env { stack_size; stack } =
-  let state = match stack with
+  let state, old_constants, old_inducives, old_section = match stack with
     | [] ->
       let (empty_state, ()), _ = CICGraphMonad.run_empty (CICGraphMonad.return ())
           (G.HashMap.create 0) G.builder_nil 0 in
-      empty_state
-    | { state; _ }::_ -> state in
+      empty_state, Cmap_env.empty, Mindmap_env.empty, []
+    | { state; constants; inductives; section; _ }::_ -> state, constants, inductives, section in
+
+  let globals = Environ.Globals.view Environ.(env.env_globals) in
+  let section = Environ.named_context env in
+
+  let new_constants = SDCmap.symmetric_diff
+      ~eq:(fun _ _ -> true)
+        (fun c -> function
+           | `Left _ -> fun s -> Cset.add c s (* We are only interested in canonical constants *)
+           | `Right _ | `Unequal _ -> assert false) globals.constants old_constants Cset.empty in
+  let new_inductives = SDMindmap.symmetric_diff
+      ~eq:(fun _ _ -> true)
+        (fun c -> function
+           | `Left _ -> fun s -> Mindset.add c s
+           | `Right _ | `Unequal _ -> assert false) globals.inductives old_inducives Mindset.empty in
+  let new_section =
+    if section == old_section then Id.Set.empty else
+      let old_section = List.fold_left (fun m pt -> Id.Set.add (Context.Named.Declaration.get_id pt) m)
+          Id.Set.empty old_section in
+      List.fold_left
+        (fun s pt -> let id = Context.Named.Declaration.get_id pt in
+        if Id.Set.mem id old_section then s else Id.Set.add id s) Id.Set.empty section in
+
+  Feedback.msg_notice Pp.(
+      pr_vertical_list Constant.print (Cset.elements new_constants)
+      ++ pr_vertical_list MutInd.print (Mindset.elements new_inductives)
+      ++ pr_vertical_list Id.print (Id.Set.elements new_section)
+    );
 
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
@@ -246,27 +295,18 @@ let update_context_stack id tacs env { stack_size; stack } =
   ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
   Request.Initialize.stack_size_set_int_exn init stack_size;
   let { def_count; node_count; edge_count; defs; nodes; edges }, state =
-    let globrefs = Environ.Globals.view Environ.(env.env_globals) in
-    (* We are only interested in canonical constants *)
-    let constants = Cset.elements @@ Cmap_env.fold (fun c _ m ->
-        let c = Constant.make1 @@ Constant.canonical c in
-        Cset.add c m) globrefs.constants Cset.empty in
-    let minductives = Mindmap_env.Set.elements @@ Mindmap_env.domain globrefs.inductives in
-    (* We are only interested in canonical inductives *)
-    let minductives = Mindset.elements @@ List.fold_left (fun m c ->
-        let c = MutInd.make1 @@ MutInd.canonical c in
-        Mindset.add c m) Mindset.empty minductives in
-    let section_vars = List.map Context.Named.Declaration.get_id @@ Environ.named_context env in
     let open Monad_util.WithMonadNotations(CICGraphMonad) in
     let open Monad.Make(CICGraphMonad) in
 
     let open GB in
     let env_extra = Id.Map.empty, Cmap.empty in
     let updater =
-      let* () = List.iter (fun c ->
-          let+ _ = gen_const env env_extra c in ()) constants in
-      let* () = List.iter (gen_mutinductive_helper env env_extra) minductives in
-      List.map (gen_section_var env env_extra) section_vars in
+      let* () = Cset.fold (fun c acc ->
+          acc >> let+ _ = gen_const env env_extra c in ()) new_constants (return ()) in
+      let* () = Mindset.fold (fun m acc ->
+          acc >> gen_mutinductive_helper env env_extra m) new_inductives (return ()) in
+      Id.Set.fold (fun id acc ->
+          acc >> let+ _ = gen_section_var env env_extra id in ()) new_section (return ()) in
     let (state, _), builder =
       CICGraphMonad.run ~include_metadata:(include_metadata_option ()) ~include_opaque:false ~state updater
         (G.HashMap.create 100) G.builder_nil stack_size in
@@ -306,7 +346,12 @@ let update_context_stack id tacs env { stack_size; stack } =
   let state = { state with
                 previous = None
               ; external_previous = Option.fold_left (fun ls x -> x::ls) [] state.previous } in
-  tacs, state, { stack_size = stack_size + 1; stack = { request; state; id }::stack }
+  tacs, state, { stack_size = stack_size + 1
+               ; stack = { request; state; id
+                         ; constants = globals.constants
+                         ; inductives = globals.inductives
+                         ; section }
+                         ::stack }
 
 let sync_context_stack rc wc =
   let module Request = Api.Builder.PredictionProtocol.Request in
