@@ -131,6 +131,8 @@ At this point, you have the following commands available which will interact wit
 - `Tactician Neural Cache` will preemptively send a lot of required data to the prediction server and keeps that
   information cached. This will make the commands above run much faster. This command can be issued multiple times
   in a document, creating multiple nested caches.
+- `Set Tactician Autocache` will automatically execute `Tactician Neural Cache` on each command. This is an
+  experimental option, and there may be some overhead associated with this.
 
 ## Reinforcement interaction
 

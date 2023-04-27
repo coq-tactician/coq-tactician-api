@@ -487,6 +487,17 @@ let push_cache () =
     if debug_option () then
       Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size)
 
+(* TODO: Hack: Options have the property that they are being read by Coq's stm (multiple times) on every
+   vernac command. Hence, we can use it to execute arbitrary code. We use to automatically cache. *)
+let autocache_option =
+  let cache = ref false in
+  Goptions.{ optdepr = false
+           ; optname = "Tactician Neural Autocache"
+           ; optkey = ["Tactician"; "Neural"; "Autocache"]
+           ; optread = (fun () -> (if !cache then push_cache () else ()); !cache)
+           ; optwrite = (fun v -> cache := v) }
+let () = Goptions.declare_bool_option autocache_option
+
 module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStructures) -> struct
   module LH = Learner_helper.L(TS)
   open TS
