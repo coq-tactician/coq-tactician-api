@@ -36,7 +36,7 @@ end = struct
     | MNode {l; v; d; r; _ } -> l, More (v, d, r, acc)
 
   let rec symmetric_cons ((lm, la) as l) ((rm, ra) as r) =
-    if lm = rm then la, ra
+    if lm == rm then la, ra
     else
       let lh = Map.height lm in
       let rh = Map.height rm in
