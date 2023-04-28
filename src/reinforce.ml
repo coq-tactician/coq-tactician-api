@@ -76,7 +76,7 @@ let find_tactic tacs id =
 let find_argument context id =
   match Int.Map.find_opt id context with
   | None -> raise MismatchedArguments
-  | Some x -> x
+  | Some x -> Tactic_one_variable.TVar x
 
 let pp_tac tac = Sexpr.format_oneline (Pptactic.pr_glob_tactic (Global.env ()) tac)
 
@@ -106,11 +106,12 @@ let rec proof_object env state tacs context_map =
             ) tac_args in
           let tac_args = List.map (fun a -> Stdint.Uint32.to_int (Argument.Term.node_index_get a)) tac_args in
           let tac, params = find_tactic tacs tac_id in
-          if List.length params <> List.length tac_args then raise MismatchedArguments;
+          if params <> List.length tac_args then raise MismatchedArguments;
           let tac_args = List.map (find_argument context_map) tac_args in
-          let subst = List.combine (List.map snd params) tac_args in
-          (* TODO: This needs to be upgraded to full capture avoiding substitution *)
-          let tac = Tactic_substitute.alpha_convert (fun id -> List.assoc id subst) tac in
+          let tac = Tactic_one_variable.tactic_substitute tac_args tac in
+          let tac = match tac with
+            | None -> raise MismatchedArguments
+            | Some tac -> tac in
 
           let prtac = pp_tac tac in
           Feedback.msg_notice @@ Pp.(str "run tactic " ++ prtac);
@@ -182,7 +183,7 @@ let available_tactics tacs =
       List.iteri (fun i (hash, (_tac, params)) ->
           let arri = Capnp.Array.get tac_arr i in
           Api.Builder.AbstractTactic.ident_set arri hash;
-          Api.Builder.AbstractTactic.parameters_set_exn arri (List.length params))
+          Api.Builder.AbstractTactic.parameters_set_exn arri params)
         (TacticMap.bindings tacs);
       Service.return response
 
@@ -211,18 +212,8 @@ let pull_reinforce =
 
       Tactic_learner_internal.process_queue ();
       let tacs = Neural_learner.(!last_model) in
-      print_endline (string_of_int (List.length tacs));
-      let tacs = List.map (fun t -> t, Tactic_hash.tactic_hash (Global.env ()) t) tacs in
-      let map = List.fold_left (fun map tac ->
-          let open Tactic_learner_internal.TS in
-          (* TODO: Convert this to the same tactic argument extraction procedure as in neural_learner.ml *)
-          let tac = tactic_repr tac in
-          let tac = Tactic_normalize.tactic_strict tac in
-          let args, tac = Tactic_abstract.tactic_abstract tac in
-          TacticMap.add
-            (Int64.of_int (tactic_hash (tactic_make tac))) (tac, args) map)
-          TacticMap.empty tacs in
-      let capability = available_tactics map in
+      print_endline (string_of_int (TacticMap.cardinal tacs));
+      let capability = available_tactics tacs in
       Results.available_set results (Some capability);
       Capability.dec_ref capability;
 
@@ -237,7 +228,7 @@ let pull_reinforce =
 
           let env = Global.env () in
           let start = Proof.start ~name:(Names.Id.of_string "dummy") ~poly:false evd [env, c] in
-          write_execution_result env start res (proof_object env start map)
+          write_execution_result env start res (proof_object env start tacs)
         with ParseError ->
           let exc = Api.Builder.ExecutionResult.protocol_error_init res in
           Api.Builder.Exception.parse_error_set exc

@@ -46,7 +46,10 @@ let debug_option = declare_bool_option ~name:"Debug" ~default:false
 let tcp_option = declare_string_option ~name:"Server" ~default:""
 let executable_option = declare_string_option ~name:"Executable" ~default:""
 
-let last_model = Summary.ref ~name:"neural-learner-lastmodel" []
+open Stdint
+module TacticMap = Map.Make(struct type t = int64 let compare = Stdint.Int64.compare end)
+
+let last_model = Summary.ref ~name:"neural-learner-lastmodel" TacticMap.empty
 
 type location = int
 module Hashable = struct
@@ -70,8 +73,6 @@ exception IllegalArgument
 module Api = Graph_api.MakeRPC(Capnp_rpc_lwt)
 module W = Graph_capnp_generator.Writer(Api)
 
-open Stdint
-module TacticMap = Map.Make(struct type t = int64 let compare = Stdint.Int64.compare end)
 let find_tactic tacs id =
   match TacticMap.find_opt id tacs with
   | None -> raise NoSuchTactic
@@ -289,7 +290,7 @@ let update_context_stack id tacs env { stack_size; stack } =
       );
 
   if Cset.is_empty new_constants && Mindset.is_empty new_inductives && Id.Set.is_empty new_section &&
-     CList.is_empty tacs then TacticMap.empty, state, { stack_size; stack } else
+     TacticMap.is_empty tacs then state, { stack_size; stack } else
 
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
@@ -317,15 +318,6 @@ let update_context_stack id tacs env { stack_size; stack } =
         (G.HashMap.create 100) G.builder_nil stack_size in
     builder, state in
 
-  let tacs = List.fold_left (fun map tac ->
-      let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac in
-      let tac = Tactic_name_remove.tactic_name_remove tac in
-      let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
-      let base_tactic = Tactic_one_variable.tactic_strip tac in
-      TacticMap.add
-        (Tactic_hash.tactic_hash env base_tactic) (base_tactic, List.length args) map)
-      TacticMap.empty tacs in
-
   let tac_arr = Request.Initialize.tactics_init init @@ TacticMap.cardinal tacs in
   List.iteri (fun i (hash, (_tac, params)) ->
       let arri = Capnp.Array.get tac_arr i in
@@ -351,7 +343,7 @@ let update_context_stack id tacs env { stack_size; stack } =
   let state = { state with
                 previous = None
               ; external_previous = Option.fold_left (fun ls x -> x::ls) [] state.previous } in
-  tacs, state, { stack_size = stack_size + 1
+  state, { stack_size = stack_size + 1
                ; stack = { request; state; id
                          ; constants = globals.constants
                          ; inductives = globals.inductives
@@ -372,7 +364,7 @@ let sync_context_stack rc wc =
           str "old remote stack : " ++ prlist_with_sep (fun () -> str "-") int !remote_state ++ fnl () ++
           str "old local stack : " ++ prlist_with_sep (fun () -> str "-")
             (fun { id; _ } -> int id) !context_stack.stack);
-    let tacs, state, ({ stack_size; stack } as cache) = update_context_stack !id tacs env !context_stack in
+    let state, ({ stack_size; stack } as cache) = update_context_stack !id tacs env !context_stack in
     if keep_cache then
       context_stack := cache;
     if debug_option () then
@@ -405,13 +397,13 @@ let sync_context_stack rc wc =
     remote_stack_size := stack_size;
     if debug_option () then
       Feedback.msg_notice Pp.(str "new remote stack : " ++ prlist_with_sep (fun () -> str "-") int !remote_state);
-    tacs, state, stack_size
+    state, stack_size
 
 type connection =
   { rc : Unix.file_descr Capnp_unix.IO.ReadContext.t
   ; wc : Unix.file_descr Capnp_unix.IO.WriteContext.t
-  ; sync_context_stack : ?keep_cache:bool -> glob_tactic_expr list -> Environ.env ->
-      (glob_tactic_expr * location) TacticMap.t * CICGraphMonad.state * int }
+  ; sync_context_stack : ?keep_cache:bool -> (glob_tactic_expr * location) TacticMap.t -> Environ.env ->
+      CICGraphMonad.state * int }
 
 let get_connection =
   let connection = ref None in
@@ -434,7 +426,8 @@ let check_neural_alignment () =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
-  let tacs, state, stack_size = sync_context_stack ~keep_cache:false !last_model env in
+  let tacs = !last_model in
+  let state, stack_size = sync_context_stack ~keep_cache:false tacs env in
   let request = Request.init_root () in
   Request.check_alignment_set request;
   match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
@@ -483,7 +476,7 @@ let push_cache () =
     let { rc; wc; sync_context_stack } = get_connection () in
     (* We don't send the list of tactics, hence the empty list. Tactics are only sent right before
        prediction requests are made. *)
-    let _, _, stack_size = sync_context_stack [] (Global.env ()) in
+    let _, stack_size = sync_context_stack TacticMap.empty (Global.env ()) in
     if debug_option () then
       Feedback.msg_notice Pp.(str "Cache stack size: " ++ int stack_size)
 
@@ -619,29 +612,39 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
   type model =
-    { tactics : glob_tactic_expr list
+    { tactics : (glob_tactic_expr * int) TacticMap.t
     ; connection : connection }
 
   let empty () =
     let connection = get_connection () in
-    { tactics = []; connection }
+    { tactics = TacticMap.empty; connection }
+
+  let add_tactic_info env map tac =
+    let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac in
+    let tac = Tactic_name_remove.tactic_name_remove tac in
+    let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
+    let base_tactic = Tactic_one_variable.tactic_strip tac in
+    TacticMap.add
+      (Tactic_hash.tactic_hash env base_tactic) (base_tactic, List.length args) map
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with
     | None -> db
     | Some tac ->
       let tac = tactic_repr tac in
-      let tactics = tac::tactics in
+      let tactics = add_tactic_info (Global.env ()) tactics tac in
       last_model := tactics;
       { db with tactics }
+
   let predict { tactics; connection = { rc; wc; sync_context_stack } } =
     let env = Global.env () in
     if not @@ textmode_option () then
-      let tacs, state, stack_size = sync_context_stack ~keep_cache:false tactics env in
+      let state, stack_size =
+        sync_context_stack ~keep_cache:false tactics env in
       let find_global_argument = find_global_argument state in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict rc wc find_global_argument stack_size state tacs env
+          let preds = predict rc wc find_global_argument stack_size state tactics env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds

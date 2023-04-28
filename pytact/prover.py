@@ -105,8 +105,8 @@ async def search_dfs(result, tactics, limit) -> Optional[List[capnpLocalTactic]]
 
 
 async def example_script_prover(args, pull):
-    TAC_INTROS = 126567959
-    TAC_APPLY = 165468576
+    TAC_INTROS = 4249207563281686782
+    TAC_APPLY = 3192827940261208899
     result, _ = await open_proof(pull, "forall A B C : Prop, (A -> B -> C) -> A -> B -> C", args.vis)
     result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []), args.vis)
     result = await runTactic(result.newState.obj, "intro", args.vis)
