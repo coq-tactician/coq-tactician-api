@@ -36,20 +36,19 @@ def graph_initialize_loop(context : GlobalContextMessage, level):
         print(t)
     print(context.log_annotation)
     prediction_requests = context.prediction_requests
+    cool_definitions = [ d.node for d in context.definitions.definitions() if d.name == "Coq.Init.Logic.I" ]
+    zeroArgs = [t.ident for t in context.tactics if t.parameters == 0]
+    oneArg = [t.ident for t in context.tactics if t.parameters == 1]
     for msg in prediction_requests:
         if isinstance(msg, ProofState):
             proof_state = msg
             gv.visualize_proof_state(proof_state)
-            zeroArgs = [t.ident for t in context.tactics if t.parameters == 0]
             preds = [TacticPredictionGraph(t, [], 0.5) for t in zeroArgs]
             if len(proof_state.context) > 0:
-                oneArg = [t.ident for t in context.tactics if t.parameters == 1]
                 hyp_node = proof_state.context[0]
                 preds += [TacticPredictionGraph(t, [hyp_node], 0.5) for t in oneArg]
-            for d in context.definitions.definitions():
-                if d.name == "Coq.Init.Logic.I":
-                    oneArg = [t.ident for t in context.tactics if t.parameters == 1]
-                    preds += [TacticPredictionGraph(t, [d.node], 0.5) for t in oneArg]
+            for d in cool_definitions:
+                preds += [TacticPredictionGraph(t, [d], 0.5) for t in oneArg]
             prediction_requests.send(TacticPredictionsGraph(preds))
         elif isinstance(msg, CheckAlignmentMessage):
             unknown_definitions = list(context.definitions.definitions())
