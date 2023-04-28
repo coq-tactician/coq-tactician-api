@@ -196,6 +196,7 @@ let connect_tcpip host port =
          my_socket
        with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
   let socket = connect addrs in
+  Unix.setsockopt socket TCP_NODELAY true; (* Nagles algorithm kills performance, disable *)
   let (read_context, write_context) as connection = connect_socket socket in
   Declaremods.append_end_library_hook (fun () -> Unix.close socket);
   connection
