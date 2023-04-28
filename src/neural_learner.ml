@@ -131,11 +131,12 @@ let write_read_capnp_message_uninterrupted rc wc m =
   let prev_sigterm =
     Sys.signal Sys.sigterm @@ Sys.Signal_handle (fun i ->
         terminate := true) in
-  ignore (Thread.sigmask Unix.SIG_BLOCK [Sys.sigalrm]);
+  let signals = [Sys.sigalrm; Sys.sigint] in
+  ignore (Thread.sigmask Unix.SIG_BLOCK signals);
   try
     Fun.protect ~finally:(fun () ->
         Sys.set_signal Sys.sigterm prev_sigterm;
-        ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigalrm]);
+        ignore (Thread.sigmask Unix.SIG_UNBLOCK signals);
         if !terminate then exit 1) @@ fun () ->
     Capnp_unix.IO.WriteContext.write_message wc m;
     Capnp_unix.IO.ReadContext.read_message rc
