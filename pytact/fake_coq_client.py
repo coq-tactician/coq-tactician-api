@@ -18,7 +18,7 @@ def run_fake_client(server_socket, messages_generator):
         messages_generator.send(response.as_builder())
 
 def compare(request, response, recorded_response):
-    if not response.to_dict() == recorded_response.to_dict():
+    if response.to_dict() == recorded_response.to_dict():
         print(f'The servers response to a {request.which.name} message was equal to the '
               f'recorded response')
     else:
