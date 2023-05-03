@@ -265,15 +265,16 @@ let update_context_stack id tacs env { stack_size; stack } =
   let globals = Environ.Globals.view Environ.(env.env_globals) in
   let section = Environ.named_context env in
 
+  let existing_defs = state.definition_nodes in
   let new_constants = SDCmap.symmetric_diff
       ~eq:(fun _ _ -> true)
         (fun c -> function
-          | `Left _ -> fun s -> Cset.add c s (* We are only interested in canonical constants *)
+          | `Left _ -> fun s -> if Cmap.mem c existing_defs.constants then s else Cset.add c s
           | `Right _ | `Unequal _ -> assert false) globals.constants old_constants Cset.empty in
   let new_inductives = SDMindmap.symmetric_diff
       ~eq:(fun _ _ -> true)
         (fun c -> function
-          | `Left _ -> fun s -> Mindset.add c s (* We are only interested in canonical inductives *)
+          | `Left _ -> fun s -> if Indmap.mem (c, 0) existing_defs.inductives then s else Mindset.add c s
           | `Right _ | `Unequal _ -> assert false) globals.inductives old_inducives Mindset.empty in
   let new_section =
     if section == old_section then Id.Set.empty else
@@ -315,7 +316,7 @@ let update_context_stack id tacs env { stack_size; stack } =
           acc >> gen_mutinductive_helper env env_extra m) new_inductives (return ()) in
       Id.Set.fold (fun id acc ->
           acc >> let+ _ = gen_section_var env env_extra id in ()) new_section (return ()) in
-    let (state, _), builder =
+    let (state, ()), builder =
       CICGraphMonad.run ~include_metadata:(include_metadata_option ()) ~include_opaque:false ~state updater
         (G.HashMap.create 100) G.builder_nil stack_size in
     builder, state in
