@@ -344,7 +344,7 @@ let update_context_stack id tacs env { stack_size; stack } =
   Request.Initialize.representative_set_int_exn init representative;
   let state = { state with
                 previous = None
-              ; external_previous = Option.fold_left (fun ls x -> x::ls) [] state.previous } in
+              ; external_previous = Option.cata (fun p -> [p]) state.external_previous state.previous } in
   state, { stack_size = stack_size + 1
                ; stack = { request; state; id
                          ; constants = globals.constants
