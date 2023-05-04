@@ -87,6 +87,7 @@ def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 
 def main():
+    sys.setrecursionlimit(1000)
     parser = argparse.ArgumentParser(
         description = 'A tactic prediction server acting as an oracle, retrieving it\'s information from a dataset',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)

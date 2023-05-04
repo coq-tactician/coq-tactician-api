@@ -72,6 +72,7 @@ def run_session(args, capnp_socket, record_file):
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 
 def main():
+    sys.setrecursionlimit(1000)
     parser = argparse.ArgumentParser(
         description = "Example python server capable of communicating with Coq through Tactician's 'synth' tactic",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
