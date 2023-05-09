@@ -51,3 +51,10 @@ can run:
 
 unsquashfs -dest dataset/ dataset.squ
 
+If you wish to inspect the raw data in the dataset manually, you can convert
+and individual file in the dataset as follows:
+
+dataset/coq-tactician-stdlib.8.11.dev/theories/Init/Logic.bin | \
+    capnp convert binary:json meta/graph_api.capnp Dataset
+
+You can process the resulting JSON further using, for example, the 'jq` command.
