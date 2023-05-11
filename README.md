@@ -17,6 +17,8 @@ The simplest and most reliable way to install these packages is through Conda. T
 git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git # Clone this repo
 cd coq-tactician-reinforce
 conda env create -f environment.yml
+conda activate tactician
+export CPATH="$CONDA_PREFIX:$CPATH" # Needed by cmake to find conda headers
 ```
 
 If you don't want to use Conda, you'll have to install the dependencies listed above through your distributions
