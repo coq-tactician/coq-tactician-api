@@ -627,8 +627,10 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let tac = Tactic_name_remove.tactic_name_remove tac in
     let (args, tactic_exact), interm_tactic = Tactic_one_variable.tactic_one_variable tac in
     let base_tactic = Tactic_one_variable.tactic_strip tac in
-    TacticMap.add
-      (Tactic_hash.tactic_hash env base_tactic) (base_tactic, List.length args) map
+    let params = List.length args in
+    if params >= 256 then map else
+      TacticMap.add
+        (Tactic_hash.tactic_hash env base_tactic) (base_tactic, params) map
 
   let learn ({ tactics; _ } as db) _origin _outcomes tac =
     match tac with
