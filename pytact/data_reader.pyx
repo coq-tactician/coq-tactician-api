@@ -990,7 +990,7 @@ cdef class Definition:
         elif kind.isTacticalConstant():
             return TacticalConstant(ProofStep_List.init(kind.getTacticalConstant(), graph_index, graph))
         elif kind.isManualSectionConstant():
-            return ManualConstant()
+            return ManualSectionConstant()
         elif kind.isTacticalSectionConstant():
             return TacticalSectionConstant(ProofStep_List.init(kind.getTacticalSectionConstant(), graph_index, graph))
         else: assert False
