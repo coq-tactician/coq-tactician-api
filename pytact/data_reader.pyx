@@ -48,10 +48,7 @@ Some docs can be found with `capnp_message_generator`.
 The function `capnp_message_generator_lowlevel` converts a socket into a generator that
 yields lowlevel cap'n proto request messages for predictions and expects to be sent cap'n proto
 messages in return. There are four types of messages `msg` Coq sends.
-1. Synchronize: If `msg.is_synchronize` is true, Coq is attempting to synchronize
-   it's state with the server. A `PredictionProtocol.Response.synchronized` message is expected
-   in return.
-2. Initialize: If `msg.is_initialize` is true, Coq is sending a list of available
+1. Initialize: If `msg.is_initialize` is true, Coq is sending a list of available
    tactics and the current global context to be added to an existing stack of global context
    information. An empty stack can be created through `empty_online_definitions_initialize`.
    To add an initialize message to the stack, you can use
@@ -64,7 +61,7 @@ messages in return. There are four types of messages `msg` Coq sends.
    such that `msg.initialize.stack_size` is smaller than the current stack size.
 
    A `PredictionProtocol.Response.initialized` message is expected in response of this message.
-4. Predict: If `msg.is_predict` is true, Coq is asking to predict a list of plausible
+2. Predict: If `msg.is_predict` is true, Coq is asking to predict a list of plausible
    tactics given a proof state. The proof state can be easily accessed using
    ```
    with online_data_predict(definitions, msg.predict) as proof_state:
@@ -72,7 +69,7 @@ messages in return. There are four types of messages `msg` Coq sends.
    ```
    A `PredictionProtocol.Response.prediction` or `PredictionProtocol.Response.textPrediction`
    message is expected in return.
-5. Check Alignment: If `msg.is_check_alignment` is true, then Coq is asking the server
+3. Check Alignment: If `msg.is_check_alignment` is true, then Coq is asking the server
    to check which tactics and definitions are known to it. A
    `PredictionProtocol.Response.alignment` message is expected in return.
 
@@ -1228,7 +1225,7 @@ cdef class OnlineDefinitionsReader:
     cdef GraphIndex graph_index
 
     @staticmethod
-    cdef init(GraphIndex graph_index, C_PredictionProtocol_Request_Initialize_Reader init):
+    cdef init(GraphIndex graph_index, C_GlobalContextAddition_Reader init):
         cdef OnlineDefinitionsReader wrapper = OnlineDefinitionsReader.__new__(OnlineDefinitionsReader)
 
         graph_index.nodes.push_back(init.getGraph().getNodes())
@@ -1303,7 +1300,7 @@ cdef class OnlineDefinitionsReader:
 
 @contextmanager
 def online_definitions_initialize(OnlineDefinitionsReader stack,
-                                  PredictionProtocol_Request_Initialize_Reader init) -> Generator[OnlineDefinitionsReader, None, None]:
+                                  GlobalContextAddition_Reader init) -> Generator[OnlineDefinitionsReader, None, None]:
     """Given a new initialization message sent by Coq, construct a `OnlineDefinitiosnReader` object. This can be used
     to inspect the definitions currently available. Additionally, using `online_data_predict` it can
     be combined with a subsequent prediction request received from Coq to build a `ProofState`.
@@ -1324,7 +1321,7 @@ def empty_online_definitions_initialize() -> OnlineDefinitionsReader:
 
 @contextmanager
 def online_data_predict(OnlineDefinitionsReader base,
-                        PredictionProtocol_Request_Predict_Reader predict) -> Generator[ProofState, None, None]:
+                        PredictionRequest_Reader predict) -> Generator[ProofState, None, None]:
     """Given a `OnlineDefinitionsReader` instance constructed through `online_data_initialize`, and a prediction message
     sent by Coq, construct a `ProofState` object that represents the current proof state in Coq.
     """
@@ -1336,7 +1333,7 @@ def online_data_predict(OnlineDefinitionsReader base,
     # If the Python runtime ever becomes clever and eliminates this variable, a different
     # method of keeping the object around should be found.A
     # This makes a copy
-    cdef C_PredictionProtocol_Request_Predict_Reader p = predict.source
+    cdef C_PredictionRequest_Reader p = predict.source
     cdef GraphIndex graph_index = base.graph_index
     graph_index.nodes.push_back(p.getGraph().getNodes())
     graph_index.edges.push_back(p.getGraph().getEdges())
@@ -1488,11 +1485,7 @@ def record_lowlevel_generator(
 def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
     msg = next(lgenerator, None)
     while msg is not None:
-        if msg.is_synchronize:
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-            lgenerator.send(response)
-            msg = next(lgenerator, None)
-        elif msg.is_initialize:
+        if msg.is_initialize:
             init = msg.initialize
             if init.data_version.major != graph_api_capnp.currentVersion.major:
                 raise ValueError(

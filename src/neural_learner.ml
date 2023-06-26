@@ -45,6 +45,7 @@ let include_metadata_option = declare_bool_option ~name:"Metadata" ~default:fals
 let debug_option = declare_bool_option ~name:"Debug" ~default:false
 let tcp_option = declare_string_option ~name:"Server" ~default:""
 let executable_option = declare_string_option ~name:"Executable" ~default:""
+let rpc_option = declare_bool_option ~name:"RPC" ~default:false
 
 open Stdint
 module TacticMap = Map.Make(struct type t = int64 let compare = Stdint.Int64.compare end)
@@ -163,14 +164,13 @@ let connect_stdin () =
       Unix.create_process
         (List.hd split) (Array.of_list split) other_socket Unix.stdout Unix.stderr
   in
-  let (write_context, read_context) as connection = connect_socket my_socket in
   Declaremods.append_end_library_hook (fun () ->
       Unix.shutdown my_socket Unix.SHUTDOWN_SEND;
       Unix.shutdown my_socket Unix.SHUTDOWN_RECEIVE;
       Unix.close my_socket;
       ignore (Unix.waitpid [] pid));
   Unix.close other_socket;
-  connection
+  my_socket
 
 let pp_addr Unix.{ ai_addr; ai_canonname; _ } =
   let open Pp in
@@ -198,9 +198,8 @@ let connect_tcpip host port =
        with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
   let socket = connect addrs in
   Unix.setsockopt socket TCP_NODELAY true; (* Nagles algorithm kills performance, disable *)
-  let (read_context, write_context) as connection = connect_socket socket in
   Declaremods.append_end_library_hook (fun () -> Unix.close socket);
-  connection
+  socket
 
 let log_annotation () =
   let doc = Stm.get_doc 0 in
@@ -209,20 +208,12 @@ let log_annotation () =
     Stm.(get_ast ~doc (get_current_state ~doc)) in
   Pp.string_of_ppcmds loc
 
-let init_predict_text rc wc =
-  let module Request = Api.Builder.PredictionProtocol.Request in
-  let module Response = Api.Reader.PredictionProtocol.Response in
-  let request = Request.init_root () in
-  let init = Request.initialize_init request in
-  Request.Initialize.log_annotation_set init @@ log_annotation ();
-  ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
-  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
-  | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
-  | Some response ->
-    let response = Response.of_message response in
-    match Response.get response with
-    | Response.Initialized -> ()
-    | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
+let init_predict_text add_global_context =
+  let module GlobalContextAddition = Api.Builder.GlobalContextAddition in
+  let builder init =
+    GlobalContextAddition.log_annotation_set init @@ log_annotation ();
+    ignore(GlobalContextAddition.data_version_set_reader init Api.Reader.current_version) in
+  add_global_context builder
 
 module SDCmap = Symmetric_diff.HMapMake(
   struct
@@ -244,7 +235,7 @@ module SDIdmap = Symmetric_diff.Make(Id)(
     module Set = Id.Set
   end)
 type context_state =
-  { request : Api.Builder.PredictionProtocol.Request.t
+  { request : (Api.Builder.GlobalContextAddition.t -> unit)
   ; state : CICGraphMonad.state
   ; id : int
   ; constants : Environ.constant_key Cmap_env.t
@@ -268,21 +259,21 @@ let update_context_stack id tacs env { stack_size; stack } =
   let existing_defs = state.definition_nodes in
   let new_constants = SDCmap.symmetric_diff
       ~eq:(fun _ _ -> true)
-        (fun c -> function
-          | `Left _ -> fun s -> if Cmap.mem c existing_defs.constants then s else Cset.add c s
-          | `Right _ | `Unequal _ -> assert false) globals.constants old_constants Cset.empty in
+      (fun c -> function
+         | `Left _ -> fun s -> if Cmap.mem c existing_defs.constants then s else Cset.add c s
+         | `Right _ | `Unequal _ -> assert false) globals.constants old_constants Cset.empty in
   let new_inductives = SDMindmap.symmetric_diff
       ~eq:(fun _ _ -> true)
-        (fun c -> function
-          | `Left _ -> fun s -> if Indmap.mem (c, 0) existing_defs.inductives then s else Mindset.add c s
-          | `Right _ | `Unequal _ -> assert false) globals.inductives old_inducives Mindset.empty in
+      (fun c -> function
+         | `Left _ -> fun s -> if Indmap.mem (c, 0) existing_defs.inductives then s else Mindset.add c s
+         | `Right _ | `Unequal _ -> assert false) globals.inductives old_inducives Mindset.empty in
   let new_section =
     if section == old_section then Id.Set.empty else
       let old_section = List.fold_left (fun m pt -> Id.Set.add (Context.Named.Declaration.get_id pt) m)
           Id.Set.empty old_section in
       List.fold_left
         (fun s pt -> let id = Context.Named.Declaration.get_id pt in
-        if Id.Set.mem id old_section then s else Id.Set.add id s) Id.Set.empty section in
+          if Id.Set.mem id old_section then s else Id.Set.add id s) Id.Set.empty section in
 
   if debug_option () then
     Feedback.msg_notice Pp.(
@@ -295,65 +286,61 @@ let update_context_stack id tacs env { stack_size; stack } =
   if Cset.is_empty new_constants && Mindset.is_empty new_inductives && Id.Set.is_empty new_section &&
      TacticMap.is_empty tacs then state, { stack_size; stack } else
 
-  let module Request = Api.Builder.PredictionProtocol.Request in
-  let module Response = Api.Reader.PredictionProtocol.Response in
-  let request = Request.init_root () in
-  let init = Request.initialize_init request in
-  Request.Initialize.log_annotation_set init @@ log_annotation ();
+    let { def_count; node_count; edge_count; defs; nodes; edges }, state =
+      let open Monad_util.WithMonadNotations(CICGraphMonad) in
+      let open Monad.Make(CICGraphMonad) in
 
-  ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
-  Request.Initialize.stack_size_set_int_exn init stack_size;
-  let { def_count; node_count; edge_count; defs; nodes; edges }, state =
-    let open Monad_util.WithMonadNotations(CICGraphMonad) in
-    let open Monad.Make(CICGraphMonad) in
+      let open GB in
+      let env_extra = Id.Map.empty, Cmap.empty in
+      let updater =
+        let* () = Cset.fold (fun c acc ->
+            acc >> let+ _ = gen_const env env_extra c in ()) new_constants (return ()) in
+        let* () = Mindset.fold (fun m acc ->
+            acc >> gen_mutinductive_helper env env_extra m) new_inductives (return ()) in
+        Id.Set.fold (fun id acc ->
+            acc >> let+ _ = gen_section_var env env_extra id in ()) new_section (return ()) in
+      let (state, ()), builder =
+        CICGraphMonad.run ~include_metadata:(include_metadata_option ()) ~include_opaque:false ~state updater
+          (G.HashMap.create 100) G.builder_nil stack_size in
+      builder, state in
+    let node_local_index (_, (def, i)) =
+      if def then i else def_count + i in
+    let node_hash n = snd @@ G.transform_node_type n in
+    let node_label n = fst @@ G.transform_node_type n in
+    let builder init =
+      let module GlobalContextAddition = Api.Builder.GlobalContextAddition in
+      GlobalContextAddition.log_annotation_set init @@ log_annotation ();
+      ignore(GlobalContextAddition.data_version_set_reader init Api.Reader.current_version);
+      GlobalContextAddition.stack_size_set_int_exn init stack_size;
+      let tac_arr = GlobalContextAddition.tactics_init init @@ TacticMap.cardinal tacs in
+      List.iteri (fun i (hash, (_tac, params)) ->
+          let arri = Capnp.Array.get tac_arr i in
+          Api.Builder.AbstractTactic.ident_set arri hash;
+          Api.Builder.AbstractTactic.parameters_set_exn arri params)
+        (TacticMap.bindings tacs);
+      W.write_graph
+        ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
+        ~node_dep_index:(fun (stack_id, _) -> stack_size - stack_id) ~node_local_index
+        ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges
+        ~include_metadata:(include_metadata_option ())
+        (GlobalContextAddition.graph_init init);
 
-    let open GB in
-    let env_extra = Id.Map.empty, Cmap.empty in
-    let updater =
-      let* () = Cset.fold (fun c acc ->
-          acc >> let+ _ = gen_const env env_extra c in ()) new_constants (return ()) in
-      let* () = Mindset.fold (fun m acc ->
-          acc >> gen_mutinductive_helper env env_extra m) new_inductives (return ()) in
-      Id.Set.fold (fun id acc ->
-          acc >> let+ _ = gen_section_var env env_extra id in ()) new_section (return ()) in
-    let (state, ()), builder =
-      CICGraphMonad.run ~include_metadata:(include_metadata_option ()) ~include_opaque:false ~state updater
-        (G.HashMap.create 100) G.builder_nil stack_size in
-    builder, state in
+      let representative = match state.previous with
+        | None -> def_count + node_count
+        | Some i -> node_local_index @@ fst @@ G.transform_node_type @@ G.lower i in
+      GlobalContextAddition.representative_set_int_exn init representative in
+    let state = { state with
+                  previous = None
+                ; external_previous = Option.cata (fun p -> [p]) state.external_previous state.previous } in
+    state, { stack_size = stack_size + 1
+           ; stack = { request = builder
+                     ; state; id
+                     ; constants = globals.constants
+                     ; inductives = globals.inductives
+                     ; section }
+                     ::stack }
 
-  let tac_arr = Request.Initialize.tactics_init init @@ TacticMap.cardinal tacs in
-  List.iteri (fun i (hash, (_tac, params)) ->
-      let arri = Capnp.Array.get tac_arr i in
-      Api.Builder.AbstractTactic.ident_set arri hash;
-      Api.Builder.AbstractTactic.parameters_set_exn arri params)
-    (TacticMap.bindings tacs);
-
-  let node_local_index (_, (def, i)) =
-    if def then i else def_count + i in
-  let node_hash n = snd @@ G.transform_node_type n in
-  let node_label n = fst @@ G.transform_node_type n in
-  W.write_graph
-    ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
-    ~node_dep_index:(fun (stack_id, _) -> stack_size - stack_id) ~node_local_index
-    ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges
-    ~include_metadata:(include_metadata_option ())
-    (Request.Initialize.graph_init init);
-
-  let representative = match state.previous with
-    | None -> def_count + node_count
-    | Some i -> node_local_index @@ fst @@ G.transform_node_type @@ G.lower i in
-  Request.Initialize.representative_set_int_exn init representative;
-  let state = { state with
-                previous = None
-              ; external_previous = Option.cata (fun p -> [p]) state.external_previous state.previous } in
-  state, { stack_size = stack_size + 1
-               ; stack = { request; state; id
-                         ; constants = globals.constants
-                         ; inductives = globals.inductives
-                         ; section }
-                         ::stack }
-
-let sync_context_stack rc wc =
+let sync_context_stack add_global_context =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let id = ref 0 in
@@ -387,13 +374,7 @@ let sync_context_stack rc wc =
           let rrem = loop (rrem, lrem) in
           if debug_option () then
             Feedback.msg_notice Pp.(str "writing message id " ++ int id);
-          (match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
-          | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
-          | Some response ->
-            let response = Response.of_message response in
-            match Response.get response with
-            | Response.Initialized -> ()
-            | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2"));
+          add_global_context request;
           id::rrem
       | _, _ -> assert false in
     remote_state := loop (curtailed_remote_state, stack);
@@ -408,24 +389,82 @@ type connection =
   ; sync_context_stack : ?keep_cache:bool -> (glob_tactic_expr * location) TacticMap.t -> Environ.env ->
       CICGraphMonad.state * int }
 
-let get_connection =
-  let connection = ref None in
+type communicator =
+  { add_global_context : (Api.Builder.GlobalContextAddition.t -> unit) -> unit
+  ; sync_context_stack : ?keep_cache:bool -> (glob_tactic_expr * location) TacticMap.t -> Environ.env ->
+      CICGraphMonad.state * int
+  ; request_prediction : (Api.Builder.PredictionRequest.t -> unit) ->
+      (Graph_api.ro, Api.Reader.Prediction.t, Api.Reader.array_t) Capnp.Array.t
+  ; request_text_prediction : (Api.Builder.PredictionRequest.t -> unit) ->
+      (Graph_api.ro, Api.Reader.TextPrediction.t, Api.Reader.array_t) Capnp.Array.t
+  ; check_alignment : unit -> (Graph_api.ro, int64, Api.Reader.array_t) Capnp.Array.t *
+                              (Graph_api.ro, Api.Reader.Node.t, Api.Reader.array_t) Capnp.Array.t }
+
+let get_communicator =
+  let module Request = Api.Builder.PredictionProtocol.Request in
+  let module Response = Api.Reader.PredictionProtocol.Response in
+  let communicator = ref None in
   fun () ->
-    match !connection with
+    match !communicator with
     | None ->
-      let rc, wc =
+      let socket =
         if CString.is_empty @@ tcp_option () then
           connect_stdin ()
         else
           let addr = Str.split (Str.regexp ":") (tcp_option()) in
           connect_tcpip (List.nth addr 0) (List.nth addr 1) in
-      let conn = { rc; wc; sync_context_stack = sync_context_stack rc wc } in
-      connection := Some conn;
-      conn
-    | Some conn -> conn
+      let rc, wc = connect_socket socket in
+      let add_global_context gca =
+        let req = Request.init_root () in
+        gca (Request.initialize_init req);
+        match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message req  with
+         | None -> CErrors.anomaly Pp.(str "Capnp protocol error: Message expected but none received")
+         | Some response ->
+           let response = Response.of_message response in
+           match Response.get response with
+           | Response.Initialized -> ()
+           | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'Initialized' message expected") in
+      let request_prediction rp =
+        let req = Request.init_root () in
+        rp (Request.predict_init req);
+        match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message req  with
+        | None -> CErrors.anomaly Pp.(str "Capnp protocol error: Message expected but none received")
+        | Some response ->
+          let response = Response.of_message response in
+          match Response.get response with
+          | Response.Prediction preds -> preds
+          | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'Prediction' message expected") in
+      let request_text_prediction rp =
+        let req = Request.init_root () in
+        rp (Request.predict_init req);
+        match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message req  with
+        | None -> CErrors.anomaly Pp.(str "Capnp protocol error: Message expected but none received")
+        | Some response ->
+          let response = Response.of_message response in
+          match Response.get response with
+          | Response.TextPrediction preds -> preds
+          | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'TextPrediction' message expected") in
+      let check_alignment () =
+        let req = Request.init_root () in
+        Request.check_alignment_set req;
+        match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message req  with
+        | None -> CErrors.anomaly Pp.(str "Capnp protocol error: Message expected but none received")
+        | Some response ->
+          let response = Response.of_message response in
+          match Response.get response with
+          | Response.Alignment alignment ->
+            Response.Alignment.unaligned_tactics_get alignment,
+            Response.Alignment.unaligned_definitions_get alignment
+          | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'Alignment' message expected") in
+      let sync_context_stack = sync_context_stack add_global_context in
+      let comm = { add_global_context; sync_context_stack; request_prediction
+                 ; request_text_prediction; check_alignment } in
+      communicator := Some comm;
+      comm
+    | Some comm -> comm
 
 let check_neural_alignment () =
-  let { rc; wc; sync_context_stack } = get_connection () in
+  let { sync_context_stack; check_alignment; _ } = get_communicator () in
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
@@ -433,50 +472,42 @@ let check_neural_alignment () =
   let state, stack_size = sync_context_stack ~keep_cache:false tacs env in
   let request = Request.init_root () in
   Request.check_alignment_set request;
-  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
-  | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
-  | Some response ->
-    let response = Response.of_message response in
-    match Response.get response with
-    | Response.Alignment alignment ->
-      let find_global_argument = find_global_argument state in
-      let unaligned_tacs = List.map (fun t -> fst @@ find_tactic tacs t) @@
-        Response.Alignment.unaligned_tactics_get_list alignment in
-      let unaligned_defs = List.map (fun node ->
-          let sid = stack_size - 1 - Api.Reader.Node.dep_index_get node in
-          let nid = Api.Reader.Node.node_index_get_int_exn node in
-          find_global_argument (sid, nid)) @@
-        Response.Alignment.unaligned_definitions_get_list alignment in
-      let tacs_msg = if CList.is_empty unaligned_tacs then Pp.mt () else
-          Pp.(fnl () ++ str "Unaligned tactics: " ++ fnl () ++
-             prlist_with_sep fnl (Pptactic.pr_glob_tactic env) unaligned_tacs) in
-      let defs_msg =
-        let open Tactic_one_variable in
-        if CList.is_empty unaligned_defs then Pp.mt () else
-          Pp.(fnl () ++ str "Unaligned definitions: " ++ fnl () ++
-              prlist_with_sep fnl
-                (function
-                  | TVar id -> Id.print id
-                  | TRef r -> Libnames.pr_path @@ Nametab.path_of_global r
-                  | TOther -> Pp.mt ())
-                unaligned_defs) in
-      let def_count = Id.Map.cardinal state.section_nodes +
-                      Cmap.cardinal state.definition_nodes.constants +
-                      Indmap.cardinal state.definition_nodes.inductives +
-                      Constrmap.cardinal state.definition_nodes.constructors +
-                      ProjMap.cardinal state.definition_nodes.projections in
-      Feedback.msg_notice Pp.(
-          str "There are " ++ int (List.length unaligned_tacs) ++ str "/" ++
-          int (TacticMap.cardinal tacs) ++ str " unaligned tactics and " ++
-          int (List.length unaligned_defs) ++ str "/" ++
-          int def_count ++ str " unaligned definitions." ++
-          tacs_msg ++ defs_msg
-        )
-    | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 2")
+  let unaligned_tacs, unaligned_defs = check_alignment () in
+  let find_global_argument = find_global_argument state in
+  let unaligned_tacs = Capnp.Array.map_list ~f:(fun t -> fst @@ find_tactic tacs t) unaligned_tacs in
+  let unaligned_defs = Capnp.Array.map_list ~f:(fun node ->
+      let sid = stack_size - 1 - Api.Reader.Node.dep_index_get node in
+      let nid = Api.Reader.Node.node_index_get_int_exn node in
+      find_global_argument (sid, nid)) unaligned_defs in
+  let tacs_msg = if CList.is_empty unaligned_tacs then Pp.mt () else
+      Pp.(fnl () ++ str "Unaligned tactics: " ++ fnl () ++
+          prlist_with_sep fnl (Pptactic.pr_glob_tactic env) unaligned_tacs) in
+  let defs_msg =
+    let open Tactic_one_variable in
+    if CList.is_empty unaligned_defs then Pp.mt () else
+      Pp.(fnl () ++ str "Unaligned definitions: " ++ fnl () ++
+          prlist_with_sep fnl
+            (function
+              | TVar id -> Id.print id
+              | TRef r -> Libnames.pr_path @@ Nametab.path_of_global r
+              | TOther -> Pp.mt ())
+            unaligned_defs) in
+  let def_count = Id.Map.cardinal state.section_nodes +
+                  Cmap.cardinal state.definition_nodes.constants +
+                  Indmap.cardinal state.definition_nodes.inductives +
+                  Constrmap.cardinal state.definition_nodes.constructors +
+                  ProjMap.cardinal state.definition_nodes.projections in
+  Feedback.msg_notice Pp.(
+      str "There are " ++ int (List.length unaligned_tacs) ++ str "/" ++
+      int (TacticMap.cardinal tacs) ++ str " unaligned tactics and " ++
+      int (List.length unaligned_defs) ++ str "/" ++
+      int def_count ++ str " unaligned definitions." ++
+      tacs_msg ++ defs_msg
+    )
 
 let push_cache () =
   if textmode_option () then () (* No caching needed for the text model at the moment *) else
-    let { rc; wc; sync_context_stack } = get_connection () in
+    let { sync_context_stack; _ } = get_communicator () in
     (* We don't send the list of tactics, hence the empty list. Tactics are only sent right before
        prediction requests are made. *)
     let _, stack_size = sync_context_stack TacticMap.empty (Global.env ()) in
@@ -498,48 +529,41 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   module LH = Learner_helper.L(TS)
   open TS
 
-  let predict_text rc wc env ps =
+  let predict_text request_text_prediction env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
     let module Request = Api.Builder.PredictionProtocol.Request in
-    let module Prediction = Api.Reader.PredictionProtocol.TextPrediction in
+    let module Prediction = Api.Reader.TextPrediction in
+    let module PredictionRequest = Api.Builder.PredictionRequest in
     let module Response = Api.Reader.PredictionProtocol.Response in
-    let request = Request.init_root () in
-    let predict = Request.predict_init request in
-    let state = Request.Predict.state_init predict in
-    let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
-    let concl = term_repr @@ proof_state_goal ps in
-    ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
-    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
-    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3a")
-    | Some response ->
-      let response = Response.of_message response in
-      match Response.get response with
-      | Response.TextPrediction preds ->
-        let preds = Capnp.Array.to_list preds in
-        let preds = List.filter_map (fun p ->
-            try
-              let tac = Tacintern.intern_pure_tactic (Genintern.empty_glob_sign env) @@
-                Pcoq.parse_string Pltac.tactic_eoi @@ Prediction.tactic_text_get p in
-              let conf = Prediction.confidence_get p in
-              Some (tac, conf)
-            with e when CErrors.noncritical e ->
-              None
-          ) preds in
-        preds
-      | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
+    let builder predict =
+      let state = PredictionRequest.state_init predict in
+      let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
+      let concl = term_repr @@ proof_state_goal ps in
+      ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty in
+    let preds = request_text_prediction builder in
+    let preds = Capnp.Array.to_list preds in
+    let preds = List.filter_map (fun p ->
+        try
+          let tac = Tacintern.intern_pure_tactic (Genintern.empty_glob_sign env) @@
+            Pcoq.parse_string Pltac.tactic_eoi @@ Prediction.tactic_text_get p in
+          let conf = Prediction.confidence_get p in
+          Some (tac, conf)
+        with e when CErrors.noncritical e ->
+          None
+      ) preds in
+    preds
 
-  let predict rc wc find_global_argument stack_size state tacs env ps =
+  let predict request_prediction find_global_argument stack_size state tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
     let module Node = Api.Builder.Node in
     let module Request = Api.Builder.PredictionProtocol.Request in
-    let module Prediction = Api.Reader.PredictionProtocol.Prediction in
+    let module Prediction = Api.Reader.Prediction in
+    let module PredictionRequest = Api.Builder.PredictionRequest in
     let module Response = Api.Reader.PredictionProtocol.Response in
-    let request = Request.init_root () in
-    let predict = Request.predict_init request in
     let updater =
       let open Graph_generator_learner.ConvertStructures(TS) in
       let (_, evm, _) as ps = mk_proof_state ps in
@@ -554,72 +578,66 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         let (p, n), _ = G.lower node in
         Id.Map.add id (p, node_local_index (p, n)) map) Id.Map.empty ps.context in
     let find_local_argument = find_local_argument context_map in
-    let graph = Request.Predict.graph_init predict in
-
     let node_dep_index (stack_id, _) = stack_size - stack_id in
     let node_hash n = snd @@ G.transform_node_type n in
     let node_label n = fst @@ G.transform_node_type n in
-    W.write_graph
-      ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
-      ~node_dep_index ~node_local_index
-      ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph
-      ~include_metadata:(include_metadata_option ());
-    let state = Request.Predict.state_init predict in
-    W.write_proof_state
-      { node_depindex = (fun n -> node_dep_index (fst @@ G.lower n))
-      ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps
-      ~include_metadata:(include_metadata_option ());
-    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
-    | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
-    | Some response ->
-      let response = Response.of_message response in
-      match Response.get response with
-      | Response.Prediction preds ->
-        let preds = Capnp.Array.to_list preds in
-        let preds = CList.filter_map (fun (i, p) ->
-            let tac = Prediction.tactic_get p in
-            let tid = Tactic.ident_get tac in
-            let tac, params = find_tactic tacs tid in
-            let convert_args args =
-              List.mapi (fun j arg ->
-                  let term = match Argument.get arg with
-                    | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
-                    | Argument.Term t -> t in
-                  let dep_index = Argument.Term.dep_index_get term in
-                  let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
-                  match dep_index with
-                  | 0 -> find_local_argument node_index
-                  | _ ->
-                    (try
-                       find_global_argument (stack_size - dep_index, node_index)
-                     with UnknownArgument (sid, nid) ->
-                       CErrors.anomaly
-                         Pp.(str "Unknown global argument (" ++ int sid ++ str ", " ++ int nid ++ str ") at index "
-                             ++ int j ++ str " for prediction " ++ int i ++ str " which is tactic " ++
-                             Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                             str " with hash " ++ str (Stdint.Int64.to_string tid)))
-                ) args in
-            let args = convert_args @@ Prediction.arguments_get_list p in
-            if params <> List.length args then begin
-              CErrors.anomaly
-                Pp.(str "Mismatched argument length for prediction " ++ int i ++ str " which is tactic " ++
-                    Pptactic.pr_glob_tactic (Global.env ()) tac ++
-                    str " with hash " ++ str (Stdint.Int64.to_string tid) ++
-                    str ". Number of arguments expected: " ++ int params ++
-                    str ". Number of argument given: " ++ int (List.length args))
-            end;
-            let conf = Prediction.confidence_get p in
-            Option.map (fun tac -> tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
-          ) @@ CList.mapi (fun i x -> i, x) preds in
-        preds
-      | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
+    let request_builder predict =
+      let graph = PredictionRequest.graph_init predict in
+      W.write_graph
+        ~node_hash ~node_label ~node_lower:(fun n -> fst @@ G.lower n)
+        ~node_dep_index ~node_local_index
+        ~node_count:(def_count + node_count) ~edge_count (AList.append defs nodes) edges graph
+        ~include_metadata:(include_metadata_option ());
+      let state = PredictionRequest.state_init predict in
+      W.write_proof_state
+        { node_depindex = (fun n -> node_dep_index (fst @@ G.lower n))
+        ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps
+        ~include_metadata:(include_metadata_option ()) in
+    let preds = request_prediction request_builder in
+    let preds = Capnp.Array.to_list preds in
+    let preds = CList.filter_map (fun (i, p) ->
+        let tac = Prediction.tactic_get p in
+        let tid = Tactic.ident_get tac in
+        let tac, params = find_tactic tacs tid in
+        let convert_args args =
+          List.mapi (fun j arg ->
+              let term = match Argument.get arg with
+                | Argument.Undefined _ | Argument.Unresolvable -> raise IllegalArgument
+                | Argument.Term t -> t in
+              let dep_index = Argument.Term.dep_index_get term in
+              let node_index = Stdint.Uint32.to_int @@ Argument.Term.node_index_get term in
+              match dep_index with
+              | 0 -> find_local_argument node_index
+              | _ ->
+                (try
+                   find_global_argument (stack_size - dep_index, node_index)
+                 with UnknownArgument (sid, nid) ->
+                   CErrors.anomaly
+                     Pp.(str "Unknown global argument (" ++ int sid ++ str ", " ++ int nid ++ str ") at index "
+                         ++ int j ++ str " for prediction " ++ int i ++ str " which is tactic " ++
+                         Pptactic.pr_glob_tactic (Global.env ()) tac ++
+                         str " with hash " ++ str (Stdint.Int64.to_string tid)))
+            ) args in
+        let args = convert_args @@ Prediction.arguments_get_list p in
+        if params <> List.length args then begin
+          CErrors.anomaly
+            Pp.(str "Mismatched argument length for prediction " ++ int i ++ str " which is tactic " ++
+                Pptactic.pr_glob_tactic (Global.env ()) tac ++
+                str " with hash " ++ str (Stdint.Int64.to_string tid) ++
+                str ". Number of arguments expected: " ++ int params ++
+                str ". Number of argument given: " ++ int (List.length args))
+        end;
+        let conf = Prediction.confidence_get p in
+        Option.map (fun tac -> tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
+      ) @@ CList.mapi (fun i x -> i, x) preds in
+    preds
 
   type model =
     { tactics : (glob_tactic_expr * int) TacticMap.t
-    ; connection : connection }
+    ; connection : communicator }
 
   let empty () =
-    let connection = get_connection () in
+    let connection = get_communicator () in
     { tactics = TacticMap.empty; connection }
 
   let add_tactic_info env map tac =
@@ -641,7 +659,8 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       last_model := tactics;
       { db with tactics }
 
-  let predict { tactics; connection = { rc; wc; sync_context_stack } } =
+  let predict { tactics; connection = { add_global_context; sync_context_stack
+                                      ; request_prediction; request_text_prediction; _ } } =
     let env = Global.env () in
     if not @@ textmode_option () then
       let state, stack_size =
@@ -649,15 +668,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let find_global_argument = find_global_argument state in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict rc wc find_global_argument stack_size state tactics env
+          let preds = predict request_prediction find_global_argument stack_size state tactics env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
     else
-      let () = init_predict_text rc wc in
+      let () = init_predict_text add_global_context in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict_text rc wc env
+          let preds = predict_text request_text_prediction env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
