@@ -195,6 +195,9 @@
                     {% endif %}
                     {% endfor %}
                 </div>
+                <a class="ui item right" id="download">
+                    <i class="download icon"></i>
+                    Download</a>
             </div>
             {% if text %}
             <div class="pre-container" style="cursor: pointer" onclick="$('#text-modal').modal('show')">
@@ -257,6 +260,9 @@
                     {% for id, text in popups %}
                     $("#{{ id }}").click(() => $('#{{ id }}-modal').modal('show'))
                     {% endfor %}
+                    const blob = new Blob([svg]);
+                    $('#download').attr('href', window.URL.createObjectURL(blob));
+                    $('#download').attr('download', 'visualization.svg');
                 } 
             </script>
         </div>
