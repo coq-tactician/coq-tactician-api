@@ -19,7 +19,6 @@ from sanic.worker.loader import AppLoader
 def post_process(output: GraphVisualizationOutput, settings: Settings):
     result = asdict(output)
     result['settings'] = settings
-    result['svg'] = result['svg'].decode("utf-8").split('\n', 3)[-1]
     result['edge_labels'] = [(v, inflection.camelize(name)) for (name, v) in
                              graph_api_capnp.EdgeClassification.schema.enumerants.items()]
     result['node_labels'] = [(v, inflection.camelize(name)) for (v, name) in

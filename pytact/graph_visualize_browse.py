@@ -65,7 +65,7 @@ class GraphVisualizationData:
 
 @dataclass
 class GraphVisualizationOutput:
-    svg: bytes
+    svg: str
     location: list[tuple[str, str]] # tuple[Name, URL]
     active_location: int
     text: list[str] = field(default_factory=lambda: [])
@@ -245,7 +245,7 @@ class GraphVisualizator:
                 dot.edge(str(cluster[-1].node), fid, ltail = ltail)
 
         location = self.path2location(fname)
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
     def visualize_term(self, dot, start: Node, depth, depth_ignore: set[Node] = set(),
                        maxNodes=100, seen: dict[str, str]|None=None,
@@ -347,7 +347,7 @@ class GraphVisualizator:
             [(make_label(self.data[fname].module_name, label),
               self.url_maker.definition(fname, definition))] +
             proof)
-        return GraphVisualizationOutput(dot.pipe(), ext_location, len(location), text)
+        return GraphVisualizationOutput(dot.source, ext_location, len(location), text)
 
     def proof(self, fname: Path, definition: int):
         node = self.data[fname].node_by_id(definition)
@@ -403,7 +403,7 @@ class GraphVisualizator:
                     [(make_label(self.data[fname].module_name, d.name),
                       self.url_maker.definition(fname, definition)),
                      ("Proof", self.url_maker.proof(fname, definition))])
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
     def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int,
                       depth = 0, maxNodes=100):
@@ -507,7 +507,7 @@ class GraphVisualizator:
                      ("Proof", self.url_maker.proof(fname, definition)),
                      (f"Step {stepi} outcome {outcomei}",
                       self.url_maker.outcome(fname, definition, stepi, outcomei))])
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1, [], popups)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1, [], popups)
 
     def folder(self, expand_path: Path) -> GraphVisualizationOutput:
         expand_parts = expand_path.parts
@@ -569,7 +569,7 @@ class GraphVisualizator:
             tunnel_hierarchy(dot2, hierarchy, 0)
 
         location = self.path2location(expand_path)
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
 def transitive_closure(rel):
     trans_deps = defaultdict(set)
