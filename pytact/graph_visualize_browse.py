@@ -44,6 +44,8 @@ class Settings:
     order_edges: bool = False
     concentrate_edges: bool = False
     show_non_anonymized_tactics: bool = False
+    max_depth: int = 0
+    max_size: int = 100
 
     def __post_init__(self):
         if not self.no_defaults:
@@ -248,13 +250,13 @@ class GraphVisualizator:
         return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
     def visualize_term(self, dot, start: Node, depth, depth_ignore: set[Node] = set(),
-                       maxNodes=100, seen: dict[str, str]|None=None,
+                       max_nodes=100, seen: dict[str, str]|None=None,
                        node_label_map=node_label_map,
                        prefix='', before_prefix='', proof_state_prefix: dict[int, str] = {}
                        ) -> str:
         if seen == None:
             seen = {}
-        nodes_left = maxNodes
+        nodes_left = max_nodes
         def recurse(node: Node, depth, context_prefix):
             nonlocal seen
             nonlocal nodes_left
@@ -318,7 +320,7 @@ class GraphVisualizator:
         id = recurse(start, depth, before_prefix)
         return id
 
-    def definition(self, fname: Path, definition: int, maxNodes=100):
+    def definition(self, fname: Path, definition: int):
         dot = graphviz.Digraph(format='svg')
         self.dot_apply_style(dot)
 
@@ -326,9 +328,11 @@ class GraphVisualizator:
         depth_ignore = set()
         if d := start.definition:
             depth_ignore = {d.node for d in start.definition.cluster}
+        depth = self.settings.max_depth
+        max_nodes = self.settings.max_size
 
-        self.visualize_term(dot, start, depth=0, depth_ignore=depth_ignore,
-                            maxNodes=maxNodes)
+        self.visualize_term(dot, start, depth=depth, depth_ignore=depth_ignore,
+                            max_nodes=max_nodes)
 
         location = self.path2location(fname)
         ext_location = location
@@ -405,8 +409,9 @@ class GraphVisualizator:
                      ("Proof", self.url_maker.proof(fname, definition))])
         return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
-    def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int,
-                      depth = 0, maxNodes=100):
+    def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int):
+        depth = self.settings.max_depth
+        max_nodes = self.settings.max_size
         node = self.data[fname].node_by_id(definition)
         d = node.definition
         if not d:
@@ -448,7 +453,7 @@ class GraphVisualizator:
             popups.append(('before-state', render_proof_state_text(ps)))
             prefix = 'before'
             self.visualize_term(dot2, ps.root, depth=depth, prefix=prefix, before_prefix=prefix,
-                                maxNodes=maxNodes, seen=seen,
+                                max_nodes=max_nodes, seen=seen,
                                 node_label_map=node_label_map_with_ctx_names(ps.context, ps.context_text))
 
         with dot.subgraph(name='cluster_tactic') as dot2:
@@ -466,7 +471,7 @@ class GraphVisualizator:
                     dot2.node(f"tactic-arg{i}", label=f"arg {i}: unknown")
                 else:
                     id = self.visualize_term(dot2, arg, depth=depth, prefix=prefix, before_prefix=prefix,
-                                        maxNodes=maxNodes, seen=seen)
+                                        max_nodes=max_nodes, seen=seen)
                     dot2.node(f"tactic-arg{i}", label=f"arg {i}")
                     dot2.edge(f"tactic-arg{i}", id)
                 dot2.edge('tactic', f"tactic-arg{i}")
@@ -481,7 +486,7 @@ class GraphVisualizator:
                 popups.append((f'after-state{ai}', render_proof_state_text(after)))
                 prefix = f'after{ai}'
                 self.visualize_term(dot2, after.root, depth=depth, prefix=prefix, before_prefix=prefix,
-                                    maxNodes=maxNodes, seen=seen,
+                                    max_nodes=max_nodes, seen=seen,
                                     node_label_map=node_label_map_with_ctx_names(after.context, after.context_text))
 
         if not self.settings.hide_proof_terms:
@@ -495,7 +500,7 @@ class GraphVisualizator:
                 proof_state_prefix = {after.id: f'after{ai}' for ai, after in enumerate(outcome.after)}
                 id = self.visualize_term(dot2, outcome.term, depth=depth, prefix=prefix, before_prefix='before',
                                     proof_state_prefix=proof_state_prefix,
-                                    maxNodes=maxNodes, seen=seen)
+                                    max_nodes=max_nodes, seen=seen)
                 # Sometimes the subgraph is completely empty because the term is contained in another subgraph.
                 # Therefore, we artificially add a extra root node
                 dot2.node('artificial-root', 'TermRoot')

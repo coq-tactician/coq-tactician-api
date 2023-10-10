@@ -153,10 +153,11 @@
                     </div>
                     <div class="field">
                         <label>Unshare nodes</label>
-                        <button class="tiny ui button compact fluid"
-                                onclick="$('#unshare_nodes option').prop('selected', true)">
+                        <div class="tiny ui button compact fluid"
+                             onclick="$('#unshare_nodes option').prop('selected', true);
+                                      $('#settings-form').submit()">
                             Select All
-                        </button>
+                        </div>
                         <select class="ui selection dropdown search clearable"
                                 id="unshare_nodes" name="unshare_nodes" multiple>
                             {% for (value, name) in node_labels %}
@@ -164,6 +165,28 @@
                                     {% if value in settings.unshare_nodes %}selected{% endif %}>{{ name }}</option>
                             {% endfor %}
                         </select>
+                    </div>
+                    <div>
+                        <div class="ui grid">
+                            <div class="five wide column">
+                                <input type="number" id="max_depth" name="max_depth" min="0"
+                                       style="width:5.5rem" value="{{ settings.max_depth }}">
+                            </div>
+                            <div class="eleven wide column middle aligned">
+                                <label for="max_depth">Definition expansion depth</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="ui grid">
+                            <div class="five wide column">
+                                <input type="number" id="max_size" name="max_size" min="1"
+                                       style="width:5.5rem" value="{{ settings.max_size }}">
+                            </div>
+                            <div class="eleven wide column middle aligned">
+                                <label for="max_size">Maximum number of nodes</label>
+                            </div>
+                        </div>
                     </div>
                     <div class="field" id="settings-submit">
                         <input type="submit" class="ui button">
