@@ -18,7 +18,7 @@ authors = [
     {name = "Miroslav Olšák", email = "mirek@olsak.net"},
 ]
 readme = "pytact/README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 license = {text = "MIT License"}
 classifiers = [
     "Development Status :: 1 - Planning",

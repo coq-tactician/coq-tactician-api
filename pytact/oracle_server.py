@@ -6,6 +6,7 @@ import socket
 import socketserver
 import argparse
 import contextlib
+from typing import Union, Tuple
 from pytact.data_reader import (data_reader, Original, capnp_message_generator, ProofState,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 TacticPredictionText, TacticPredictionsText,
@@ -20,7 +21,7 @@ class LocalArgument:
 @dataclass(eq=True, frozen=True)
 class OracleTactic:
     tactic_id: int
-    arguments: tuple[GlobalArgument | LocalArgument, ...]
+    arguments: Tuple[Union[GlobalArgument, LocalArgument], ...]
     clean: bool
 
 def text_prediction_loop(text_oracle_data, context: GlobalContextMessage):
