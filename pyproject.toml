@@ -33,7 +33,7 @@ classifiers = [
     "Operating System :: POSIX :: Linux"
 ]
 dependencies = [
-    "pycapnp>=1.2.2",
+    "pycapnp>=2.0.0b1",
     "immutables",
     "graphviz",
     "sanic==23.6.0",
