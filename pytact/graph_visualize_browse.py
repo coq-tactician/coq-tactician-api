@@ -2,9 +2,9 @@ from dataclasses import dataclass, field
 import os
 import graphviz
 from collections import defaultdict
-from collections.abc import Sequence
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Union, List, Dict, Set, Tuple, Sequence
 from pytact.data_reader import Dataset, Definition, Node, ProofState, Original, Discharged, Substituted
 import html
 import inflection
@@ -36,14 +36,16 @@ class UrlMaker(ABC):
 @dataclass
 class Settings:
     no_defaults: bool = False # Should we use default settings?
-    ignore_edges: list[int] = field(default_factory=lambda: [])
-    unshare_nodes: list[int] = field(default_factory=lambda: [])
+    ignore_edges: List[int] = field(default_factory=lambda: [])
+    unshare_nodes: List[int] = field(default_factory=lambda: [])
     show_trivial_evar_substs: bool = False
     hide_proof_terms: bool = False
     show_edge_labels: bool = False
     order_edges: bool = False
     concentrate_edges: bool = False
     show_non_anonymized_tactics: bool = False
+    max_depth: int = 0
+    max_size: int = 100
 
     def __post_init__(self):
         if not self.no_defaults:
@@ -54,9 +56,9 @@ class Settings:
 
 @dataclass
 class GraphVisualizationData:
-    data: dict[Path, Dataset]
-    trans_deps: dict[Path, set[Path]] = field(init=False)
-    graphid2path: list[Path] = field(init=False)
+    data: Dict[Path, Dataset]
+    trans_deps: Dict[Path, Set[Path]] = field(init=False)
+    graphid2path: List[Path] = field(init=False)
 
     def __post_init__(self):
         self.trans_deps = transitive_closure({d.filename: list(d.dependencies)
@@ -65,13 +67,13 @@ class GraphVisualizationData:
 
 @dataclass
 class GraphVisualizationOutput:
-    svg: bytes
-    location: list[tuple[str, str]] # tuple[Name, URL]
+    svg: str
+    location: List[Tuple[str, str]] # tuple[Name, URL]
     active_location: int
-    text: list[str] = field(default_factory=lambda: [])
-    popups: list[tuple[str, str]] = field(default_factory=lambda: []) # DOM id, text
+    text: List[str] = field(default_factory=lambda: [])
+    popups: List[Tuple[str, str]] = field(default_factory=lambda: []) # DOM id, text
 
-def node_label_map(node: Node) -> tuple[str, str, str]:
+def node_label_map(node: Node) -> Tuple[str, str, str]:
     enum = apic.Graph_Node_Label_Which
     label = node.label
     if d := node.definition:
@@ -80,30 +82,30 @@ def node_label_map(node: Node) -> tuple[str, str, str]:
             'box', name.split('.')[-1],
             f"{inflection.camelize(node.label.definition.which.name.lower())} {d.name}"
         )
-    match label.which:
-        case enum.SORT_PROP:
-            return 'ellipse', 'Prop', 'SortProp'
-        case enum.SORT_S_PROP:
-            return 'ellipse', 'SProp', 'SortSProp'
-        case enum.SORT_SET:
-            return 'ellipse', 'Set', 'SortSet'
-        case enum.SORT_TYPE:
-            return 'ellipse', 'Type', 'SortType'
-        case enum.REL:
-            return 'circle', '↑', 'rel'
-        case enum.PROD:
-            return 'circle', '∀', 'prod'
-        case enum.LAMBDA:
-            return 'circle', 'λ', 'lambda'
-        case enum.LET_IN:
-            return 'ellipse', 'let', 'LetIn'
-        case enum.APP:
-            return 'circle', '@', 'app'
-        case enum.CASE_BRANCH:
-            return 'ellipse', 'branch', 'CaseBranch'
-        case _:
-            name = inflection.camelize(label.which.name.lower())
-            return 'ellipse', name, name
+    which = label.which
+    if which == enum.SORT_PROP:
+        return 'ellipse', 'Prop', 'SortProp'
+    elif which == enum.SORT_S_PROP:
+        return 'ellipse', 'SProp', 'SortSProp'
+    elif which == enum.SORT_SET:
+        return 'ellipse', 'Set', 'SortSet'
+    elif which == enum.SORT_TYPE:
+        return 'ellipse', 'Type', 'SortType'
+    elif which == enum.REL:
+        return 'circle', '↑', 'rel'
+    elif which == enum.PROD:
+        return 'circle', '∀', 'prod'
+    elif which == enum.LAMBDA:
+        return 'circle', 'λ', 'lambda'
+    elif which == enum.LET_IN:
+        return 'ellipse', 'let', 'LetIn'
+    elif which == enum.APP:
+        return 'circle', '@', 'app'
+    elif which == enum.CASE_BRANCH:
+        return 'ellipse', 'branch', 'CaseBranch'
+    else:
+        name = inflection.camelize(label.which.name.lower())
+        return 'ellipse', name, name
 
 def truncate_string(data, maximum):
     return data[:(maximum-2)] + '..' if len(data) > maximum else data
@@ -163,8 +165,8 @@ class GraphVisualizator:
             dot.attr('graph', concentrate='true')
 
 
-    def render_node(self, dot, node: Node, shape: str, label: str, id: str | None = None,
-                    tooltip: str | None = None):
+    def render_node(self, dot, node: Node, shape: str, label: str, id: Union[str, None] = None,
+                    tooltip: Union[str, None] = None):
         if not id:
             id = str(node)
         if not tooltip:
@@ -195,27 +197,28 @@ class GraphVisualizator:
             if representative and representative.node == d.node:
                 label = "Representative: " + label
             tooltip = make_tooltip(d)
-            match d.status:
-                case Original():
+            if isinstance(d.status, Original):
+                id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
+            elif isinstance(d.status, Discharged):
+                id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
+                target = d.status.original
+                dot.edge(id, repr(target.node),
+                         arrowtail="inv", dir="both", constraint="false", style="dashed")
+            elif isinstance(d.status, Substituted):
+                target = d.status.original
+                if d.node.graph == target.node.graph:
                     id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
-                case Discharged(target):
-                    id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
-                    dot.edge(id, repr(target.node),
-                                arrowtail="inv", dir="both", constraint="false", style="dashed")
-                case Substituted(target):
-                    if d.node.graph == target.node.graph:
-                        id = self.render_node(dot2, d.node, 'box', label, tooltip=tooltip)
-                        dot.edge(id, str(target.node),
-                                    arrowtail="odot", dir="both", constraint="false", style="dashed")
-                    else:
-                        with dot2.subgraph() as dot3:
-                            dot3.attr(rank='same')
-                            id = self.render_node(dot3, d.node, 'box', label, tooltip=tooltip)
-                            id2 = self.render_node(dot3, target.node, 'box',
-                                                   make_label(module_name, target.name),
-                                                   tooltip=make_tooltip(target))
-                            dot.edge(id, id2,
-                                      arrowtail="odot", dir="both", constraint="false", style="dashed")
+                    dot.edge(id, str(target.node),
+                             arrowtail="odot", dir="both", constraint="false", style="dashed")
+                else:
+                    with dot2.subgraph() as dot3:
+                        dot3.attr(rank='same')
+                        id = self.render_node(dot3, d.node, 'box', label, tooltip=tooltip)
+                        id2 = self.render_node(dot3, target.node, 'box',
+                                               make_label(module_name, target.name),
+                                               tooltip=make_tooltip(target))
+                        dot.edge(id, id2,
+                                 arrowtail="odot", dir="both", constraint="false", style="dashed")
 
         for cluster in dataset.clustered_definitions():
 
@@ -245,32 +248,32 @@ class GraphVisualizator:
                 dot.edge(str(cluster[-1].node), fid, ltail = ltail)
 
         location = self.path2location(fname)
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
-    def visualize_term(self, dot, start: Node, depth, depth_ignore: set[Node] = set(),
-                       maxNodes=100, seen: dict[str, str]|None=None,
+    def visualize_term(self, dot, start: Node, depth, depth_ignore: Set[Node] = set(),
+                       max_nodes=100, seen: Union[Dict[str, str], None]=None,
                        node_label_map=node_label_map,
-                       prefix='', before_prefix='', proof_state_prefix: dict[int, str] = {}
+                       prefix='', before_prefix='', proof_state_prefix: Dict[int, str] = {}
                        ) -> str:
         if seen == None:
             seen = {}
-        nodes_left = maxNodes
+        nodes_left = max_nodes
         def recurse(node: Node, depth, context_prefix):
             nonlocal seen
             nonlocal nodes_left
 
             enum = graph_api_capnp.Graph.Node.Label
-            match node.label.which:
-                case enum.proofState:
-                    node_prefix = context_prefix
-                case enum.contextAssum:
-                    node_prefix = context_prefix
-                case enum.contextDef:
-                    node_prefix = context_prefix
-                case enum.evarSubst:
-                    node_prefix = prefix + context_prefix
-                case _:
-                    node_prefix = prefix
+            which = node.label.which
+            if which == enum.proofState:
+                node_prefix = context_prefix
+            elif which == enum.contextAssum:
+                node_prefix = context_prefix
+            elif which == enum.contextDef:
+                node_prefix = context_prefix
+            elif which == enum.evarSubst:
+                node_prefix = prefix + context_prefix
+            else:
+                node_prefix = prefix
             id = node_prefix + str(node)
             if id in seen:
                 return seen[id]
@@ -292,7 +295,6 @@ class GraphVisualizator:
                     # Find the evar-id
                     evarid = [c.label.proof_state.value for _, c in node.children
                               if c.label.which == graph_api_capnp.Graph.Node.Label.proofState][0]
-                    print(evarid)
                     context_prefix = proof_state_prefix.get(evarid, context_prefix)
 
                 for edge, child in node.children:
@@ -318,7 +320,7 @@ class GraphVisualizator:
         id = recurse(start, depth, before_prefix)
         return id
 
-    def definition(self, fname: Path, definition: int, maxNodes=100):
+    def definition(self, fname: Path, definition: int):
         dot = graphviz.Digraph(format='svg')
         self.dot_apply_style(dot)
 
@@ -326,9 +328,11 @@ class GraphVisualizator:
         depth_ignore = set()
         if d := start.definition:
             depth_ignore = {d.node for d in start.definition.cluster}
+        depth = self.settings.max_depth
+        max_nodes = self.settings.max_size
 
-        self.visualize_term(dot, start, depth=0, depth_ignore=depth_ignore,
-                            maxNodes=maxNodes)
+        self.visualize_term(dot, start, depth=depth, depth_ignore=depth_ignore,
+                            max_nodes=max_nodes)
 
         location = self.path2location(fname)
         ext_location = location
@@ -347,7 +351,7 @@ class GraphVisualizator:
             [(make_label(self.data[fname].module_name, label),
               self.url_maker.definition(fname, definition))] +
             proof)
-        return GraphVisualizationOutput(dot.pipe(), ext_location, len(location), text)
+        return GraphVisualizationOutput(dot.source, ext_location, len(location), text)
 
     def proof(self, fname: Path, definition: int):
         node = self.data[fname].node_by_id(definition)
@@ -403,10 +407,11 @@ class GraphVisualizator:
                     [(make_label(self.data[fname].module_name, d.name),
                       self.url_maker.definition(fname, definition)),
                      ("Proof", self.url_maker.proof(fname, definition))])
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
-    def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int,
-                      depth = 0, maxNodes=100):
+    def outcome(self, fname: Path, definition: int, stepi: int, outcomei: int):
+        depth = self.settings.max_depth
+        max_nodes = self.settings.max_size
         node = self.data[fname].node_by_id(definition)
         d = node.definition
         if not d:
@@ -426,14 +431,14 @@ class GraphVisualizator:
             mapping = {n: s for n, s in zip(context, context_text)}
             def nlm(node: Node):
                 enum = graph_api_capnp.Graph.Node.Label
-                match node.label.which:
-                    case enum.contextAssum:
-                        name = graphviz_escape(mapping[node])
-                        return 'ellipse', truncate_string(name, 20), f"ContextAssum {name}"
-                    case enum.contextDef:
-                        name = graphviz_escape(mapping[node])
-                        return 'ellipse', truncate_string(name, 20), f"ContextDef {name}"
-                    case _:
+                which = node.label.which
+                if which == enum.contextAssum:
+                    name = graphviz_escape(mapping[node])
+                    return 'ellipse', truncate_string(name, 20), f"ContextAssum {name}"
+                elif which == enum.contextDef:
+                    name = graphviz_escape(mapping[node])
+                    return 'ellipse', truncate_string(name, 20), f"ContextDef {name}"
+                else:
                         return node_label_map(node)
             return nlm
 
@@ -448,7 +453,7 @@ class GraphVisualizator:
             popups.append(('before-state', render_proof_state_text(ps)))
             prefix = 'before'
             self.visualize_term(dot2, ps.root, depth=depth, prefix=prefix, before_prefix=prefix,
-                                maxNodes=maxNodes, seen=seen,
+                                max_nodes=max_nodes, seen=seen,
                                 node_label_map=node_label_map_with_ctx_names(ps.context, ps.context_text))
 
         with dot.subgraph(name='cluster_tactic') as dot2:
@@ -466,7 +471,7 @@ class GraphVisualizator:
                     dot2.node(f"tactic-arg{i}", label=f"arg {i}: unknown")
                 else:
                     id = self.visualize_term(dot2, arg, depth=depth, prefix=prefix, before_prefix=prefix,
-                                        maxNodes=maxNodes, seen=seen)
+                                        max_nodes=max_nodes, seen=seen)
                     dot2.node(f"tactic-arg{i}", label=f"arg {i}")
                     dot2.edge(f"tactic-arg{i}", id)
                 dot2.edge('tactic', f"tactic-arg{i}")
@@ -481,7 +486,7 @@ class GraphVisualizator:
                 popups.append((f'after-state{ai}', render_proof_state_text(after)))
                 prefix = f'after{ai}'
                 self.visualize_term(dot2, after.root, depth=depth, prefix=prefix, before_prefix=prefix,
-                                    maxNodes=maxNodes, seen=seen,
+                                    max_nodes=max_nodes, seen=seen,
                                     node_label_map=node_label_map_with_ctx_names(after.context, after.context_text))
 
         if not self.settings.hide_proof_terms:
@@ -495,7 +500,7 @@ class GraphVisualizator:
                 proof_state_prefix = {after.id: f'after{ai}' for ai, after in enumerate(outcome.after)}
                 id = self.visualize_term(dot2, outcome.term, depth=depth, prefix=prefix, before_prefix='before',
                                     proof_state_prefix=proof_state_prefix,
-                                    maxNodes=maxNodes, seen=seen)
+                                    max_nodes=max_nodes, seen=seen)
                 # Sometimes the subgraph is completely empty because the term is contained in another subgraph.
                 # Therefore, we artificially add a extra root node
                 dot2.node('artificial-root', 'TermRoot')
@@ -507,7 +512,7 @@ class GraphVisualizator:
                      ("Proof", self.url_maker.proof(fname, definition)),
                      (f"Step {stepi} outcome {outcomei}",
                       self.url_maker.outcome(fname, definition, stepi, outcomei))])
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1, [], popups)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1, [], popups)
 
     def folder(self, expand_path: Path) -> GraphVisualizationOutput:
         expand_parts = expand_path.parts
@@ -569,7 +574,7 @@ class GraphVisualizator:
             tunnel_hierarchy(dot2, hierarchy, 0)
 
         location = self.path2location(expand_path)
-        return GraphVisualizationOutput(dot.pipe(), location, len(location) - 1)
+        return GraphVisualizationOutput(dot.source, location, len(location) - 1)
 
 def transitive_closure(rel):
     trans_deps = defaultdict(set)

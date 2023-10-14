@@ -76,6 +76,22 @@
              -ms-user-select: none;
              user-select: none;
          }
+
+         @keyframes fadeIn {
+             0% {
+                 opacity: 0;
+             }
+             50% {
+                 opacity: 0;
+             }
+             100% {
+                 opacity: 1;
+             }
+         }
+
+         .fade-in-animation {
+             animation: 1s fadeIn;
+         }
         </style>
     </head>
 
@@ -137,10 +153,11 @@
                     </div>
                     <div class="field">
                         <label>Unshare nodes</label>
-                        <button class="tiny ui button compact fluid"
-                                onclick="$('#unshare_nodes option').prop('selected', true)">
+                        <div class="tiny ui button compact fluid"
+                             onclick="$('#unshare_nodes option').prop('selected', true);
+                                      $('#settings-form').submit()">
                             Select All
-                        </button>
+                        </div>
                         <select class="ui selection dropdown search clearable"
                                 id="unshare_nodes" name="unshare_nodes" multiple>
                             {% for (value, name) in node_labels %}
@@ -148,6 +165,28 @@
                                     {% if value in settings.unshare_nodes %}selected{% endif %}>{{ name }}</option>
                             {% endfor %}
                         </select>
+                    </div>
+                    <div>
+                        <div class="ui grid">
+                            <div class="five wide column">
+                                <input type="number" id="max_depth" name="max_depth" min="0"
+                                       style="width:5.5rem" value="{{ settings.max_depth }}">
+                            </div>
+                            <div class="eleven wide column middle aligned">
+                                <label for="max_depth">Definition expansion depth</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="ui grid">
+                            <div class="five wide column">
+                                <input type="number" id="max_size" name="max_size" min="1"
+                                       style="width:5.5rem" value="{{ settings.max_size }}">
+                            </div>
+                            <div class="eleven wide column middle aligned">
+                                <label for="max_size">Maximum number of nodes</label>
+                            </div>
+                        </div>
                     </div>
                     <div class="field" id="settings-submit">
                         <input type="submit" class="ui button">
@@ -179,6 +218,9 @@
                     {% endif %}
                     {% endfor %}
                 </div>
+                <a class="ui item right" id="download">
+                    <i class="download icon"></i>
+                    Download</a>
             </div>
             {% if text %}
             <div class="pre-container" style="cursor: pointer" onclick="$('#text-modal').modal('show')">
@@ -195,8 +237,57 @@
             </div>
             {% endif %}
             <div id="graph">
-                {{ svg|safe }}
+                <div style="position:relative">
+                    <div id="loader" class="ui massive active text loader fade-in-animation">Rendering</div>
+                </div>
             </div>
+            <script type="module">
+                const dot = {{ svg|tojson }};
+                import { Graphviz } from "https://cdn.jsdelivr.net/npm/@hpcc-js/wasm/dist/index.js";
+                if (Graphviz) {
+                    const graphviz = await Graphviz.load();
+                    const svg = graphviz.layout(dot, "svg", "dot");
+                    $("#graph").graphviz({
+                        svg: svg,
+                        shrink: 0,
+                        tooltips: {
+                            init: function ($graph) {},
+                            show: function () {},
+                            hide: function () {},
+                            update: function () {}
+                        },
+                        ready: function() {
+                            var gv = this
+                            this.$svg[0].scrollIntoView({behavior: "auto", block: "center", inline: "center"});
+                            gv.nodes().click(function (e) {
+                                if (e.shiftKey) {
+                                    var $set = $()
+                                    $set.push(this)
+                                    $set = $set.add(gv.linkedFrom(this, true))
+                                    $set = $set.add(gv.linkedTo(this, true))
+                                    gv.highlight($set, true)
+                                    gv.bringToFront($set)
+                                    return false
+                                }
+                            })
+                            $(document).keydown(function (evt) {
+                                if (evt.keyCode == 27) {
+                                    gv.highlight()
+                                }
+                            })
+                            $("#graph").click(function (evt) {
+                                gv.highlight()
+                            })
+                        }
+                    });
+                    {% for id, text in popups %}
+                    $("#{{ id }}").click(() => $('#{{ id }}-modal').modal('show'))
+                    {% endfor %}
+                    const blob = new Blob([svg]);
+                    $('#download').attr('href', window.URL.createObjectURL(blob));
+                    $('#download').attr('download', 'visualization.svg');
+                } 
+            </script>
         </div>
         <script>
          $('.ui.dropdown').dropdown()
@@ -213,42 +304,5 @@
         <script>$("#{{ id }}").click(() => $('#{{ id }}-modal').modal('show'))</script>
         <style>#{{ id }} { cursor: pointer; }</style>
         {% endfor %}
-        <script>
- 			   $(document).ready(function () {
-            $("#graph").graphviz({
-                 svg: $("#graph").innerHTML,
-                 shrink: 0,
-                 tooltips: {
-                     init: function ($graph) {},
-                     show: function () {},
-                     hide: function () {},
-                     update: function () {}
-                 },
-                 ready: function() {
-                     var gv = this
-                     this.$svg[0].scrollIntoView({behavior: "auto", block: "center", inline: "center"});
-                     gv.nodes().click(function (e) {
-                        if (e.shiftKey) {
-                            var $set = $()
-                            $set.push(this)
-                            $set = $set.add(gv.linkedFrom(this, true))
-                            $set = $set.add(gv.linkedTo(this, true))
-                            gv.highlight($set, true)
-                            gv.bringToFront($set)
-                            return false
-                        }
-                     })
-                     $(document).keydown(function (evt) {
-                         if (evt.keyCode == 27) {
-                             gv.highlight()
-                         }
-                     })
-                    $("#graph").click(function (evt) {
-                        gv.highlight()
-                    })
-                 }
-             });
-         });
-		    </script>
     </div></body>
 </html>

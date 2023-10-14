@@ -83,7 +83,7 @@ as can be found in `fake_coq_client.py`.
 from __future__ import annotations
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
-from typing import Any, Callable, TypeVar, TypeAlias, Union, cast, BinaryIO
+from typing import Any, Callable, TypeVar, Union, cast, BinaryIO
 from collections.abc import Iterable, Sequence, Generator
 from pathlib import Path
 from immutables import Map
@@ -580,8 +580,8 @@ cdef class Argument_List:
     def __len__(self):
         return self.reader.size()
 
-Unresolvable: TypeAlias = None
-Unknown: TypeAlias = None
+Unresolvable = None # TypeAlias
+Unknown = None # TypeAlias
 cdef class Outcome:
     """An outcome is the result of running a tactic on a proof state. A tactic may run on multiple proof states."""
 
@@ -1577,6 +1577,13 @@ def capnp_message_generator_from_file(message_file: BinaryIO,
     pg = prediction_generator(lgenerator, defs)
     return GlobalContextMessage(defs, [], None, pg)
 
+
+@contextmanager
+def _new_context() -> Generator[GlobalContextSets, None, None]:
+    """Crate a new caching context where global-context-set's can be retrieved and cached."""
+    yield GlobalContextSets(Map(), None, lambda _: False)
+
+
 class GlobalContextSets:
     """Lazily retrieve a the global context of a definition as a set, with memoization.
 
@@ -1644,11 +1651,12 @@ class GlobalContextSets:
         the result is propagated to the parent's cache."""
         yield GlobalContextSets(self.cache, self, propagate)
 
-    @contextmanager
+    # TODO: Hack: Python <= 3.9 cannot deal with a simultaneous @contextmanager and @staticmethod
+    # Therefore, we have a helper function _new_context(). This can be merged once python 3.9 is deprecated.
     @staticmethod
     def new_context() -> Generator[GlobalContextSets, None, None]:
         """Crate a new caching context where global-context-set's can be retrieved and cached."""
-        yield GlobalContextSets(Map(), None, lambda _: False)
+        return _new_context()
 
 cdef struct GlobalNode:
     GraphId graphid

@@ -2,7 +2,7 @@
 requires = [
     "setuptools",
     "wheel",
-    "Cython>=3.0.0b2",
+    "Cython>=3.0.3",
     "pycapnp>=1.2.2",
     "Jinja2",
     "inflection"]
@@ -18,7 +18,7 @@ authors = [
     {name = "Miroslav Olšák", email = "mirek@olsak.net"},
 ]
 readme = "pytact/README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 license = {text = "MIT License"}
 classifiers = [
     "Development Status :: 1 - Planning",
@@ -36,8 +36,8 @@ dependencies = [
     "pycapnp>=1.2.2",
     "immutables",
     "graphviz",
-    "sanic==22.6.2",
-    "sanic-ext==22.6.2",
+    "sanic==23.6.0",
+    "sanic-ext==23.6.0",
     "Jinja2",
     "inflection"
 ]
