@@ -103,6 +103,7 @@ import threading
 import subprocess
 import shutil
 import time
+import sys
 
 T = TypeVar('T')
 class TupleLike():
@@ -1464,6 +1465,27 @@ async def record_lowlevel_generator(
         response.clear_write_flag()
         response.write_packed(record_file)
         yield
+
+# Taken from https://github.com/python/cpython/pull/8895
+# Can be removed once python 3.9 is no longer supported
+if sys.version_info.major == 3 and sys.version_info.minor < 10:
+    _NOT_PROVIDED = object()
+    async def anext(async_iterator, default=_NOT_PROVIDED):
+        """anext(async_iterator[, default])
+        Return the next item from the async iterator.
+        If default is given and the iterator is exhausted,
+        it is returned instead of raising StopAsyncIteration.
+        """
+        from collections.abc import AsyncIterator
+        if not isinstance(async_iterator, AsyncIterator):
+            raise TypeError(f'anext expected an AsyncIterator, got {type(async_iterator)}')
+        anxt = type(async_iterator).__anext__
+        try:
+            return await anxt(async_iterator)
+        except StopAsyncIteration:
+            if default is _NOT_PROVIDED:
+                raise
+            return default
 
 @dataclass
 class _MutableBox:
