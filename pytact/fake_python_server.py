@@ -1,32 +1,35 @@
+import asyncio
 import contextlib
+from functools import partial
 import sys
 import socket
 import socketserver
 import argparse
 import pytact.graph_visualize as gv
+import capnp
 from pytact.data_reader import (capnp_message_generator, ProofState,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 TacticPredictionText, TacticPredictionsText,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
 
-def text_prediction_loop(context : GlobalContextMessage):
+async def text_prediction_loop(context : GlobalContextMessage):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
     prediction_requests = context.prediction_requests
-    for msg in prediction_requests:
+    async for msg in prediction_requests:
         if isinstance(msg, ProofState):
             proof_state = msg
             print(proof_state.text)
             preds = [TacticPredictionText(t, 0.5) for t in tactics]
-            prediction_requests.send(TacticPredictionsText(preds))
+            await prediction_requests.asend(TacticPredictionsText(preds))
         elif isinstance(msg, CheckAlignmentMessage):
             alignment = CheckAlignmentResponse([], [])
-            prediction_requests.send(alignment)
+            await prediction_requests.asend(alignment)
         elif isinstance(msg, GlobalContextMessage):
-            text_prediction_loop(msg)
+            await text_prediction_loop(msg)
         else:
             raise Exception("Capnp protocol error")
 
-def graph_initialize_loop(context : GlobalContextMessage, level):
+async def graph_initialize_loop(context : GlobalContextMessage, level):
     print(f"level {level}")
     for cluster in context.definitions.clustered_definitions(full = False):
         print('cluster:')
@@ -39,7 +42,7 @@ def graph_initialize_loop(context : GlobalContextMessage, level):
     cool_definitions = [ d.node for d in context.definitions.definitions() if d.name == "Coq.Init.Logic.I" ]
     zeroArgs = [t.ident for t in context.tactics if t.parameters == 0]
     oneArg = [t.ident for t in context.tactics if t.parameters == 1]
-    for msg in prediction_requests:
+    async for msg in prediction_requests:
         if isinstance(msg, ProofState):
             proof_state = msg
             gv.visualize_proof_state(proof_state)
@@ -49,29 +52,29 @@ def graph_initialize_loop(context : GlobalContextMessage, level):
                 preds += [TacticPredictionGraph(t, [hyp_node], 0.5) for t in oneArg]
             for d in cool_definitions:
                 preds += [TacticPredictionGraph(t, [d], 0.5) for t in oneArg]
-            prediction_requests.send(TacticPredictionsGraph(preds))
+            await prediction_requests.asend(TacticPredictionsGraph(preds))
         elif isinstance(msg, CheckAlignmentMessage):
             unknown_definitions = list(context.definitions.definitions())
             unknown_tactics = [t.ident for t in context.tactics]
             alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
-            prediction_requests.send(alignment)
+            await prediction_requests.asend(alignment)
         elif isinstance(msg, GlobalContextMessage):
-            graph_initialize_loop(msg, level + 1)
+            await graph_initialize_loop(msg, level + 1)
         else:
             raise Exception("Capnp protocol error")
 
-def run_session(args, capnp_socket, record_file):
-    messages_generator = capnp_message_generator(capnp_socket, record_file)
+async def run_session(args, record_file, capnp_stream):
+    messages_generator = await capnp_message_generator(capnp_stream, record_file)
     if args.mode == 'text':
         print('Python server running in text mode')
-        text_prediction_loop(messages_generator)
+        await text_prediction_loop(messages_generator)
     elif args.mode == 'graph':
         print('Python server running in graph mode')
-        graph_initialize_loop(messages_generator, 0)
+        await graph_initialize_loop(messages_generator, 0)
     else:
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 
-def main():
+async def server():
     sys.setrecursionlimit(10000)
     parser = argparse.ArgumentParser(
         description = "Example python server capable of communicating with Coq through Tactician's 'synth' tactic",
@@ -99,21 +102,17 @@ def main():
         record_context = contextlib.nullcontext()
     with record_context as record_file:
         if args.tcp != 0:
-            class Handler(socketserver.BaseRequestHandler):
-                def handle(self):
-                    run_session(args, self.request, record_file)
-            class Server(socketserver.ThreadingTCPServer):
-                def __init__(self, *kwargs):
-                    self.allow_reuse_address = True
-                    self.daemon_threads = True
-                    super().__init__(*kwargs)
-            addr = ('localhost', args.tcp)
-            with Server(addr, Handler) as server:
-                server.daemon_threads = True
-                server.serve_forever()
+            new_connection = partial(run_session, args, record_file)
+            server = await capnp.AsyncIoStream.create_server(new_connection, host='localhost', port=args.tcp)
+            async with server:
+                await server.serve_forever()
         else:
-            capnp_socket = socket.socket(fileno=sys.stdin.fileno())
-            run_session(args, capnp_socket, record_file)
+            stdin_socket = socket.socket(fileno=sys.stdin.fileno())
+            capnp_stream = await capnp.AsyncIoStream.create_connection(sock=stdin_socket)
+            await run_session(args, record_file, capnp_stream)
+
+def main():
+    asyncio.run(capnp.run(server()), debug=True)
 
 if __name__ == '__main__':
     main()

@@ -84,7 +84,7 @@ from __future__ import annotations
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar, Union, cast, BinaryIO
-from collections.abc import Iterable, Sequence, Generator
+from collections.abc import Iterable, Sequence, Generator, AsyncGenerator
 from pathlib import Path
 from immutables import Map
 import signal
@@ -1374,9 +1374,10 @@ class GlobalContextMessage:
     definitions : OnlineDefinitionsReader
     tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
     log_annotation : str
-    prediction_requests : Generator[GlobalContextMessage | ProofState | CheckAlignmentMessage,
-                                    None | TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
-                                    None]
+    prediction_requests : AsyncGenerator[
+        GlobalContextMessage | ProofState | CheckAlignmentMessage,
+        None | TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
+        None]
 
 def convert_predictions(preds, stack_size):
     if isinstance(preds, TacticPredictionsText):
@@ -1393,48 +1394,30 @@ def convert_predictions(preds, stack_size):
     else:
         raise Exception("Incorrect predictions received")
 
-def capnp_message_generator_lowlevel(socket: socket.socket) -> (
-        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
-                  capnp.lib.capnp._DynamicStructBuilder, None]):
+async def capnp_message_generator_lowlevel(stream: capnp.AsyncIoStream) -> (
+        AsyncGenerator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                       capnp.lib.capnp._DynamicStructBuilder, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
 
-    Given a `socket`, this function creates a generator that yields messages of type
+    Given a `stream`, this function creates a generator that yields messages of type
     `pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader` after which a
     `capnp.lib.capnp._DynamicStructBuilder` message needs to be `send` back.
     """
-    reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(
-        socket, traversal_limit_in_words=2**64-1)
-    def next_disabled_sigint():
-        """
-        A variant of `next` that disables Python's sigkill signal handler while waiting for new messages.
-        Without this, the reader will block and can't be killed with Cntl+C until it receives a message.
-
-        See the following upstream capnp issue for further explanations:
-        https://github.com/capnproto/capnproto/issues/1542
-
-        Note that the proper solution to this is to read messages in async mode, but pycapnp currently doesn't
-        support this.
-        """
-        if threading.current_thread() is threading.main_thread():
-            prev_sig = signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-            msg = next(reader, None)
-            signal.signal(signal.SIGINT, prev_sig)  # SIGINT catching ON
-            return msg
-        else:
-            return next(reader, None)
-    msg = next_disabled_sigint()
+    msg = await graph_api_capnp.PredictionProtocol.Request.read_async(
+        stream, traversal_limit_in_words=2**64-1)
     while msg is not None:
         cython_msg = PredictionProtocol_Request_Reader(msg)
         response = yield cython_msg
-        response.write_packed(socket)
+        await response.write_async(stream)
         yield
-        msg = next_disabled_sigint()
+        msg = await graph_api_capnp.PredictionProtocol.Request.read_async(
+            stream, traversal_limit_in_words=2**64-1)
 
-def capnp_message_generator_from_file_lowlevel(
+async def capnp_message_generator_from_file_lowlevel(
         message_file: BinaryIO,
         check : Callable[[Any, Any, Any], None] | None = None) -> (
-        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
-                  capnp.lib.capnp._DynamicStructBuilder, None]):
+        AsyncGenerator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                       capnp.lib.capnp._DynamicStructBuilder, None]):
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
     Lowlevel variant of `capnp_message_generator_from_file`.
@@ -1463,27 +1446,31 @@ def capnp_message_generator_from_file_lowlevel(
             check(cython_msg, response, recorded_response)
         yield
 
-def record_lowlevel_generator(
+async def record_lowlevel_generator(
         record_file: BinaryIO,
-        gen: Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
-                       capnp.lib.capnp._DynamicStructBuilder, None]) -> (
-                           Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
-                                     capnp.lib.capnp._DynamicStructBuilder, None]):
+        gen: AsyncGenerator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                            capnp.lib.capnp._DynamicStructBuilder, None]) -> (
+                                AsyncGenerator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                                               capnp.lib.capnp._DynamicStructBuilder, None]):
     """Record a trace of the full interaction of a lowlevel generator to a file
 
     Wrap a lowlevel generator (such as from `capnp_message_generator_lowlevel`) and dump all exchanged messages
     to the given file. The file can later be replayed with `capnp_message_generator_from_file_lowlevel`.
     """
-    for msg in gen:
+    async for msg in gen:
         msg.dynamic.as_builder().write_packed(record_file)
         response = yield msg
-        gen.send(response)
+        await gen.asend(response)
         response.clear_write_flag()
         response.write_packed(record_file)
         yield
 
-def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
-    msg = next(lgenerator, None)
+@dataclass
+class _MutableBox:
+    contents: Any
+
+async def prediction_generator(lgenerator, OnlineDefinitionsReader defs, mutret):
+    msg = await anext(lgenerator, None)
     while msg is not None:
         if msg.is_initialize:
             init = msg.initialize
@@ -1493,25 +1480,25 @@ def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
                     f"{graph_api_capnp.currentVersion} but file Coq sent a message versioned as "
                     f"{init.data_version}.")
             if init.stack_size != defs.graph_index.nodes.size():
-                return msg
+                mutret.contents = msg
+                return
             else:
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-                lgenerator.send(response)
+                await lgenerator.asend(response)
                 with online_definitions_initialize(defs, init) as definitions:
-                    def prediction_generator_sub():
-                        nonlocal msg
-                        msg = yield from prediction_generator(lgenerator, definitions)
-                    pg = prediction_generator_sub()
+                    msgm = _MutableBox(None)
+                    pg = prediction_generator(lgenerator, definitions, msgm)
                     yield GlobalContextMessage(definitions, init.tactics, init.log_annotation, pg)
-                    if next(pg, None) is not None:
+                    if await anext(pg, None) is not None:
                         raise Exception("Not all prediction requests were consumed")
+                    msg = msgm.contents
         elif msg.is_predict:
             with online_data_predict(defs, msg.predict) as proof_state:
                 preds = yield proof_state
                 response = convert_predictions(preds, defs.graph_index.nodes.size())
-            lgenerator.send(response)
+            await lgenerator.asend(response)
             yield
-            msg = next(lgenerator, None)
+            msg = await anext(lgenerator, None)
         elif msg.is_check_alignment:
             alignment = yield CheckAlignmentMessage()
             alignment = {'unalignedTactics': alignment.unknown_tactics,
@@ -1519,13 +1506,14 @@ def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
                          [{'depIndex': defs.graph_index.nodes.size() - 1 - d.node.graph, 'nodeIndex': d.node.nodeid}
                            for d in alignment.unknown_definitions]}
             response = graph_api_capnp.PredictionProtocol.Response.new_message(alignment=alignment)
-            lgenerator.send(response)
+            await lgenerator.asend(response)
             yield
-            msg = next(lgenerator, None)
+            msg = await anext(lgenerator, None)
         else:
             raise Exception("Capnp protocol error")
 
-def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = None) -> GlobalContextMessage:
+async def capnp_message_generator(socket: capnp.AsyncIoStream,
+                                  record: BinaryIO | None = None) -> GlobalContextMessage:
     """A generator that facilitates communication between a prediction server and a Coq process.
 
     Given a `socket`, this function creates a `GlobalContextMessage` `context`. This message contains an
@@ -1548,12 +1536,12 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     if record is not None:
         lgenerator = record_lowlevel_generator(record, lgenerator)
     defs = OnlineDefinitionsReader.init_empty()
-    pg = prediction_generator(lgenerator, defs)
+    pg = prediction_generator(lgenerator, defs, _MutableBox(None))
     return GlobalContextMessage(defs, [], None, pg)
 
-def capnp_message_generator_from_file(message_file: BinaryIO,
-                                      check : Callable[[Any, Any, Any], None] | None = None,
-                                      record: BinaryIO | None = None) -> GlobalContextMessage:
+async def capnp_message_generator_from_file(message_file: BinaryIO,
+                                            check : Callable[[Any, Any, Any], None] | None = None,
+                                            record: BinaryIO | None = None) -> GlobalContextMessage:
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
     Highlevel variant of `capnp_message_generator_from_file_lowlevel`.
@@ -1574,7 +1562,7 @@ def capnp_message_generator_from_file(message_file: BinaryIO,
     if record is not None:
         lgenerator = record_lowlevel_generator(record, lgenerator)
     defs = OnlineDefinitionsReader.init_empty()
-    pg = prediction_generator(lgenerator, defs)
+    pg = prediction_generator(lgenerator, defs, _MutableBox(None))
     return GlobalContextMessage(defs, [], None, pg)
 
 

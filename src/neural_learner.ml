@@ -145,8 +145,8 @@ let write_read_capnp_message_uninterrupted rc wc m =
     raise e
 
 let connect_socket my_socket =
-  Capnp_unix.IO.create_read_context_for_fd ~compression:`Packing my_socket,
-  Capnp_unix.IO.create_write_context_for_fd ~compression:`Packing my_socket
+  Capnp_unix.IO.create_read_context_for_fd ~compression:`None my_socket,
+  Capnp_unix.IO.create_write_context_for_fd ~compression:`None my_socket
 
 let connect_stdin () =
   if debug_option () then
