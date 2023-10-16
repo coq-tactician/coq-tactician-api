@@ -39,7 +39,8 @@ dependencies = [
     "sanic==23.6.0",
     "sanic-ext==23.6.0",
     "Jinja2",
-    "inflection"
+    "inflection",
+    "importlib-resources;python_version<'3.9'",
 ]
 
 [project.scripts]

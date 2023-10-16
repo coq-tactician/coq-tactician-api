@@ -1,9 +1,14 @@
 from dataclasses import asdict
 from pathlib import Path
 import argparse
-import pkg_resources
 import inflection
 from functools import partial
+from contextlib import ExitStack
+try:
+    # Python < 3.9
+    import importlib_resources as ilr
+except ImportError:
+    import importlib.resources as ilr
 
 from pytact.data_reader import data_reader
 from pytact.graph_visualize_browse import (
@@ -27,17 +32,15 @@ def post_process(output: GraphVisualizationOutput, settings: Settings):
 
 def create_app(dataset_path: Path) -> Sanic:
     app = Sanic("graph-visualizer")
-    app.config.TEMPLATING_PATH_TO_TEMPLATES = pkg_resources.resource_filename('pytact', 'templates/')
 
-    @app.before_server_start
-    async def setup_dataset(app):
-        app.ctx.data_ctx = data_reader(dataset_path)
-        app.ctx.gvd = GraphVisualizationData(app.ctx.data_ctx.__enter__())
+    context_manager = ExitStack()
+    template_path = ilr.files('pytact') / 'templates/'
+    app.config.TEMPLATING_PATH_TO_TEMPLATES = context_manager.enter_context(ilr.as_file(template_path))
+    app.ctx.gvd = GraphVisualizationData(context_manager.enter_context(data_reader(dataset_path)))
+
     @app.after_server_stop
-    async def teardown_dataset(app):
-        del app.ctx.gvd
-        app.ctx.data_ctx.__exit__(None, None, None)
-        del app.ctx.data_ctx
+    async def teardown(app):
+        context_manager.close()
 
     class SanicUrlMaker(UrlMaker):
 
