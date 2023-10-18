@@ -1,5 +1,5 @@
 From Tactician Require Import Ltac1.Record.
 
-Load TacticianReinforceDepLoader.
+Load TacticianApiDepLoader.
 
-Declare ML Module "tactician_reinforce_plugin".
+Declare ML Module "tactician_api_plugin".

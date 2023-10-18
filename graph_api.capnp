@@ -9,7 +9,7 @@
 # 1. A schema for graph-based dataset exported from Coq. The entry-point for this is the `Dataset`
 #    struct. That is, every file in the dataset contains a message conforming to this struct.
 #
-# 2. A communication protocol for reinforcement learning. Depending on who initiates the learning
+# 2. A communication protocol for proof exploration. Depending on who initiates the exploration
 #    (Coq or the learning agent), the entry-point for this is respectively the `PushReinforce` or
 #    the `PullReinforce` interface.
 #
@@ -474,12 +474,12 @@ struct Dataset {
 
 ######################################################################################################
 #
-#             The schema for reinforcement learning
+#             The schema for proof exploration
 #
 ######################################################################################################
 
 struct Exception {
-  # A list of things that can go wrong during reinforcement learning.
+  # A list of things that can go wrong.
   union {
     noSuchTactic @0 :Void;
     mismatchedArguments @1 :Void;
@@ -520,14 +520,14 @@ interface ProofObject {
 }
 
 interface AvailableTactics {
-  # A way of receiving information about available tactics in a reinforcement learning session.
+  # A way of receiving information about available tactics in a exploration session.
   tactics @0 () -> (tactics :List(AbstractTactic));
   printTactic @1 (tactic :TacticId) -> (tactic :Text);
 }
 
 interface PullReinforce {
   reinforce @0 (lemma :Text) -> (available :AvailableTactics, result :ExecutionResult);
-  # An interface allowing a reinforcement learning session to be initiated by the agent.
+  # An interface allowing a proof exploration session to be initiated by the agent.
   # The `lemma` argument is the statement the agent wants to prove. As a response, Coq sends the available
   # tactics that can be used during the proof and the execution result that represents the opening of the
   # session.
@@ -535,7 +535,7 @@ interface PullReinforce {
 
 interface PushReinforce {
   reinforce @0 (result :ExecutionResult);
-  # An interface allowing a reinforcement learning session to be initiated by Coq. In this case, Coq decides
+  # An interface allowing a proof exploration session to be initiated by Coq. In this case, Coq decides
   # what lemma should be proved and immediately presents the agent with the initial execution result.
 }
 

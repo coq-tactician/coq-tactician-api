@@ -24,10 +24,10 @@ RUN sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-
 
 # opam level project dependencies
 
-COPY --chown=coq:coq . coq-tactician-reinforce
+COPY --chown=coq:coq . coq-tactician-api
 USER coq
-WORKDIR /home/coq/coq-tactician-reinforce
+WORKDIR /home/coq/coq-tactician-api
 RUN eval $(opam env) \
     && opam repo add coq-extra-dev https://coq.inria.fr/opam/extra-dev -y
 RUN eval $(opam env) \
-    && opam install -y -t --deps-only --solver=mccs ./coq-tactician-reinforce.opam
+    && opam install -y -t --deps-only --solver=mccs ./coq-tactician-api.opam

@@ -1,7 +1,7 @@
 (coq.pp (modules g_graph))
 (library
- (name tactician_reinforce_plugin)
- (public_name coq-tactician-reinforce.plugin)
+ (name tactician_api_plugin)
+ (public_name coq-tactician-api.plugin)
  (flags :standard -rectypes -w -27-53-55)
  (modules (
    "g_graph"

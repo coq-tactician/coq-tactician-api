@@ -20,12 +20,12 @@ RUN $CONDA_EXE install -n python3.10 -c conda-forge capnproto
 RUN sudo apt-get update
 RUN sudo apt-get --yes install graphviz pkg-config libev-dev libxxhash-dev cmake build-essential
 
-COPY --chown=coq:coq . coq-tactician-reinforce
+COPY --chown=coq:coq . coq-tactician-api
 
-WORKDIR coq-tactician-reinforce
+WORKDIR coq-tactician-api
 
 RUN eval $(opam env) && opam update \
-    && opam install --assume-depexts -t ./coq-tactician-reinforce.opam -y
+    && opam install --assume-depexts -t ./coq-tactician-api.opam -y
 
 RUN pip install .
 

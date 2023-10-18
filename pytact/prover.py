@@ -1,5 +1,5 @@
 """
-a test of connection to coq-tactician-reinforce
+a test of connection to coq-tactician-api
 """
 
 import sys
@@ -158,7 +158,7 @@ async def client_connected_cb(counter, args, reader, writer):
 
 def my_parse_args():
     parser = argparse.ArgumentParser(
-        description='example of python code interacting with coq-tactician-reinforce')
+        description='example of python code interacting with coq-tactician-api')
 
     parser.add_argument('--interactive',
                         action='store_true',
@@ -190,7 +190,7 @@ def my_parse_args():
 
 
     parser.add_argument('--tcp', action='store_true',
-                        help='drive coq-tactician-reinforce with tcp/ip instead of stdin')
+                        help='drive coq-tactician-api with tcp/ip instead of stdin')
 
     parser.add_argument('--tcp-sessions',
                         type = int,
@@ -211,7 +211,7 @@ def my_parse_args():
 
     parser.add_argument('--coqfile', type=str, default=None,
                         help=('path to coq source code file (.v extension) to execute'
-                              'in coq-tactician-reinforce'
+                              'in coq-tactician-api'
                               f'the default is {pytact.common.test_filename_stdin}'
                               f'for --tcp --with-coq default is {pytact.common.test_filename_tcp}'))
 
