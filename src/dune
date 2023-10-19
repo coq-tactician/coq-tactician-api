@@ -9,7 +9,7 @@
     graph_def
     graph_visualizer
     neural_learner
-    reinforce
+    explore
     graph_generator_learner
     graph_capnp_generator
     graph_api
