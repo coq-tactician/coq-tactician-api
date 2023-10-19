@@ -8,7 +8,7 @@ communication protocol. Any PyTactician version `x.y` is compatible with the com
 
 Binary wheels are provided for Linux and MacOS. On those platforms you can install by executing
 `pip install pytactician`. If you need to install from source, you need to have Capt'n Proto >= 0.8 installed
-on your system. See the main repo [README](https://github.com/coq-tactician/coq-tactician-reinforce#prerequisites)
+on your system. See the main repo [README](https://github.com/coq-tactician/coq-tactician-api#prerequisites)
 for more details on prerequisites.
 
 ## Usage
@@ -28,8 +28,8 @@ about all the options).
   A tactic prediction server acting as an oracle, retrieving it's information from a dataset
 - `pytact-fake-coq [-h] (--tcp TCP_LOCATION | --stdin EXECUTABLE) data`
   A fake Coq client that connects to a prediction server and feeds it a stream of previously recorded messages.
-- `pytact-prover`: A dummy example client that interfaces with Coq and Tactician for reinforcement-learning-style
-  communication. To learn how to interface Coq and Tactician with this client, see the sections below.
+- `pytact-prover`: A dummy example client that interfaces with Coq and Tactician for proof exploration
+  driven by the client.
 
 ## Documentation
 

@@ -9,12 +9,13 @@
 # 1. A schema for graph-based dataset exported from Coq. The entry-point for this is the `Dataset`
 #    struct. That is, every file in the dataset contains a message conforming to this struct.
 #
-# 2. A communication protocol for reinforcement learning. Depending on who initiates the learning
-#    (Coq or the learning agent), the entry-point for this is respectively the `PushReinforce` or
-#    the `PullReinforce` interface.
+# 2. A communication protocol for proof synthesis with Tactician. There are two protocols for this:
+#    - A simple, linear message exchange protocol, specified by the `PredictionProtocol` struct.
+#    - An RPC based protocol, specified by the `PredictionServer` interface.
 #
-# 3. A communication protocol for proof synthesis with Tactician. The entry-point of this
-#    protocol is the `PredictionProtocol` struct.
+# 2. A communication protocol for proof exploration by a client. Proof exploration is started through
+#    the `explore` function of the `PredictionServer` interface.
+#
 #
 # All these three entry-points share a common base, which encodes the notion of graphs, terms,
 # tactics and more.
@@ -574,7 +575,7 @@ struct PredictionProtocol {
 ######################################################################################################
 
 struct Exception {
-  # A list of things that can go wrong during reinforcement learning.
+  # A list of things that can go wrong.
   union {
     noSuchTactic @0 :Void;
     mismatchedArguments @1 :Void;
@@ -619,8 +620,8 @@ interface PredictionServer {
   addGlobalContext @0 GlobalContextAddition -> ();
   requestPrediction @1 PredictionRequest -> (predictions :List(Prediction));
   checkAlignment @2 () -> (unalignedTactics :List(TacticId), unalignedDefinitions :List(Node));
-  reinforce @3 (result :ExecutionResult);
-  # An interface allowing a reinforcement learning session to be initiated by Coq. In this case, Coq decides
+  explore @3 (result :ExecutionResult);
+  # An interface allowing a proof exploration session to be initiated by Coq. In this case, Coq decides
   # what lemma should be proved and immediately presents the agent with the initial execution result.
 }
 

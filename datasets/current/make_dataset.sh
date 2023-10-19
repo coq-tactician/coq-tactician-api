@@ -53,7 +53,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 EOF
 
-cp $(opam var prefix)/share/coq-tactician-reinforce/graph_api.capnp $datasetname/meta/graph_api.capnp
+cp $(opam var prefix)/share/coq-tactician-api/graph_api.capnp $datasetname/meta/graph_api.capnp
 
 for f in $scriptpath/stage*.sh; do
     base=$(basename $f)

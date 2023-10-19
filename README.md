@@ -14,8 +14,8 @@ component that should be installed through the Pip package manager. Additionally
 The simplest and most reliable way to install these packages is through Conda. This repository provides a
 `environment.yml` file with the required Conda dependencies. To set it up, follow these commands:
 ```
-git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git # Clone this repo
-cd coq-tactician-reinforce
+git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-api.git # Clone this repo
+cd coq-tactician-api
 conda env create -f environment.yml
 conda activate tactician
 export CPATH="$CONDA_PREFIX:$CPATH" # Needed by cmake to find conda headers
@@ -67,8 +67,8 @@ about all the options).
   A tactic prediction server acting as an oracle, retrieving it's information from a dataset
 - `pytact-fake-coq [-h] (--tcp TCP_LOCATION | --stdin EXECUTABLE) data`
   A fake Coq client that connects to a prediction server and feeds it a stream of previously recorded messages.
-- `pytact-prover`: A dummy example client that interfaces with Coq and Tactician for reinforcement-learning-style
-  communication. To learn how to interface Coq and Tactician with this client, see the sections below.
+- `pytact-prover`: A dummy example client that interfaces with Coq and Tactician for proof exploration
+  driven by the client. To learn how to interface Coq and Tactician with this client, see the sections below.
 
 ## Usage of the Coq plugin
 
@@ -136,16 +136,16 @@ At this point, you have the following commands available which will interact wit
 - `Set Tactician Autocache` will automatically execute `Tactician Neural Cache` on each command. This is an
   experimental option, and there may be some overhead associated with this.
 
-## Reinforcement interaction
+## Client-based proof exploration
 
-Finally, the command `Reinforce.` will initiate a reinforcement session. An example of this is available in
+Finally, the command `Explore.` will initiate a proof exploration session. An example of this is available in
 [TestReinforceStdin.v](pytact/tests/TestReinforceStdin.v).
 To do this, you need to have a python client running. An example is available in the `pytact-prover` executable.
 To see how it works, run
 ```
 pytact-prover --pdfsequence --pdfname test
 ```
-This will execute a dummy proof through the reinforcement learning interface. Visualizations of each proof state
+This will execute a dummy proof through the proof exploration interface. Visualizations of each proof state
 are available in `test<n>.pdf`.
 optionally `--file` option to point to a source Coq `.v` file.
 Also with `--interactive` option the innteractive shell appears where you can
@@ -161,10 +161,10 @@ in the `generate-dataset` branch. The procedure to generate the dataset is as fo
 ```
 opam switch create tacgen --empty
 ```
-2. Install coq-tactician-reinforce generate-dataset
+2. Install coq-tactician-api generate-dataset
 ```
-git clone -b generate-dataset --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git
-cd coq-tactician-reinforce
+git clone -b generate-dataset --recurse-submodules git@github.com:coq-tactician/coq-tactician-api.git
+cd coq-tactician-api
 opam install .
 tactician inject # you can answer 'no' to recompiling
 opam install coq-tactician-stdlib --keep-build-dir # make sure that you have the coq-extra-dev repo enabled
@@ -205,7 +205,7 @@ Debian.10/opam 2.0.9/coq 8.11.2/ocaml-variants-4.11.2+flambda.
 
 The layer defined by `Dockerfile_base` adds `conda/python 3.9`,
 `capnp` library and all opam package dependencies requested by the
-coq-tactician-reinforce (including the opam package defined in git
+coq-tactician-api (including the opam package defined in git
 submodule `coq-tactician`).
 
 The image defined by `Dockerfile_base` can be updated by maintainers (currently Vasily) by
