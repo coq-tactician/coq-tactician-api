@@ -138,7 +138,7 @@ At this point, you have the following commands available which will interact wit
 
 ## Client-based proof exploration
 
-Finally, the command `Reinforce.` will initiate a proof exploration session. An example of this is available in
+Finally, the command `Explore.` will initiate a proof exploration session. An example of this is available in
 [TestReinforceStdin.v](pytact/tests/TestReinforceStdin.v).
 To do this, you need to have a python client running. An example is available in the `pytact-prover` executable.
 To see how it works, run

@@ -3,7 +3,7 @@ requires = [
     "setuptools",
     "wheel",
     "Cython>=3.0.3",
-    "pycapnp>=1.2.2",
+    "pycapnp>=1.2.2,<2",
     "Jinja2",
     "inflection"]
 build-backend = "setuptools.build_meta"
@@ -33,7 +33,7 @@ classifiers = [
     "Operating System :: POSIX :: Linux"
 ]
 dependencies = [
-    "pycapnp>=1.2.2",
+    "pycapnp>=1.2.2,<2",
     "immutables",
     "graphviz",
     "sanic==23.6.0",
