@@ -124,9 +124,14 @@ let find_global_argument
       raise (UnknownArgument (sid, nid))
     | Some x -> x
 
+type capnp_connection =
+  { rc : Unix.file_descr Capnp_unix.IO.ReadContext.t
+  ; wc : Unix.file_descr Capnp_unix.IO.WriteContext.t
+  ; error_status : unit -> Pp.t option }
+
 (* Whenever we write a message to the server, we prevent a timeout from triggering.
    Otherwise, we might be sending corrupted messages, which causes the server to crash. *)
-let write_read_capnp_message_uninterrupted rc wc m =
+let write_read_capnp_message_uninterrupted { rc; wc; error_status } m =
   let terminate = ref false in
   let prev_sigterm =
     Sys.signal Sys.sigterm @@ Sys.Signal_handle (fun i ->
@@ -138,8 +143,15 @@ let write_read_capnp_message_uninterrupted rc wc m =
         Sys.set_signal Sys.sigterm prev_sigterm;
         ignore (Thread.sigmask Unix.SIG_UNBLOCK signals);
         if !terminate then exit 1) @@ fun () ->
-    Capnp_unix.IO.WriteContext.write_message wc m;
-    Capnp_unix.IO.ReadContext.read_message rc
+    try
+      Capnp_unix.IO.WriteContext.write_message wc m;
+      Capnp_unix.IO.ReadContext.read_message rc
+    with Unix.Unix_error (e, _, _) ->
+      let error_msg = match error_status () with
+        | None -> Pp.mt ()
+        | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
+      CErrors.user_err Pp.(str "Error while communicating with proving server:" ++ fnl () ++
+                          str (Unix.error_message e) ++ error_msg);
   with Fun.Finally_raised e ->
     raise e
 
@@ -154,23 +166,36 @@ let connect_stdin () =
   let mode = if textmode_option () then "text" else "graph" in
   if debug_option () then
     Feedback.msg_debug Pp.(str "using textmode option" ++ str mode);
-  let pid =
+  let invocation =
     if CString.is_empty @@ executable_option () then
-      Unix.create_process
-        "pytact-server" [| "pytact-server"; mode |] other_socket Unix.stdout Unix.stderr
-    else
-      let split = CString.split_on_char ' ' @@ executable_option () in
-      Unix.create_process
-        (List.hd split) (Array.of_list split) other_socket Unix.stdout Unix.stderr
+      ["pytact-server"; mode] else
+      CString.split_on_char ' ' @@ executable_option () in
+  let pid =
+    try
+        Unix.create_process
+          (List.hd invocation) (Array.of_list invocation) other_socket Unix.stdout Unix.stderr
+    with Unix.Unix_error _ ->
+      CErrors.user_err Pp.(str "Failed to connect to server. Invocation: " ++ str (String.concat " " invocation))
   in
-  let (write_context, read_context) as connection = connect_socket my_socket in
+  let error_status () =
+    Unix.shutdown my_socket Unix.SHUTDOWN_ALL;
+    Unix.close my_socket;
+    let pid, status = Unix.waitpid [Unix.WNOHANG] pid in
+    if pid == 0 then None else
+      match status with
+      | Unix.WEXITED 0 -> None
+      | Unix.WEXITED 127 ->
+        Some Pp.(str "Failed to connect to server. Invocation: " ++ qstring (String.concat " " invocation))
+      | Unix.WEXITED c ->  Some Pp.(str "Proving server exited with code " ++ int c)
+      | Unix.WSIGNALED c -> Some Pp.(str "Proving server signaled with code " ++ int c)
+      | Unix.WSTOPPED c -> Some Pp.(str "Proving server stopped with code " ++ int c) in
+  let rc, wc = connect_socket my_socket in
   Declaremods.append_end_library_hook (fun () ->
-      Unix.shutdown my_socket Unix.SHUTDOWN_SEND;
-      Unix.shutdown my_socket Unix.SHUTDOWN_RECEIVE;
+      Unix.shutdown my_socket Unix.SHUTDOWN_ALL;
       Unix.close my_socket;
       ignore (Unix.waitpid [] pid));
   Unix.close other_socket;
-  connection
+  { rc; wc; error_status }
 
 let pp_addr Unix.{ ai_addr; ai_canonname; _ } =
   let open Pp in
@@ -197,10 +222,12 @@ let connect_tcpip host port =
          my_socket
        with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
   let socket = connect addrs in
+  let error_status () =
+    Unix.close socket; None in
   Unix.setsockopt socket TCP_NODELAY true; (* Nagles algorithm kills performance, disable *)
-  let (read_context, write_context) as connection = connect_socket socket in
+  let rc, wc = connect_socket socket in
   Declaremods.append_end_library_hook (fun () -> Unix.close socket);
-  connection
+  { rc; wc; error_status }
 
 let log_annotation () =
   let doc = Stm.get_doc 0 in
@@ -209,14 +236,14 @@ let log_annotation () =
     Stm.(get_ast ~doc (get_current_state ~doc)) in
   Pp.string_of_ppcmds loc
 
-let init_predict_text rc wc =
+let init_predict_text capnp_conn =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let request = Request.init_root () in
   let init = Request.initialize_init request in
   Request.Initialize.log_annotation_set init @@ log_annotation ();
   ignore(Request.Initialize.data_version_set_reader init Api.Reader.current_version);
-  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
+  match write_read_capnp_message_uninterrupted capnp_conn @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
     let response = Response.of_message response in
@@ -353,12 +380,12 @@ let update_context_stack id tacs env { stack_size; stack } =
                          ; section }
                          ::stack }
 
-let sync_context_stack rc wc =
+let context_stack = Summary.ref ~name:"neural-learner-graph-cache"
+    { stack = []; stack_size = 0 }
+let sync_context_stack capnp_connection =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let id = ref 0 in
-  let context_stack = Summary.ref ~name:"neural-learner-graph-cache"
-      { stack = []; stack_size = 0 } in
   let remote_state = ref [] in
   let remote_stack_size = ref 0 in
   fun ?(keep_cache=true) tacs env ->
@@ -387,7 +414,7 @@ let sync_context_stack rc wc =
           let rrem = loop (rrem, lrem) in
           if debug_option () then
             Feedback.msg_notice Pp.(str "writing message id " ++ int id);
-          (match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
+          (match write_read_capnp_message_uninterrupted capnp_connection @@ Request.to_message request with
           | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
           | Some response ->
             let response = Response.of_message response in
@@ -403,29 +430,37 @@ let sync_context_stack rc wc =
     state, stack_size
 
 type connection =
-  { rc : Unix.file_descr Capnp_unix.IO.ReadContext.t
-  ; wc : Unix.file_descr Capnp_unix.IO.WriteContext.t
+  { capnp_connection : capnp_connection
   ; sync_context_stack : ?keep_cache:bool -> (glob_tactic_expr * location) TacticMap.t -> Environ.env ->
       CICGraphMonad.state * int }
 
 let get_connection =
   let connection = ref None in
+  let error = ref (fun () -> None) in
+  let error_status_reset () =
+    let ret = !error () in
+    connection := None;
+    error := (fun () -> None);
+    ret in
   fun () ->
     match !connection with
     | None ->
-      let rc, wc =
+      let { error_status; _ } as capnp_connection =
         if CString.is_empty @@ tcp_option () then
           connect_stdin ()
         else
           let addr = Str.split (Str.regexp ":") (tcp_option()) in
           connect_tcpip (List.nth addr 0) (List.nth addr 1) in
-      let conn = { rc; wc; sync_context_stack = sync_context_stack rc wc } in
+      let capnp_connection = { capnp_connection with error_status = error_status_reset } in
+      let conn = { capnp_connection; sync_context_stack = sync_context_stack capnp_connection } in
       connection := Some conn;
+      error := error_status;
       conn
-    | Some conn -> conn
+    | Some conn ->
+      conn
 
 let check_neural_alignment () =
-  let { rc; wc; sync_context_stack } = get_connection () in
+  let { capnp_connection; sync_context_stack } = get_connection () in
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
   let env = Global.env () in
@@ -433,7 +468,7 @@ let check_neural_alignment () =
   let state, stack_size = sync_context_stack ~keep_cache:false tacs env in
   let request = Request.init_root () in
   Request.check_alignment_set request;
-  match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
+  match write_read_capnp_message_uninterrupted capnp_connection @@ Request.to_message request with
   | None -> CErrors.anomaly Pp.(str "Capnp protocol error 1")
   | Some response ->
     let response = Response.of_message response in
@@ -476,7 +511,7 @@ let check_neural_alignment () =
 
 let push_cache () =
   if textmode_option () then () (* No caching needed for the text model at the moment *) else
-    let { rc; wc; sync_context_stack } = get_connection () in
+    let { capnp_connection; sync_context_stack } = get_connection () in
     (* We don't send the list of tactics, hence the empty list. Tactics are only sent right before
        prediction requests are made. *)
     let _, stack_size = sync_context_stack TacticMap.empty (Global.env ()) in
@@ -498,7 +533,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
   module LH = Learner_helper.L(TS)
   open TS
 
-  let predict_text rc wc env ps =
+  let predict_text capnp_connection env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
@@ -511,7 +546,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let hyps = List.map (map_named term_repr) @@ proof_state_hypotheses ps in
     let concl = term_repr @@ proof_state_goal ps in
     ProofState.text_set state @@ Graph_extractor.proof_state_to_string_safe (hyps, concl) env Evd.empty;
-    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
+    match write_read_capnp_message_uninterrupted capnp_connection @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3a")
     | Some response ->
       let response = Response.of_message response in
@@ -530,7 +565,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
         preds
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
-  let predict rc wc find_global_argument stack_size state tacs env ps =
+  let predict capnp_connection find_global_argument stack_size state tacs env ps =
     let module Tactic = Api.Reader.Tactic in
     let module Argument = Api.Reader.Argument in
     let module ProofState = Api.Builder.ProofState in
@@ -569,7 +604,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       { node_depindex = (fun n -> node_dep_index (fst @@ G.lower n))
       ; node_local_index = (fun n -> node_local_index (fst @@ G.lower n)) } state ps
       ~include_metadata:(include_metadata_option ());
-    match write_read_capnp_message_uninterrupted rc wc @@ Request.to_message request with
+    match write_read_capnp_message_uninterrupted capnp_connection @@ Request.to_message request with
     | None -> CErrors.anomaly Pp.(str "Capnp protocol error 3b")
     | Some response ->
       let response = Response.of_message response in
@@ -615,12 +650,10 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       | _ -> CErrors.anomaly Pp.(str "Capnp protocol error 4")
 
   type model =
-    { tactics : (glob_tactic_expr * int) TacticMap.t
-    ; connection : connection }
+    { tactics : (glob_tactic_expr * int) TacticMap.t }
 
   let empty () =
-    let connection = get_connection () in
-    { tactics = TacticMap.empty; connection }
+    { tactics = TacticMap.empty }
 
   let add_tactic_info env map tac =
     let tac = Tactic_normalize.tactic_normalize @@ Tactic_normalize.tactic_strict tac in
@@ -632,16 +665,17 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       TacticMap.add
         (Tactic_hash.tactic_hash env base_tactic) (base_tactic, params) map
 
-  let learn ({ tactics; _ } as db) _origin _outcomes tac =
+  let learn { tactics } _origin _outcomes tac =
     match tac with
-    | None -> db
+    | None -> { tactics }
     | Some tac ->
       let tac = tactic_repr tac in
       let tactics = add_tactic_info (Global.env ()) tactics tac in
       last_model := tactics;
-      { db with tactics }
+      {  tactics }
 
-  let predict { tactics; connection = { rc; wc; sync_context_stack } } =
+  let predict { tactics } =
+    let { capnp_connection; sync_context_stack } = get_connection () in
     let env = Global.env () in
     if not @@ textmode_option () then
       let state, stack_size =
@@ -649,15 +683,15 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
       let find_global_argument = find_global_argument state in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict rc wc find_global_argument stack_size state tactics env
+          let preds = predict capnp_connection find_global_argument stack_size state tactics env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
     else
-      let () = init_predict_text rc wc in
+      let () = init_predict_text capnp_connection in
       fun f ->
         if f = [] then IStream.empty else
-          let preds = predict_text rc wc env
+          let preds = predict_text capnp_connection env
               (List.hd f).state in
           let preds = List.map (fun (t, c) -> { confidence = c; focus = 0; tactic = tactic_make t }) preds in
           IStream.of_list preds
