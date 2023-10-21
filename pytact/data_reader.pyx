@@ -157,11 +157,11 @@ cdef class LowlevelDataReader:
 
     cdef GraphIndex graph_index
 
-    cdef object graphs # : list[Dataset_Reader]
-    cdef readonly object graphid_by_filename # : dict[Path, int]
+    cdef list[Dataset_Reader] graphs
+    cdef readonly dict[Path, int] graphid_by_filename
     """Map from filenames in the data directory to their graph-id's."""
 
-    cdef readonly object graph_files # : list[Path]
+    cdef readonly list[Path] graph_files
     """Map's a graph-id to a filename. Inverse of `graphid_by_filename`."""
 
     def __cinit__(self, dataset_path : Path, dataset: list[tuple[Path, Dataset_Reader]]):
@@ -331,7 +331,7 @@ cdef class Node:
         return (<uint64_t> self.graph) << 32 | self.nodeid
 
     @property
-    def label(self) -> Any:
+    def label(self) -> apic.Graph_Node_Label_Reader:
         """The label of the node, indicating it's function in the CIC graph."""
         return Graph_Node_Label_Reader.init(self.node.getLabel(), None)
 
@@ -591,7 +591,7 @@ cdef class Outcome:
     cdef C_Outcome_Reader reader
     cdef GraphId graph
     cdef GraphIndex *graph_index
-    cdef readonly object tactic # : Tactic_Reader | Unknown
+    cdef readonly object tactic # : apic.Tactic_Reader | Unknown
     """The tactic that generated the outcome. For it's arguments, see `tactic_arguments`
 
     Sometimes a tactic cannot or should not be recorded. In those cases, it is marked as 'unknown'.
@@ -600,7 +600,7 @@ cdef class Outcome:
     """
 
     @staticmethod
-    cdef init(C_Outcome_Reader reader, tactic: Tactic_Reader | Unknown, GraphId graph, GraphIndex *graph_index):
+    cdef init(C_Outcome_Reader reader, tactic: apic.Tactic_Reader | Unknown, GraphId graph, GraphIndex *graph_index):
         cdef Outcome wrapper = Outcome.__new__(Outcome)
         wrapper.reader = reader
         wrapper.tactic = tactic
@@ -699,7 +699,7 @@ cdef class ProofStep:
         return repr(self.lowlevel)
 
     @property
-    def tactic(self) -> Tactic_Reader | Unknown:
+    def tactic(self) -> apic.Tactic_Reader | Unknown:
         """The tactic that generated the proof step. Note that the arguments of the tactic can be found in the
         individual outcomes, because they may be different for each outcome.
 
@@ -847,7 +847,9 @@ cdef class Definition:
 
     @property
     def previous(self) -> Definition | None:
-        """The previous definition within the global context of the current file.
+        """`pytact.data_reader.Definition | None`
+
+        The previous definition within the global context of the current file.
 
         Note that this is a lowlevel property. Prefer to use `global_context` or `clustered_global_context`.
 
@@ -935,7 +937,9 @@ cdef class Definition:
 
     @property
     def status(self) -> Original | Discharged | Substituted:
-        """A definition is either
+        """`pytact.data_reader.Original | pytact.data_reader.Discharged | pytact.data_reader.Substituted`
+
+        A definition is either
         (1) an object as originally inputted by the user.
         (2) a definition that was originally defined in a section and has now had the section
             variables discharged into it.
@@ -1375,7 +1379,7 @@ class CheckAlignmentResponse:
 @dataclass
 class GlobalContextMessage:
     definitions : OnlineDefinitionsReader
-    tactics : pytact.graph_api_capnp_cython.AbstractTactic_Reader_List
+    tactics : apic.AbstractTactic_Reader_List
     log_annotation : str
     prediction_requests : Generator[GlobalContextMessage | ProofState | CheckAlignmentMessage,
                                     None | TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
@@ -1445,8 +1449,7 @@ def capnp_message_generator_from_file_lowlevel(
     Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
     `capnp_message_generator(s, record=message_file)`. The resulting generator acts just like the generator
     created by `capnp_message_generator` except that it is not connected to the socket but just replays the
-    pre-recorded messages. Every responsemessage received by this generator through `send` will be compared against
-    the recorded response and if they differ an error is thrown.
+    pre-recorded messages.
 
     Arguments:
     - `check` is an optional callable that can be used to compare the response of the server to the recorded
