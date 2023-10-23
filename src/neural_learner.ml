@@ -149,7 +149,8 @@ let write_read_capnp_message_uninterrupted { rc; wc; error_status } m =
       let module Response = Api.Reader.PredictionProtocol.Response in
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message m;
       match Capnp_unix.IO.ReadContext.read_message rc with
-      | None -> CErrors.anomaly Pp.(str "Capnp protocol error: Message expected but none received")
+      | None -> CErrors.user_err Pp.(str "Cap'n Proto protocol error while communicating with proving server. " ++
+                                    str "No response was received.")
       | Some response -> Response.get @@ Response.of_message response
     with Unix.Unix_error (e, _, _) ->
       let error_msg = match error_status () with
@@ -430,6 +431,22 @@ type communicator =
   ; check_alignment : unit -> (Graph_api.ro, int64, Api.Reader.array_t) Capnp.Array.t *
                               (Graph_api.ro, Api.Reader.Node.t, Api.Reader.array_t) Capnp.Array.t }
 
+
+let classify_response_message =
+  let module Response = Api.Reader.PredictionProtocol.Response in
+  function
+  | Response.Initialized -> Pp.str "initialized"
+  | Response.Prediction _ -> Pp.str "prediction"
+  | Response.TextPrediction _ -> Pp.str "textPrediction"
+  | Response.Alignment _ -> Pp.str "alignment"
+  | Response.Undefined _ -> Pp.str "unknown"
+
+let check_protocol_error expected response =
+  CErrors.user_err Pp.(str "Cap'n Proto protocol error while communicating with proving server. " ++
+                       str "Expected message of type " ++ quote (str expected) ++
+                       str " but received message of type " ++
+                       quote (classify_response_message response))
+
 let get_communicator =
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
@@ -452,29 +469,33 @@ let get_communicator =
       let add_global_context gca =
         let req = Request.init_root () in
         gca (Request.initialize_init req);
-        match write_read_capnp_message_uninterrupted capnp_connection req  with
+        match check_protocol_error "initialized" @@
+          write_read_capnp_message_uninterrupted capnp_connection req with
         | Response.Initialized -> ()
-        | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'Initialized' message expected") in
+        | _ -> assert false in
       let request_prediction rp =
         let req = Request.init_root () in
         rp (Request.predict_init req);
-        match write_read_capnp_message_uninterrupted capnp_connection req  with
+        match check_protocol_error "prediction" @@
+          write_read_capnp_message_uninterrupted capnp_connection req  with
         | Response.Prediction preds -> preds
-        | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'Prediction' message expected") in
+        | _ -> assert false in
       let request_text_prediction rp =
         let req = Request.init_root () in
         rp (Request.predict_init req);
-        match write_read_capnp_message_uninterrupted capnp_connection req  with
+        match check_protocol_error "textPrediction" @@
+          write_read_capnp_message_uninterrupted capnp_connection req  with
         | Response.TextPrediction preds -> preds
-        | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'TextPrediction' message expected") in
+        | _ -> assert false in
       let check_alignment () =
         let req = Request.init_root () in
         Request.check_alignment_set req;
-        match write_read_capnp_message_uninterrupted capnp_connection req  with
+        match check_protocol_error "alignment" @@
+          write_read_capnp_message_uninterrupted capnp_connection req  with
         | Response.Alignment alignment ->
           Response.Alignment.unaligned_tactics_get alignment,
           Response.Alignment.unaligned_definitions_get alignment
-        | _ -> CErrors.anomaly Pp.(str "Capnp protocol error: 'Alignment' message expected") in
+        | _ -> assert false in
       let sync_context_stack = sync_context_stack add_global_context in
       let comm = { add_global_context; sync_context_stack; request_prediction
                  ; request_text_prediction; check_alignment } in
