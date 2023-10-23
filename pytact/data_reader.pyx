@@ -5,8 +5,10 @@
 # distutils: libraries = capnpc capnp capnp-rpc
 # distutils: sources = pytact/graph_api.capnp.cpp
 
-"""This module provides read access to dataset files of a Tactican Graph dataset.
-Additionally, some support for communicating with a Coq process exists.
+"""This module provides read access to dataset files of a Tactican API dataset.
+Additionally, there is support for communicating with a Coq processes through
+the same data-format. The next sections give an overview of how this can be
+accomplished. For an overview of examples, see `pytact`.
 
 # Reading a dataset
 
@@ -14,10 +16,10 @@ The dataset is mapped into memory using mmap, allowing random access to it's
 structures while keeping memory low. This file contains three entry-points to a
 dataset in order of preference:
 
-1. Contextmanager `data_reader` provides high-level access to the data
+1. Contextmanager `pytact.data_reader.data_reader(path)` provides high-level access to the data
    in directory `path`. This is the preferred entry-point unless you need
    something special.
-2. Contextmanager `lowlevel_data_reader` provides low-level access to
+2. Contextmanager `pytact.data_reader.lowlevel_data_reader(path)` provides low-level access to
    the data in directory `path`, giving direct access to the Cap'n Proto structures
    of the dataset. Use this when `data_reader` is too slow or you need access
    to data not provided by `data_reader`.
@@ -25,7 +27,7 @@ dataset in order of preference:
    the Cap'n Proto structures of a single file. Using this is usually not
    advisable.
 
-Additionally, some indexing helpers are defined:
+Additionally, some indexing and traversal helpers are provided:
 - `GlobalContextSets` calculates and caches the global context of a definition
   as a set, also caching intermediate results.
 - `definition_dependencies` and `node_dependencies` traverse the graph starting
@@ -40,34 +42,39 @@ low-level interface.
 
 The function `capnp_message_generator` converts a socket into a nested generator that
 yields request messages for predictions and expects to be sent response messages
-in return. A simple example of how to handle these messages is in `fake_python_server.py`.
+in return. A simple example of how to handle these messages is in `pytact.fake_python_server`.
 Some docs can be found with `capnp_message_generator`.
+
+The `capnp_message_generator` function can also dump the sequence of messages send
+and received to a file. One can then use `capnp_message_generator_from_file` to replay
+that sequence against a server, either in a unit-test where the call to `capnp_message_generator`
+is mocked by `capnp_message_generator_from_file`, or using a fully fledged socket test
+as can be found in `pytact.fake_coq_client`.
 
 ## Lowlevel interface
 
 The function `capnp_message_generator_lowlevel` converts a socket into a generator that
-yields lowlevel cap'n proto request messages for predictions and expects to be sent cap'n proto
+yields lowlevel Cap'n Proto request messages for predictions and expects to be sent Cap'n proto
 messages in return. There are four types of messages `msg` Coq sends.
 1. Synchronize: If `msg.is_synchronize` is true, Coq is attempting to synchronize
-   it's state with the server. A `PredictionProtocol.Response.synchronized` message is expected
+   its state with the server. A `PredictionProtocol.Response.synchronized` message is expected
    in return.
 2. Initialize: If `msg.is_initialize` is true, Coq is sending a list of available
-   tactics and the current global context to be added to an existing stack of global context
+   tactics and a global context fragment to be added to an existing stack of global context
    information. An empty stack can be created through `empty_online_definitions_initialize`.
    To add an initialize message to the stack, you can use
    ```
-   with online_definitions_initialize(existing_stack, msg) as definitions:
+   with pytact.data_reader.online_definitions_initialize(existing_stack, msg) as definitions:
        print(type(definitions))
    ```
    Any subsequent messages will be made in the context of the
    tactics and predictions sent in this message, until an initialize message is received
    such that `msg.initialize.stack_size` is smaller than the current stack size.
-
    A `PredictionProtocol.Response.initialized` message is expected in response of this message.
 4. Predict: If `msg.is_predict` is true, Coq is asking to predict a list of plausible
    tactics given a proof state. The proof state can be easily accessed using
    ```
-   with online_data_predict(definitions, msg.predict) as proof_state:
+   with pytact.data_reader.online_data_predict(definitions, msg.predict) as proof_state:
        print(dir(proof_state))
    ```
    A `PredictionProtocol.Response.prediction` or `PredictionProtocol.Response.textPrediction`
@@ -76,11 +83,11 @@ messages in return. There are four types of messages `msg` Coq sends.
    to check which tactics and definitions are known to it. A
    `PredictionProtocol.Response.alignment` message is expected in return.
 
-The `capnp_message_generator` function can also dump the sequence of messages send
-and received to a file. One can then use `capnp_message_generator_from_file` to replay
-that sequence against a server, either in a unit-test where the call to `capnp_message_generator`
-is mocked by `capnp_message_generator_from_file`, or using a fully fledged socket test
-as can be found in `fake_coq_client.py`.
+You can wrap the generator produced by `capnp_message_generator_lowlevel` into
+`record_lowlevel_generator` in order to record the exchanged messages to disk.
+This trace can later be replayed using
+`capnp_message_generator_from_file_lowlevel` (or using the high-level interface).
+
 """
 
 from __future__ import annotations
@@ -120,8 +127,8 @@ class TupleLike():
         return self._count
 
 @contextmanager
-def file_dataset_reader(fname: Path) -> Generator[Any, None, None]:
-    """Load a single dataset file into memory, and expose it's raw Cap'n Proto structures.
+def file_dataset_reader(fname: Path) -> Generator[apic.Dataset_Reader, None, None]:
+    """Load a single dataset file into memory, and expose its raw Cap'n Proto structures.
 
     This is a low-level function. Prefer to use `data_reader` or `lowlevel_data_reader`.
     """
@@ -202,7 +209,7 @@ cdef class LowlevelDataReader:
         self.graph_index = GraphIndex(c_nodes, c_edges, c_representatives, local_to_global)
 
     def local_to_global(self, graph: int, dep_index: int) -> int:
-        """Convert dependency-index relative to a graph-id to a new graph-id.
+        """Convert a dependency-index relative to a graph-id to a new graph-id.
 
         This is used to find the graph-id where a particular node can be found. If `graph` is the
         graph-id that contains a reference to a node and `dep_index` is the relative location
@@ -211,14 +218,14 @@ cdef class LowlevelDataReader:
         """
         return self.graph_index.local_to_global[graph][dep_index]
 
-    def __getitem__(self, graph):
+    def __getitem__(self, graph: int):
         """Retrieve the raw Cap'n Proto structures associated with a graph-id."""
         return self.graphs[graph]
 
     def __len__(self) -> int:
         return len(self.graphs)
 
-def setup_dataset(dataset_path: Path):
+def _setup_dataset(dataset_path: Path):
     if not dataset_path.exists():
         raise ValueError(f"Dataset does not exist: {dataset_path}")
     if dataset_path.is_file():
@@ -258,7 +265,7 @@ def lowlevel_data_reader(dataset_path: Path) -> Generator[LowlevelDataReader, No
     further documentation.
     """
 
-    mountpoint = setup_dataset(dataset_path)
+    mountpoint = _setup_dataset(dataset_path)
     fnames = [f for f in mountpoint.glob('**/*.bin') if f.is_file()]
 
     # Increase the open file limit, because we could be intentionally mapping a large number of files
@@ -318,7 +325,7 @@ cdef class Node:
     def __repr__(self):
         return f"node-{self.graph}-{self.nodeid}"
 
-    def __eq__(self, other: Node) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Physical equality of two nodes. Note that two nodes with a different physical equality
         may have the same `identity`. See `identity` for details.
         """
@@ -770,33 +777,71 @@ cdef class Representative_List:
         return self.reader.size()
 
 @dataclass
-class Original: pass
+class Original:
+    """Token that signals that a definition is original, as inputted by the
+    user."""
+    pass
+
 @dataclass
 class Discharged:
+    """Token that signals that a definition is derived from an original after
+    section closing."""
+
     original: Definition
+
 @dataclass
 class Substituted:
+    """Token that signals that a definition is derived from an original after
+    module functor instantiation."""
+
     original: Definition
 
 @dataclass
 class Inductive:
+    """Token that signals that a definition is inductive."""
+
     representative: Definition
+    """The representative of the mutually recursive cluster. For lowlevel use only"""
+
 @dataclass
 class Constructor:
+    """Token that signals that a definition is a constructor."""
+
     representative: Definition
+    """The representative of the mutually recursive cluster. For lowlevel use only"""
+
 @dataclass
 class Projection:
+    """Token that signals that a definition is a projection."""
+
     representative: Definition
+    """The representative of the mutually recursive cluster. For lowlevel use only"""
+
 @dataclass
-class ManualConstant: pass
+class ManualConstant:
+    """Token that signals that a definition was inputted by the user by
+    manually inputting a term."""
+    pass
+
 @dataclass
 class TacticalConstant:
+    """Token that signals that a lemma was proved by the user using
+    a tactic proof."""
+
     proof: Sequence[ProofStep]
+    """The proof of the lemma."""
+
 @dataclass
-class ManualSectionConstant: pass
+class ManualSectionConstant:
+    """Token that signals that a constant is a section variable or let-construct."""
+    pass
+
 @dataclass
 class TacticalSectionConstant:
+    """Token that signals that a constant is a section let-construct with a tactic proof."""
+
     proof: Sequence[ProofStep]
+    """The proof of the lemma."""
 
 cdef class Definition:
     """A definition of the CIC, which is either a constant, inductive, constructor, projection or section
@@ -807,7 +852,8 @@ cdef class Definition:
     cdef GraphId graph
     cdef GraphIndex *graph_index
     cdef readonly Node node
-    """The node that is associated with this definition. It holds that `definition.node.definition == definition`.
+    """The node that is associated with this definition. It holds that
+    `definition.node.definition == definition`.
     """
 
     @staticmethod
@@ -825,7 +871,7 @@ cdef class Definition:
     def __repr__(self):
         return repr(self.lowlevel)
 
-    def __eq__(self, other: Definition) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Physical equality of two nodes. Note that two nodes with a different physical equality
         may have the same `identity`. See `identity` for details.
         """
@@ -847,9 +893,7 @@ cdef class Definition:
 
     @property
     def previous(self) -> Definition | None:
-        """`pytact.data_reader.Definition | None`
-
-        The previous definition within the global context of the current file.
+        """The previous definition within the global context of the current file.
 
         Note that this is a lowlevel property. Prefer to use `global_context` or `clustered_global_context`.
 
@@ -937,8 +981,7 @@ cdef class Definition:
 
     @property
     def status(self) -> Original | Discharged | Substituted:
-        """`pytact.data_reader.Original | pytact.data_reader.Discharged | pytact.data_reader.Substituted`
-
+        """
         A definition is either
         (1) an object as originally inputted by the user.
         (2) a definition that was originally defined in a section and has now had the section
@@ -1228,6 +1271,8 @@ def data_reader(dataset_path: Path) -> Generator[dict[Path, Dataset], None, None
         yield lowlevel_to_highlevel(lreader)
 
 cdef class OnlineDefinitionsReader:
+    """This class represents a global context to Python by Coq, containing all
+    known definitions and available tactics."""
 
     cdef GraphIndex graph_index
 
@@ -1253,6 +1298,15 @@ cdef class OnlineDefinitionsReader:
         return wrapper
 
     def local_to_global(self, graph: int, dep_index: int) -> int:
+        """Convert a dependency-index relative to a graph-id to a new graph-id.
+
+        This is used to find the graph-id where a particular node can be found. If `graph` is the
+        graph-id that contains a reference to a node and `dep_index` is the relative location
+        where that node can be found then `local_to_global(graph, dep_index)` finds the index in
+        the global context stack where the node is physically located.
+
+        Lowlevel function.
+        """
         return self.graph_index.local_to_global[graph][dep_index]
 
     @property
@@ -1308,9 +1362,11 @@ cdef class OnlineDefinitionsReader:
 @contextmanager
 def online_definitions_initialize(OnlineDefinitionsReader stack,
                                   PredictionProtocol_Request_Initialize_Reader init) -> Generator[OnlineDefinitionsReader, None, None]:
-    """Given a new initialization message sent by Coq, construct a `OnlineDefinitiosnReader` object. This can be used
-    to inspect the definitions currently available. Additionally, using `online_data_predict` it can
-    be combined with a subsequent prediction request received from Coq to build a `ProofState`.
+    """Given a new initialization message sent by Coq, construct a
+    `OnlineDefinitiosnReader` object. This can be used to inspect the
+    definitions currently available. Additionally, using `online_data_predict`
+    it can be combined with a subsequent prediction request received from Coq
+    to build a `ProofState`.
     """
     # CAREFUL: OnlineDefinitionsReader contains critical C++ structures that are not being
     # tracked by the garbage collector. As soon as this object gets destroyed, those
@@ -1329,8 +1385,9 @@ def empty_online_definitions_initialize() -> OnlineDefinitionsReader:
 @contextmanager
 def online_data_predict(OnlineDefinitionsReader base,
                         PredictionProtocol_Request_Predict_Reader predict) -> Generator[ProofState, None, None]:
-    """Given a `OnlineDefinitionsReader` instance constructed through `online_data_initialize`, and a prediction message
-    sent by Coq, construct a `ProofState` object that represents the current proof state in Coq.
+    """Given a `OnlineDefinitionsReader` instance constructed through
+    `online_data_initialize`, and a prediction message sent by Coq, construct a
+    `ProofState` object that represents the current proof state in Coq.
     """
     # CAREFUL: This contains critical C++ structures that are not being
     # tracked by the garbage collector. As soon as this object gets destroyed, those
@@ -1378,14 +1435,24 @@ class CheckAlignmentResponse:
 
 @dataclass
 class GlobalContextMessage:
+    """A message containing a new global context sent to Python from Coq,
+    including all known definitions and available tactics."""
+
     definitions : OnlineDefinitionsReader
-    tactics : apic.AbstractTactic_Reader_List
+    tactics : Sequence[apic.AbstractTactic_Reader]
+
     log_annotation : str
+    """An annotation representing the current position of Coq in a source
+    document. For logging and debugging purposes."""
+
     prediction_requests : Generator[GlobalContextMessage | ProofState | CheckAlignmentMessage,
                                     None | TacticPredictionsGraph | TacticPredictionsText | CheckAlignmentResponse,
                                     None]
+    """A sub-generator that produces new requests from Coq that are based on or
+    extend the global context of the current message. Once the sub-generator
+    runs out, the parent generator continues."""
 
-def convert_predictions(preds, stack_size):
+def _convert_predictions(preds, stack_size):
     if isinstance(preds, TacticPredictionsText):
         preds = [{'tacticText': pred.tactic_text,
                   'confidence': pred.confidence} for pred in preds.predictions]
@@ -1401,7 +1468,7 @@ def convert_predictions(preds, stack_size):
         raise Exception("Incorrect predictions received")
 
 def capnp_message_generator_lowlevel(socket: socket.socket) -> (
-        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+        Generator[apic.PredictionProtocol_Request_Reader,
                   capnp.lib.capnp._DynamicStructBuilder, None]):
     """A generator that facilitates communication between a prediction server and a Coq process.
 
@@ -1440,7 +1507,7 @@ def capnp_message_generator_lowlevel(socket: socket.socket) -> (
 def capnp_message_generator_from_file_lowlevel(
         message_file: BinaryIO,
         check : Callable[[Any, Any, Any], None] | None = None) -> (
-        Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+        Generator[apic.PredictionProtocol_Request_Reader,
                   capnp.lib.capnp._DynamicStructBuilder, None]):
     """Replay and verify a pre-recorded communication sequence between Coq and a prediction server.
 
@@ -1471,9 +1538,9 @@ def capnp_message_generator_from_file_lowlevel(
 
 def record_lowlevel_generator(
         record_file: BinaryIO,
-        gen: Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+        gen: Generator[apic.PredictionProtocol_Request_Reader,
                        capnp.lib.capnp._DynamicStructBuilder, None]) -> (
-                           Generator[pytact.graph_api_capnp_cython.PredictionProtocol_Request_Reader,
+                           Generator[apic.PredictionProtocol_Request_Reader,
                                      capnp.lib.capnp._DynamicStructBuilder, None]):
     """Record a trace of the full interaction of a lowlevel generator to a file
 
@@ -1488,7 +1555,12 @@ def record_lowlevel_generator(
         response.write_packed(record_file)
         yield
 
-def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
+def prediction_generator(
+        lgenerator: Generator[apic.PredictionProtocol_Request_Reader,
+                              capnp.lib.capnp._DynamicStructBuilder, None],
+        OnlineDefinitionsReader defs):
+    """Given the current global context stack `defs`, convert a low-level
+    generator to a high-level `GlobalContextMessage`"""
     msg = next(lgenerator, None)
     while msg is not None:
         if msg.is_synchronize:
@@ -1518,7 +1590,7 @@ def prediction_generator(lgenerator, OnlineDefinitionsReader defs):
         elif msg.is_predict:
             with online_data_predict(defs, msg.predict) as proof_state:
                 preds = yield proof_state
-                response = convert_predictions(preds, defs.graph_index.nodes.size())
+                response = _convert_predictions(preds, defs.graph_index.nodes.size())
             lgenerator.send(response)
             yield
             msg = next(lgenerator, None)
@@ -1542,9 +1614,9 @@ def capnp_message_generator(socket: socket.socket, record: BinaryIO | None = Non
     initially empty list of available tactics and definitions in the global context. Through
     `context.prediction_requests` one can access a generator that yields prediction requests and expects
     predictions to be sent in response. The possible messages are as follows:
-    - `GlobalContextMessage`: An additional, nested global context message that adds in additional tactics
-       and definitions. The prediction requests of this nested context need to be exhausted before continuing
-       with messages from the current context.
+    - `GlobalContextMessage`: An additional, nested, global context message that amends the current context
+       with additional tactics and definitions. The prediction requests of this nested context need to be
+       exhausted before continuing with messages from the current context.
     - `CheckAlignmentMessage`: A request to check which of Coq's current tactics and definitions the
       prediction server currently "knows about". The generator expects a `CheckAlignmentResponse` to be
       sent in response.
@@ -1571,8 +1643,7 @@ def capnp_message_generator_from_file(message_file: BinaryIO,
     Accepts a `message_file` containing a stream of Capt'n Proto messages as recorded using
     `capnp_message_generator(s, record=message_file)`. The resulting generator acts just like the generator
     created by `capnp_message_generator` except that it is not connected to the socket but just replays the
-    pre-recorded messages. Every responsemessage received by this generator through `send` will be compared against
-    the recorded response and if they differ an error is thrown.
+    pre-recorded messages.
 
     Arguments:
     - `check` is an optional callable that can be used to compare the response of the server to the recorded
