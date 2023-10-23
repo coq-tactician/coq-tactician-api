@@ -47,7 +47,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://coq-tactician@github.io"
-# Documentation = "https://readthedocs.org"
+Documentation = "https://coq-tactician.github.io/api/pytactician-pdoc"
 Repository = "https://github.com/coq-tactician/coq-tactician-api"
 Changelog = "https://github.com/coq-tactician/coq-tactician-api/CHANGELOG.md"
 
