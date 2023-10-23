@@ -46,10 +46,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://coq-tactician@github.io"
+Homepage = "https://coq-tactician.github.io"
 Documentation = "https://coq-tactician.github.io/api/pytactician-pdoc"
 Repository = "https://github.com/coq-tactician/coq-tactician-api"
-Changelog = "https://github.com/coq-tactician/coq-tactician-api/CHANGELOG.md"
+Changelog = "https://github.com/coq-tactician/coq-tactician-api/blob/coq8.11/CHANGELOG.md"
 
 [project.scripts]
 pytact-fake-coq = "pytact.fake_coq_client:main"
