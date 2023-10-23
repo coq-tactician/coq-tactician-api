@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytactician"
-version = '15.0'
+version = '15.1'
 description = "Python Library for interfacing with Coq and Tactician"
 authors = [
     {name = "Lasse Blaauwbroek", email = "lasse@blaauwbroek.eu"},
