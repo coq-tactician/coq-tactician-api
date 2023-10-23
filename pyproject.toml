@@ -75,4 +75,6 @@ pytact = [
     "data_reader.pyx",
     "graph_api_capnp_cython.pyx",
     "graph_api_capnp_cython.pxd",
+    "data_reader.pyi",
+    "py.typed",
 ]
