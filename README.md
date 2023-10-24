@@ -131,24 +131,22 @@ At this point, you have the following commands available which will interact wit
 
 ## Client-based proof exploration
 
-Finally, the command `Explore.` will initiate a proof exploration session. An example of this is available in
-[TestReinforceStdin.v](pytact/tests/TestReinforceStdin.v).
-To do this, you need to have a python client running. An example is available in the `pytact-prover` executable.
-To see how it works, run
-```
-pytact-prover --pdfsequence --pdfname test
-```
-This will execute a dummy proof through the proof exploration interface. Visualizations of each proof state
-are available in `test<n>.pdf`.
-optionally `--file` option to point to a source Coq `.v` file.
-Also with `--interactive` option the innteractive shell appears where you can
-manually interact with the environment. Whenever a tactic is executed,
-the resulting proof state if visualized in the file
-`python_graph.pdf`.
+Finally, the command `Tactician Explore.` will initiate a proof exploration
+session. An example of this is available in
+[TestReinforceStdin.v](pytact/tests/TestReinforceStdin.v). To do this, you need
+to have a python client running. An example is available in the `pytact-prover`
+executable. To see how it works, run ``` pytact-prover --pdfsequence --pdfname
+test ``` This will execute a dummy proof through the proof exploration
+interface. Visualizations of each proof state are available in `test<n>.pdf`.
+optionally `--file` option to point to a source Coq `.v` file. Also with
+`--interactive` option the interactive shell appears where you can manually
+interact with the environment. Whenever a tactic is executed, the resulting
+proof state if visualized in the file `python_graph.pdf`.
 
 ## Generating a dataset
-To generate a dataset, you currently have to install a slightly different version of the Coq plugin that resides
-in the `generate-dataset` branch. The procedure to generate the dataset is as follows.
+To generate a dataset, you currently have to install a slightly different
+version of the Coq plugin that resides in the `generate-dataset` branch. The
+procedure to generate the dataset is as follows.
 
 1. Create your switch
 ```
