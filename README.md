@@ -1,6 +1,6 @@
 # Tactician's API: A graph- and text-based machine learning interface for Coq
 
-![Tactician's web of large-scale formal knowledge](assets/web.jpg)
+![Tactician's web of large-scale formal knowledge](assets/web.png)
 Tactician's API provides external machine learning agents with the data
 collected by [Tactician](https://coq-tactician.github.io) from the [Coq Proof
 Assistant](https://coq.inria.fr). It is able to extract large-scale datasets

@@ -21,6 +21,7 @@ def init_graph():
     g.attr('edge', color="#0000ff10")
     g.attr(overlap='prism', outputorder='edgesfirst')
     g.attr(ratio='fill', size="20,10")
+    g.attr(bgcolor="transparent")
     return g
 
 def make_color(n, alpha):
@@ -107,8 +108,8 @@ def main():
                     target_graph = data.local_to_global(gid, target.dep_index)
                     targetid = get_node_id(target_graph, target.node_index)
                     distance = abs(positions[sourceid]-positions[targetid])
-                    distance_norm = distance / maxdist
-                    g.edge(sourceid, targetid, color=make_color(distance_norm, 0.05))
+                    distance_norm = distance / maxdist * 2
+                    g.edge(sourceid, targetid, color=make_color(distance_norm, 0.2))
                     # print(f"{sourceid},{targetid}")
         g.render(filename='web', format='svg', view=False, cleanup=False)
 
