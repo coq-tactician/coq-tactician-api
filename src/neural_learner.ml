@@ -441,7 +441,7 @@ let classify_response_message =
   | Response.Alignment _ -> Pp.str "alignment"
   | Response.Undefined _ -> Pp.str "unknown"
 
-let check_protocol_error expected response =
+let protocol_error expected response =
   CErrors.user_err Pp.(str "Cap'n Proto protocol error while communicating with proving server. " ++
                        str "Expected message of type " ++ quote (str expected) ++
                        str " but received message of type " ++
@@ -469,33 +469,33 @@ let get_communicator =
       let add_global_context gca =
         let req = Request.init_root () in
         gca (Request.initialize_init req);
-        match check_protocol_error "initialized" @@
-          write_read_capnp_message_uninterrupted capnp_connection req with
+        let response = write_read_capnp_message_uninterrupted capnp_connection req in
+        match response with
         | Response.Initialized -> ()
-        | _ -> assert false in
+        | _ -> protocol_error "initialized" response in
       let request_prediction rp =
         let req = Request.init_root () in
         rp (Request.predict_init req);
-        match check_protocol_error "prediction" @@
-          write_read_capnp_message_uninterrupted capnp_connection req  with
+        let response = write_read_capnp_message_uninterrupted capnp_connection req in
+        match response with
         | Response.Prediction preds -> preds
-        | _ -> assert false in
+        | _ -> protocol_error "prediction" response in
       let request_text_prediction rp =
         let req = Request.init_root () in
         rp (Request.predict_init req);
-        match check_protocol_error "textPrediction" @@
-          write_read_capnp_message_uninterrupted capnp_connection req  with
+        let response = write_read_capnp_message_uninterrupted capnp_connection req in
+        match response with
         | Response.TextPrediction preds -> preds
-        | _ -> assert false in
+        | _ -> protocol_error "textPrediction" response in
       let check_alignment () =
         let req = Request.init_root () in
         Request.check_alignment_set req;
-        match check_protocol_error "alignment" @@
-          write_read_capnp_message_uninterrupted capnp_connection req  with
+        let response = write_read_capnp_message_uninterrupted capnp_connection req in
+        match response with
         | Response.Alignment alignment ->
           Response.Alignment.unaligned_tactics_get alignment,
           Response.Alignment.unaligned_definitions_get alignment
-        | _ -> assert false in
+        | _ -> protocol_error "alignment" response in
       let sync_context_stack = sync_context_stack add_global_context in
       let comm = { add_global_context; sync_context_stack; request_prediction
                  ; request_text_prediction; check_alignment } in
