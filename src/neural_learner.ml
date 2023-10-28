@@ -150,7 +150,7 @@ let write_read_capnp_message_uninterrupted { rc; wc; error_status } m =
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message m;
       match Capnp_unix.IO.ReadContext.read_message rc with
       | None -> CErrors.user_err Pp.(str "Cap'n Proto protocol error while communicating with proving server. " ++
-                                    str "No response was received.")
+                                     str "No response was received.")
       | Some response -> Response.get @@ Response.of_message response
     with Unix.Unix_error (e, _, _) ->
       let error_msg = match error_status () with
@@ -447,9 +447,110 @@ let protocol_error expected response =
                        str " but received message of type " ++
                        quote (classify_response_message response))
 
-let get_communicator =
+let message_communicator socket error_status =
+  let rc, wc = connect_socket socket in
+  let capnp_connection = { rc; wc; error_status } in
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
+  let add_global_context gca =
+    let req = Request.init_root () in
+    gca (Request.initialize_init req);
+    let response = write_read_capnp_message_uninterrupted capnp_connection req in
+    match response with
+    | Response.Initialized -> ()
+    | _ -> protocol_error "initialized" response in
+  let request_prediction rp =
+    let req = Request.init_root () in
+    rp (Request.predict_init req);
+    let response = write_read_capnp_message_uninterrupted capnp_connection req in
+    match response with
+    | Response.Prediction preds -> preds
+    | _ -> protocol_error "prediction" response in
+  let request_text_prediction rp =
+    let req = Request.init_root () in
+    rp (Request.predict_init req);
+    let response = write_read_capnp_message_uninterrupted capnp_connection req in
+    match response with
+    | Response.TextPrediction preds -> preds
+    | _ -> protocol_error "textPrediction" response in
+  let check_alignment () =
+    let req = Request.init_root () in
+    Request.check_alignment_set req;
+    let response = write_read_capnp_message_uninterrupted capnp_connection req in
+    match response with
+    | Response.Alignment alignment ->
+      Response.Alignment.unaligned_tactics_get alignment,
+      Response.Alignment.unaligned_definitions_get alignment
+    | _ -> protocol_error "alignment" response in
+  let sync_context_stack = sync_context_stack add_global_context in
+  { add_global_context; sync_context_stack; request_prediction
+  ; request_text_prediction; check_alignment }
+
+let print_capnp_exception_type = function
+  | `Failed        -> "Failed"
+  | `Overloaded    -> "Overloaded"
+  | `Disconnected  -> "Disconnected"
+  | `Unimplemented -> "Unimplemented"
+  | `Undefined x   -> "Undefined:" ^ string_of_int x
+
+let cancel_on_interrupt error_status f =
+  let open Lwt in
+  let signals = [Sys.sigalrm; Sys.sigint] in
+  ignore (Thread.sigmask Unix.SIG_BLOCK signals);
+  let res = Fun.protect ~finally:(fun () -> ignore (Thread.sigmask Unix.SIG_UNBLOCK signals)) @@ fun () ->
+    f () in
+  try
+    Lwt_main.run (
+      res >|= fun x ->
+      match x with
+      | Ok x -> x
+      | Error `Capnp `Cancelled -> raise Canceled
+      | Error `Capnp (`Exception Capnp_rpc.Exception.{ty; reason}) ->
+        let error_msg = match error_status () with
+          | None -> Pp.mt ()
+          | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
+        CErrors.user_err Pp.(str "Error while communicating with proving server:" ++ fnl () ++
+                             str (print_capnp_exception_type ty) ++ str ":" ++ fnl () ++ str reason ++
+                             fnl () ++ error_msg))
+  with e ->
+    let e = CErrors.push e in
+    Lwt.cancel res;
+    Exninfo.iraise e
+
+let rpc_communicator socket error_status =
+  let open Capnp_rpc_lwt in
+  let open Lwt_result in
+  let service_name = Capnp_rpc_net.Restorer.Id.public "" in
+  let cap =
+    let switch = Lwt_switch.create () in
+    let endpoint = Capnp_rpc_unix.Unix_flow.connect ~switch (Lwt_unix.of_unix_file_descr socket)
+                   |> Capnp_rpc_net.Endpoint.of_flow ~switch (module Capnp_rpc_unix.Unix_flow)
+                     ~peer_id:Capnp_rpc_net.Auth.Digest.insecure in
+    let t : Capnp_rpc_unix.CapTP.t = Capnp_rpc_unix.CapTP.connect ~restore:Capnp_rpc_net.Restorer.none endpoint in
+    Capnp_rpc_unix.CapTP.bootstrap t service_name in
+  let add_global_context (gca : Api.Builder.GlobalContextAddition.t -> unit) =
+    let open Api.Client.PredictionServer.AddGlobalContext in
+    let request, params = Capability.Request.create Params.init_pointer in
+    gca params;
+    cancel_on_interrupt error_status @@ fun () -> Capability.call_for_unit cap method_id request in
+  let request_prediction rp =
+    let open Api.Client.PredictionServer.RequestPrediction in
+    let request, params = Capability.Request.create Params.init_pointer in
+    rp params;
+    cancel_on_interrupt error_status @@ fun () ->
+    Capability.call_for_value cap method_id request >|= Results.predictions_get in
+  let request_text_prediction rp = assert false in
+  let check_alignment () =
+    let open Api.Client.PredictionServer.CheckAlignment in
+    let request = Capability.Request.create_no_args () in
+    cancel_on_interrupt error_status @@ fun () ->
+    Capability.call_for_value cap method_id request >|= fun alignment ->
+    Results.unaligned_tactics_get alignment, Results.unaligned_definitions_get alignment in
+  let sync_context_stack = sync_context_stack add_global_context in
+  { add_global_context; sync_context_stack; request_prediction
+  ; request_text_prediction; check_alignment }
+
+let get_communicator =
   let communicator = ref None in
   fun () ->
     match !communicator with
@@ -460,48 +561,16 @@ let get_communicator =
         else
           let addr = Str.split (Str.regexp ":") (tcp_option()) in
           connect_tcpip (List.nth addr 0) (List.nth addr 1) in
-      let rc, wc = connect_socket socket in
       let error_status () =
         let res = error_status () in
         communicator := None;
         res in
-      let capnp_connection = { rc; wc; error_status } in
-      let add_global_context gca =
-        let req = Request.init_root () in
-        gca (Request.initialize_init req);
-        let response = write_read_capnp_message_uninterrupted capnp_connection req in
-        match response with
-        | Response.Initialized -> ()
-        | _ -> protocol_error "initialized" response in
-      let request_prediction rp =
-        let req = Request.init_root () in
-        rp (Request.predict_init req);
-        let response = write_read_capnp_message_uninterrupted capnp_connection req in
-        match response with
-        | Response.Prediction preds -> preds
-        | _ -> protocol_error "prediction" response in
-      let request_text_prediction rp =
-        let req = Request.init_root () in
-        rp (Request.predict_init req);
-        let response = write_read_capnp_message_uninterrupted capnp_connection req in
-        match response with
-        | Response.TextPrediction preds -> preds
-        | _ -> protocol_error "textPrediction" response in
-      let check_alignment () =
-        let req = Request.init_root () in
-        Request.check_alignment_set req;
-        let response = write_read_capnp_message_uninterrupted capnp_connection req in
-        match response with
-        | Response.Alignment alignment ->
-          Response.Alignment.unaligned_tactics_get alignment,
-          Response.Alignment.unaligned_definitions_get alignment
-        | _ -> protocol_error "alignment" response in
-      let sync_context_stack = sync_context_stack add_global_context in
-      let comm = { add_global_context; sync_context_stack; request_prediction
-                 ; request_text_prediction; check_alignment } in
-      communicator := Some comm;
-      comm
+      let comm = if rpc_option () then rpc_communicator socket error_status else
+          message_communicator socket error_status in
+        communicator := Some comm;
+        comm
     | Some comm -> comm
+
 
 let check_neural_alignment () =
   let { sync_context_stack; check_alignment; _ } = get_communicator () in
