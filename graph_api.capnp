@@ -422,17 +422,18 @@ struct Definition {
 }
 
 struct DataVersion {
-  # Version info of a dataset.
+  # Version info for the data schema. A version `x.y` has a major component and a minor component.
+  # The major component `x` will be incremented to `x+1` when there are incompatible changes in the
+  # schema that affect the `Dataset` struct.
+  # The minor component `y` will be incremented to `y+1` when there are incompatible changes in the
+  # communication protocol with Coq, but the dataset format remains unaffected.
 
   major @0 :Int64;
-  # Currently we only have a major version. Any change to the graph format, Cap'n Proto schema or
-  # communication protocol is considered a breaking change and will increment the major version number.
-  # Note that currently we don't distinquish backwards-compatible Cap'n Proto schema changes from
-  # non-backwards-compatible changes. The schema might change in a non-compatible way without notice.
-  # In the future, a minor version id might be introduced.
+
+  minor @1 :Int64;
 }
 
-const currentVersion :DataVersion = ( major = 15 );
+const currentVersion :DataVersion = ( major = 16, minor = 0 );
 
 
 ######################################################################################################

@@ -179,7 +179,7 @@ cdef class LowlevelDataReader:
                 raise ValueError(
                     f"This library is compiled for a dataset containing data versioned as "
                     f"{graph_api_capnp.currentVersion} but file {f} contains data versioned as "
-                    f"{reader.data_version}.")
+                    f"{reader.data_version.dynamic}.")
             relative_self = Path(reader.dependencies[0])
             if f != relative_self:
                 real_root = Path(*(dataset_path/f).parts[:-len(relative_self.parts)])
@@ -1568,11 +1568,13 @@ async def prediction_generator(lgenerator, OnlineDefinitionsReader defs, mutret)
     while msg is not None:
         if msg.is_initialize:
             init = msg.initialize
-            if init.data_version.major != graph_api_capnp.currentVersion.major:
+            their_version = init.data_version
+            our_version = graph_api_capnp.currentVersion
+            if their_version.major != our_version.major or their_version.minor != our_version.minor:
                 raise ValueError(
                     f"This library is compiled for a dataset containing data versioned as "
                     f"{graph_api_capnp.currentVersion} but file Coq sent a message versioned as "
-                    f"{init.data_version}.")
+                    f"{init.data_version.dynamic}.")
             if init.stack_size != defs.graph_index.nodes.size():
                 mutret.contents = msg
                 return
