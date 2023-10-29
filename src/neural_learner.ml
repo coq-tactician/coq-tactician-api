@@ -493,29 +493,47 @@ let print_capnp_exception_type = function
   | `Unimplemented -> "Unimplemented"
   | `Undefined x   -> "Undefined:" ^ string_of_int x
 
+let protect_signals signals f =
+  (* Cannot use Fun.protect here, because the final clause may throw an async exception *)
+  ignore (Thread.sigmask Unix.SIG_BLOCK signals);
+  let unblock () = ignore (Thread.sigmask Unix.SIG_UNBLOCK signals) in
+  match f () with
+  | res -> unblock (); res
+  | exception e ->
+    let work_bt = Printexc.get_raw_backtrace () in
+      unblock () ;
+      Printexc.raise_with_backtrace e work_bt
+
+let with_signal signal handler f  =
+  let old = Sys.signal signal (Sys.Signal_handle handler) in
+  Fun.protect ~finally:(fun () -> Sys.set_signal signal old) f
+
 let cancel_on_interrupt error_status f =
   let open Lwt in
-  let signals = [Sys.sigalrm; Sys.sigint] in
-  ignore (Thread.sigmask Unix.SIG_BLOCK signals);
-  let res = Fun.protect ~finally:(fun () -> ignore (Thread.sigmask Unix.SIG_UNBLOCK signals)) @@ fun () ->
-    f () in
-  try
-    Lwt_main.run (
-      res >|= fun x ->
-      match x with
-      | Ok x -> x
-      | Error `Capnp `Cancelled -> raise Canceled
-      | Error `Capnp (`Exception Capnp_rpc.Exception.{ty; reason}) ->
-        let error_msg = match error_status () with
-          | None -> Pp.mt ()
-          | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
-        CErrors.user_err Pp.(str "Error while communicating with proving server:" ++ fnl () ++
-                             str (print_capnp_exception_type ty) ++ str ":" ++ fnl () ++ str reason ++
-                             fnl () ++ error_msg))
-  with e ->
-    let e = CErrors.push e in
-    Lwt.cancel res;
-    Exninfo.iraise e
+  protect_signals [Sys.sigalrm; Sys.sigint] @@ fun () ->
+  let Unix.{ it_value; _ } = Unix.getitimer Unix.ITIMER_REAL in
+  let await = if it_value <= 0. then f () else Lwt_unix.with_timeout it_value f in
+  let interrupted = ref false in
+  with_signal Sys.sigint (fun _ -> interrupted := true; Lwt.cancel await) @@ fun () ->
+  ignore (Thread.sigmask Unix.SIG_UNBLOCK [Sys.sigint]);
+  Lwt_main.run (
+    Lwt.try_bind (fun () -> await)
+      (function
+        | Ok x -> return x
+        | Error `Capnp `Cancelled ->
+          CErrors.user_err Pp.(str "Cap'n Proto server call was cancelled")
+        | Error `Capnp (`Exception Capnp_rpc.Exception.{ty; reason}) ->
+          let error_msg = match error_status () with
+            | None -> Pp.mt ()
+            | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
+          CErrors.user_err Pp.(str "Error while communicating with proving server:" ++ fnl () ++
+                               str (print_capnp_exception_type ty) ++ str ":" ++ fnl () ++ str reason ++
+                               fnl () ++ error_msg))
+      (function
+        | Lwt.Canceled ->
+          if !interrupted then raise Sys.Break else
+            CErrors.user_err Pp.(str "Cap'n Proto server call was cancelled")
+        | e -> raise e))
 
 let rpc_communicator socket error_status =
   let open Capnp_rpc_lwt in
