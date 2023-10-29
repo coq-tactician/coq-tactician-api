@@ -125,46 +125,6 @@ let find_global_argument
       raise (UnknownArgument (sid, nid))
     | Some x -> x
 
-type capnp_connection =
-  { rc : Unix.file_descr Capnp_unix.IO.ReadContext.t
-  ; wc : Unix.file_descr Capnp_unix.IO.WriteContext.t
-  ; error_status : unit -> Pp.t option }
-
-(* Whenever we write a message to the server, we prevent a timeout from triggering.
-   Otherwise, we might be sending corrupted messages, which causes the server to crash. *)
-let write_read_capnp_message_uninterrupted { rc; wc; error_status } m =
-  let terminate = ref false in
-  let prev_sigterm =
-    Sys.signal Sys.sigterm @@ Sys.Signal_handle (fun i ->
-        terminate := true) in
-  let signals = [Sys.sigalrm; Sys.sigint] in
-  ignore (Thread.sigmask Unix.SIG_BLOCK signals);
-  try
-    Fun.protect ~finally:(fun () ->
-        Sys.set_signal Sys.sigterm prev_sigterm;
-        ignore (Thread.sigmask Unix.SIG_UNBLOCK signals);
-        if !terminate then exit 1) @@ fun () ->
-    try
-      let module Request = Api.Builder.PredictionProtocol.Request in
-      let module Response = Api.Reader.PredictionProtocol.Response in
-      Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message m;
-      match Capnp_unix.IO.ReadContext.read_message rc with
-      | None -> CErrors.user_err Pp.(str "Cap'n Proto protocol error while communicating with proving server. " ++
-                                     str "No response was received.")
-      | Some response -> Response.get @@ Response.of_message response
-    with Unix.Unix_error (e, _, _) ->
-      let error_msg = match error_status () with
-        | None -> Pp.mt ()
-        | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
-      CErrors.user_err Pp.(str "Error while communicating with proving server:" ++ fnl () ++
-                          str (Unix.error_message e) ++ error_msg);
-  with Fun.Finally_raised e ->
-    raise e
-
-let connect_socket my_socket =
-  Capnp_unix.IO.create_read_context_for_fd ~compression:`None my_socket,
-  Capnp_unix.IO.create_write_context_for_fd ~compression:`None my_socket
-
 let connect_stdin () =
   if debug_option () then
     Feedback.msg_debug Pp.(str "starting proving server with connection through their stdin");
@@ -414,6 +374,46 @@ let sync_context_stack add_global_context =
     if debug_option () then
       Feedback.msg_notice Pp.(str "new remote stack : " ++ prlist_with_sep (fun () -> str "-") int !remote_state);
     state, stack_size
+
+type capnp_connection =
+  { rc : Unix.file_descr Capnp_unix.IO.ReadContext.t
+  ; wc : Unix.file_descr Capnp_unix.IO.WriteContext.t
+  ; error_status : unit -> Pp.t option }
+
+(* Whenever we write a message to the server, we prevent a timeout from triggering.
+   Otherwise, we might be sending corrupted messages, which causes the server to crash. *)
+let write_read_capnp_message_uninterrupted { rc; wc; error_status } m =
+  let terminate = ref false in
+  let prev_sigterm =
+    Sys.signal Sys.sigterm @@ Sys.Signal_handle (fun i ->
+        terminate := true) in
+  let signals = [Sys.sigalrm; Sys.sigint] in
+  ignore (Thread.sigmask Unix.SIG_BLOCK signals);
+  try
+    Fun.protect ~finally:(fun () ->
+        Sys.set_signal Sys.sigterm prev_sigterm;
+        ignore (Thread.sigmask Unix.SIG_UNBLOCK signals);
+        if !terminate then exit 1) @@ fun () ->
+    try
+      let module Request = Api.Builder.PredictionProtocol.Request in
+      let module Response = Api.Reader.PredictionProtocol.Response in
+      Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message m;
+      match Capnp_unix.IO.ReadContext.read_message rc with
+      | None -> CErrors.user_err Pp.(str "Cap'n Proto protocol error while communicating with proving server. " ++
+                                     str "No response was received.")
+      | Some response -> Response.get @@ Response.of_message response
+    with Unix.Unix_error (e, _, _) ->
+      let error_msg = match error_status () with
+        | None -> Pp.mt ()
+        | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
+      CErrors.user_err Pp.(str "Error while communicating with proving server:" ++ fnl () ++
+                          str (Unix.error_message e) ++ error_msg);
+  with Fun.Finally_raised e ->
+    raise e
+
+let connect_socket my_socket =
+  Capnp_unix.IO.create_read_context_for_fd ~compression:`None my_socket,
+  Capnp_unix.IO.create_write_context_for_fd ~compression:`None my_socket
 
 type connection =
   { capnp_connection : capnp_connection
