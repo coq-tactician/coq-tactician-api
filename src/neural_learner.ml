@@ -144,8 +144,6 @@ let connect_stdin () =
       CErrors.user_err Pp.(str "Failed to connect to server. Invocation: " ++ str (String.concat " " invocation))
   in
   let error_status () =
-    Unix.shutdown my_socket Unix.SHUTDOWN_ALL;
-    Unix.close my_socket;
     let pid, status = Unix.waitpid [Unix.WNOHANG] pid in
     if pid == 0 then None else
       match status with
@@ -187,8 +185,7 @@ let connect_tcpip host port =
          my_socket
        with Unix.Unix_error (Unix.ECONNREFUSED,s1,s2) -> connect addrs) in
   let socket = connect addrs in
-  let error_status () =
-    Unix.close socket; None in
+  let error_status () = None in
   Unix.setsockopt socket TCP_NODELAY true; (* Nagles algorithm kills performance, disable *)
   Declaremods.append_end_library_hook (fun () -> Unix.close socket);
   socket, error_status
@@ -449,6 +446,10 @@ let protocol_error expected response =
 
 let message_communicator socket error_status =
   let rc, wc = connect_socket socket in
+  let error_status () =
+    Unix.shutdown socket Unix.SHUTDOWN_ALL;
+    Unix.close socket;
+    error_status () in
   let capnp_connection = { rc; wc; error_status } in
   let module Request = Api.Builder.PredictionProtocol.Request in
   let module Response = Api.Reader.PredictionProtocol.Response in
@@ -508,7 +509,7 @@ let with_signal signal handler f  =
   let old = Sys.signal signal (Sys.Signal_handle handler) in
   Fun.protect ~finally:(fun () -> Sys.set_signal signal old) f
 
-let cancel_on_interrupt error_status f =
+let cancel_on_interrupt switch error_status f =
   let open Lwt in
   protect_signals [Sys.sigalrm; Sys.sigint] @@ fun () ->
   let Unix.{ it_value; _ } = Unix.getitimer Unix.ITIMER_REAL in
@@ -523,6 +524,7 @@ let cancel_on_interrupt error_status f =
         | Error `Capnp `Cancelled ->
           CErrors.user_err Pp.(str "Cap'n Proto server call was cancelled")
         | Error `Capnp (`Exception Capnp_rpc.Exception.{ty; reason}) ->
+          Lwt_switch.turn_off switch >>= fun () ->
           let error_msg = match error_status () with
             | None -> Pp.mt ()
             | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
@@ -539,8 +541,8 @@ let rpc_communicator socket error_status =
   let open Capnp_rpc_lwt in
   let open Lwt_result in
   let service_name = Capnp_rpc_net.Restorer.Id.public "" in
+  let switch = Lwt_switch.create () in
   let cap =
-    let switch = Lwt_switch.create () in
     let endpoint = Capnp_rpc_unix.Unix_flow.connect ~switch (Lwt_unix.of_unix_file_descr socket)
                    |> Capnp_rpc_net.Endpoint.of_flow ~switch (module Capnp_rpc_unix.Unix_flow)
                      ~peer_id:Capnp_rpc_net.Auth.Digest.insecure in
@@ -550,18 +552,18 @@ let rpc_communicator socket error_status =
     let open Api.Client.PredictionServer.AddGlobalContext in
     let request, params = Capability.Request.create Params.init_pointer in
     gca params;
-    cancel_on_interrupt error_status @@ fun () -> Capability.call_for_unit cap method_id request in
+    cancel_on_interrupt switch error_status @@ fun () -> Capability.call_for_unit cap method_id request in
   let request_prediction rp =
     let open Api.Client.PredictionServer.RequestPrediction in
     let request, params = Capability.Request.create Params.init_pointer in
     rp params;
-    cancel_on_interrupt error_status @@ fun () ->
+    cancel_on_interrupt switch error_status @@ fun () ->
     Capability.call_for_value cap method_id request >|= Results.predictions_get in
   let request_text_prediction rp = assert false in
   let check_alignment () =
     let open Api.Client.PredictionServer.CheckAlignment in
     let request = Capability.Request.create_no_args () in
-    cancel_on_interrupt error_status @@ fun () ->
+    cancel_on_interrupt switch error_status @@ fun () ->
     Capability.call_for_value cap method_id request >|= fun alignment ->
     Results.unaligned_tactics_get alignment, Results.unaligned_definitions_get alignment in
   let sync_context_stack = sync_context_stack add_global_context in
