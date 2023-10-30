@@ -48,6 +48,7 @@ class Settings:
     max_size: int = 100
 
     def __post_init__(self):
+        self.max_size = min(10000, self.max_size) # Prevent DDoS attacks by limiting the size of the graph
         if not self.no_defaults:
             self.ignore_edges = [graph_api_capnp.EdgeClassification.schema.enumerants['constOpaqueDef']]
             label = graph_api_capnp.Graph.Node.Label
