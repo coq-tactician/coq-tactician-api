@@ -391,20 +391,20 @@ let write_read_capnp_message_uninterrupted { rc; wc; error_status } m =
         Sys.set_signal Sys.sigterm prev_sigterm;
         ignore (Thread.sigmask Unix.SIG_UNBLOCK signals);
         if !terminate then exit 1) @@ fun () ->
+    let error_msg () = match error_status () with
+      | None -> Pp.mt ()
+      | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
     try
       let module Request = Api.Builder.PredictionProtocol.Request in
       let module Response = Api.Reader.PredictionProtocol.Response in
       Capnp_unix.IO.WriteContext.write_message wc @@ Request.to_message m;
       match Capnp_unix.IO.ReadContext.read_message rc with
       | None -> CErrors.user_err Pp.(str "Cap'n Proto protocol error while communicating with proving server. " ++
-                                     str "No response was received.")
+                                     str "No response was received." ++ error_msg ())
       | Some response -> Response.get @@ Response.of_message response
     with Unix.Unix_error (e, _, _) ->
-      let error_msg = match error_status () with
-        | None -> Pp.mt ()
-        | Some err -> Pp.(fnl () ++ str "Connection died with message: " ++ fnl () ++ err) in
       CErrors.user_err Pp.(str "Error while communicating with proving server:" ++ fnl () ++
-                          str (Unix.error_message e) ++ error_msg);
+                          str (Unix.error_message e) ++ error_msg ());
   with Fun.Finally_raised e ->
     raise e
 
