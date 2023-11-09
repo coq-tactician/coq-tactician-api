@@ -79,7 +79,7 @@ struct Graph {
 
     label :union { # Inlined for efficiency purposes
       # Proof state
-      # Hash a unique id (evar) for the proof state that distinquishes proof states with identical
+      # Has a unique id (evar) for the proof state that distinquishes proof states with identical
       # contents but do not point to the same object nonetheless
       proofState @0 :ProofStateIdP;
 
@@ -620,8 +620,9 @@ interface ProofObject {
 interface PredictionServer {
   addGlobalContext @0 GlobalContextAddition -> ();
   requestPrediction @1 PredictionRequest -> (predictions :List(Prediction));
-  checkAlignment @2 () -> (unalignedTactics :List(TacticId), unalignedDefinitions :List(Node));
-  explore @3 (result :ExecutionResult);
+  requestTextPrediction @2 PredictionRequest -> (predictions :List(TextPrediction));
+  checkAlignment @3 () -> (unalignedTactics :List(TacticId), unalignedDefinitions :List(Node));
+  explore @4 (result :ExecutionResult);
   # An interface allowing a proof exploration session to be initiated by Coq. In this case, Coq decides
   # what lemma should be proved and immediately presents the agent with the initial execution result.
 }

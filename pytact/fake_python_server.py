@@ -3,7 +3,6 @@ import contextlib
 from functools import partial
 import sys
 import socket
-import socketserver
 import argparse
 import pytact.graph_visualize as gv
 import capnp
@@ -16,20 +15,23 @@ async def text_prediction_loop(context : GlobalContextMessage):
     tactics = [ 'idtac "is it working?"', 'idtac "yes it is working!"', 'auto' ]
     prediction_requests = context.prediction_requests
     async for msg in prediction_requests:
-        if isinstance(msg, ProofState):
-            proof_state = msg
-            print(proof_state.text)
-            preds = [TacticPredictionText(t, 0.5) for t in tactics]
-            await prediction_requests.asend(TacticPredictionsText(preds))
-        elif isinstance(msg, CheckAlignmentMessage):
-            alignment = CheckAlignmentResponse([], [])
-            await prediction_requests.asend(alignment)
-        elif isinstance(msg, GlobalContextMessage):
-            await text_prediction_loop(msg)
-        else:
-            raise Exception("Capnp protocol error")
+        # Redirect any exceptions to Coq. Additionally, deal with CancellationError
+        # thrown when a request from Coq is cancelled
+        async with context.redirect_exceptions(Exception):
+            if isinstance(msg, ProofState):
+                proof_state = msg
+                print(proof_state.text)
+                preds = [TacticPredictionText(t, 0.5) for t in tactics]
+                await prediction_requests.asend(TacticPredictionsText(preds))
+            elif isinstance(msg, CheckAlignmentMessage):
+                alignment = CheckAlignmentResponse([], [])
+                await prediction_requests.asend(alignment)
+            elif isinstance(msg, GlobalContextMessage):
+                await text_prediction_loop(msg)
+            else:
+                raise Exception("Capnp protocol error")
 
-async def graph_initialize_loop(context : GlobalContextMessage, level):
+async def graph_prediction_loop(context : GlobalContextMessage, level):
     print(f"level {level}")
     for cluster in context.definitions.clustered_definitions(full = False):
         print('cluster:')
@@ -43,34 +45,38 @@ async def graph_initialize_loop(context : GlobalContextMessage, level):
     zeroArgs = [t.ident for t in context.tactics if t.parameters == 0]
     oneArg = [t.ident for t in context.tactics if t.parameters == 1]
     async for msg in prediction_requests:
-        if isinstance(msg, ProofState):
-            proof_state = msg
-            gv.visualize_proof_state(proof_state)
-            preds = [TacticPredictionGraph(t, [], 0.5) for t in zeroArgs]
-            if len(proof_state.context) > 0:
-                hyp_node = proof_state.context[0]
-                preds += [TacticPredictionGraph(t, [hyp_node], 0.5) for t in oneArg]
-            for d in cool_definitions:
-                preds += [TacticPredictionGraph(t, [d], 0.5) for t in oneArg]
-            await prediction_requests.asend(TacticPredictionsGraph(preds))
-        elif isinstance(msg, CheckAlignmentMessage):
-            unknown_definitions = list(context.definitions.definitions())
-            unknown_tactics = [t.ident for t in context.tactics]
-            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
-            await prediction_requests.asend(alignment)
-        elif isinstance(msg, GlobalContextMessage):
-            await graph_initialize_loop(msg, level + 1)
-        else:
-            raise Exception("Capnp protocol error")
+        # Redirect any exceptions to Coq. Additionally, deal with CancellationError
+        # thrown when a request from Coq is cancelled
+        async with context.redirect_exceptions(Exception):
+            if isinstance(msg, ProofState):
+                proof_state = msg
+                gv.visualize_proof_state(proof_state)
+                preds = [TacticPredictionGraph(t, [], 0.5) for t in zeroArgs]
+                if len(proof_state.context) > 0:
+                    hyp_node = proof_state.context[0]
+                    preds += [TacticPredictionGraph(t, [hyp_node], 0.5) for t in oneArg]
+                for d in cool_definitions:
+                    preds += [TacticPredictionGraph(t, [d], 0.5) for t in oneArg]
+                await prediction_requests.asend(TacticPredictionsGraph(preds))
+            elif isinstance(msg, CheckAlignmentMessage):
+                unknown_definitions = list(context.definitions.definitions())
+                unknown_tactics = [t.ident for t in context.tactics]
+                alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
+                await prediction_requests.asend(alignment)
+            elif isinstance(msg, GlobalContextMessage):
+                await graph_prediction_loop(msg, level + 1)
+            else:
+                raise Exception(f"Capnp protocol error {msg}")
+
 
 async def run_session(args, record_file, capnp_stream):
-    messages_generator = await capnp_message_generator(capnp_stream, record_file)
+    messages_generator = capnp_message_generator(capnp_stream, args.rpc, record_file)
     if args.mode == 'text':
         print('Python server running in text mode')
         await text_prediction_loop(messages_generator)
     elif args.mode == 'graph':
         print('Python server running in graph mode')
-        await graph_initialize_loop(messages_generator, 0)
+        await graph_prediction_loop(messages_generator, 0)
     else:
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 
@@ -94,6 +100,8 @@ async def server():
                         default = None,
                         help='Record all exchanged messages to the specified file, so that they can later be ' +
                         'replayed through "pytact-fake-coq"')
+    parser.add_argument('--rpc', action='store_true', default = False,
+                        help='Communicate through Cap\'n Proto RPC.')
     args = parser.parse_args()
 
     if args.record_file is not None:

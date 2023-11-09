@@ -30,58 +30,64 @@ class OracleTactic:
 async def text_prediction_loop(text_oracle_data, context: GlobalContextMessage):
     prediction_requests = context.prediction_requests
     async for msg in prediction_requests:
-        if isinstance(msg, ProofState):
-            proof_state = msg
-            if proof_state.text in text_oracle_data:
-                preds = [TacticPredictionText(t, 1) for t in text_oracle_data[proof_state.text]]
+        # Redirect any exceptions to Coq. Additionally, deal with CancellationError
+        # thrown when a request from Coq is cancelled
+        async with context.redirect_exceptions(Exception):
+            if isinstance(msg, ProofState):
+                proof_state = msg
+                if proof_state.text in text_oracle_data:
+                    preds = [TacticPredictionText(t, 1) for t in text_oracle_data[proof_state.text]]
+                else:
+                    preds = []
+                await prediction_requests.asend(TacticPredictionsText(preds))
+            elif isinstance(msg, CheckAlignmentMessage):
+                alignment = CheckAlignmentResponse([], [])
+                await prediction_requests.asend(alignment)
+            elif isinstance(msg, GlobalContextMessage):
+                await text_prediction_loop(text_oracle_data, msg)
             else:
-                preds = []
-            await prediction_requests.asend(TacticPredictionsText(preds))
-        elif isinstance(msg, CheckAlignmentMessage):
-            alignment = CheckAlignmentResponse([], [])
-            await prediction_requests.asend(alignment)
-        elif isinstance(msg, GlobalContextMessage):
-            await text_prediction_loop(text_oracle_data, msg)
-        else:
-            raise Exception("Capnp protocol error")
+                raise Exception("Capnp protocol error")
 
 async def graph_prediction_loop(context: GlobalContextMessage, oracle_data, known_definitions, known_tactics):
     available_tacticids = set([ t.ident for t in context.tactics ])
     available_definitions = { d.node.identity : d.node for d in context.definitions.definitions() }
     prediction_requests = context.prediction_requests
     async for msg in prediction_requests:
-        if isinstance(msg, ProofState):
-            proof_state = msg
-            def resolve_arg(arg):
-                if isinstance(arg, LocalArgument):
-                    return proof_state.context[arg.context_index]
-                elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
-                    return available_definitions[arg.identity]
-                else:
-                    return None
-            possible_tactics = [
-                TacticPredictionGraph(t.tactic_id,
-                                    [resolve_arg(arg) for arg in t.arguments],
-                                    1 if t.clean else 0.95)
-                for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
-                if t.tactic_id in available_tacticids and
-                all([resolve_arg(arg) is not None for arg in t.arguments])]
-            await prediction_requests.asend(TacticPredictionsGraph(possible_tactics))
-        elif isinstance(msg, CheckAlignmentMessage):
-            unknown_definitions = [ d for d in context.definitions.definitions()
-                                    if d.node.identity not in known_definitions ]
-            unknown_tactics = [ t.ident for t in context.tactics
-                                if t.ident not in known_tactics ]
-            alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
-            await prediction_requests.asend(alignment)
-        elif isinstance(msg, GlobalContextMessage):
-            await graph_prediction_loop(msg, oracle_data, known_definitions, known_tactics)
-        else:
-            raise Exception(f"Capnp protocol error {type(msg)}")
+        # Redirect any exceptions to Coq. Additionally, deal with CancellationError
+        # thrown when a request from Coq is cancelled
+        async with context.redirect_exceptions(Exception):
+            if isinstance(msg, ProofState):
+                proof_state = msg
+                def resolve_arg(arg):
+                    if isinstance(arg, LocalArgument):
+                        return proof_state.context[arg.context_index]
+                    elif isinstance(arg, GlobalArgument) and arg.identity in available_definitions:
+                        return available_definitions[arg.identity]
+                    else:
+                        return None
+                possible_tactics = [
+                    TacticPredictionGraph(t.tactic_id,
+                                        [resolve_arg(arg) for arg in t.arguments],
+                                        1 if t.clean else 0.95)
+                    for t in sorted(oracle_data[proof_state.root.identity], key = lambda t: not t.clean)
+                    if t.tactic_id in available_tacticids and
+                    all([resolve_arg(arg) is not None for arg in t.arguments])]
+                await prediction_requests.asend(TacticPredictionsGraph(possible_tactics))
+            elif isinstance(msg, CheckAlignmentMessage):
+                unknown_definitions = [ d for d in context.definitions.definitions()
+                                        if d.node.identity not in known_definitions ]
+                unknown_tactics = [ t.ident for t in context.tactics
+                                    if t.ident not in known_tactics ]
+                alignment = CheckAlignmentResponse(unknown_definitions, unknown_tactics)
+                await prediction_requests.asend(alignment)
+            elif isinstance(msg, GlobalContextMessage):
+                await graph_prediction_loop(msg, oracle_data, known_definitions, known_tactics)
+            else:
+                raise Exception(f"Capnp protocol error {type(msg)}")
 
 async def run_session(
         oracle_data, text_oracle_data, known_definitions, known_tactics, args, record_file, capnp_socket):
-    messages_generator = await capnp_message_generator(capnp_socket, record_file)
+    messages_generator = capnp_message_generator(capnp_socket, args.rpc, record_file)
     if args.mode == 'text':
         print('Python server running in text mode')
         await text_prediction_loop(text_oracle_data, messages_generator)
@@ -117,6 +123,8 @@ async def server():
                         default = None,
                         help='Record all exchanged messages to the specified file, so that they can later be ' +
                         'replayed through "pytact-fake-coq"')
+    parser.add_argument('--rpc', action='store_true', default = False,
+                        help='Communicate through Cap\'n Proto RPC.')
     cmd_args = parser.parse_args()
 
     print("Building oracle data...")

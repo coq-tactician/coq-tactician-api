@@ -559,7 +559,12 @@ let rpc_communicator socket error_status =
     rp params;
     cancel_on_interrupt switch error_status @@ fun () ->
     Capability.call_for_value cap method_id request >|= Results.predictions_get in
-  let request_text_prediction rp = assert false in
+  let request_text_prediction rp =
+    let open Api.Client.PredictionServer.RequestTextPrediction in
+    let request, params = Capability.Request.create Params.init_pointer in
+    rp params;
+    cancel_on_interrupt switch error_status @@ fun () ->
+    Capability.call_for_value cap method_id request >|= Results.predictions_get in
   let check_alignment () =
     let open Api.Client.PredictionServer.CheckAlignment in
     let request = Capability.Request.create_no_args () in
