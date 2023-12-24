@@ -195,7 +195,8 @@ git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-api.gi
 cd coq-tactician-api
 conda env create -f environment.yml
 conda activate tactician
-export CPATH="$CONDA_PREFIX:$CPATH" # Needed by cmake to find conda headers
+conda env config vars set CPATH=${CONDA_PREFIX}/include:${CPATH}
+conda activate tactician
 ```
 
 On Ubuntu 22.04 or newer, you can get the required packages as follows (older versions of Ubuntu
