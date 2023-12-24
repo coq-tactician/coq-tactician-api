@@ -180,7 +180,7 @@ This repository has an OCaml component that should be installed through the Opam
 package manager and a Python component that should be installed through the Pip
 package manager. Additionally, some extra dependencies are needed:
 - Opam 2.1.x
-- Capt'n Proto >= 0.8
+- Cap'n Proto >= 0.8
 - XXHash >= 0.8
 - Graphviz
 - A reasonable set of development packages like git, bash, gmp, c/c++ compiler
