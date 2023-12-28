@@ -60,7 +60,7 @@ Finally, you can also unpack the image without mounting it. However, on systems
 with limited memory or slow hard-disks this will lead to performance
 degradations while accessing the dataset. Experiments show that due to the high
 decompression speed of the image's LZ4 compression algorithm, mounting is almost
-always preferrable to unpacking. Nevertheless, if you wich to unpack, you can
+always preferrable to unpacking. Nevertheless, if you wish to unpack, you can
 run:
 
     unsquashfs -dest dataset/ dataset.squ
