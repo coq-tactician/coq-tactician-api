@@ -27,6 +27,7 @@ test_packages = set([
 ])
 
 def main():
+    sys.setrecursionlimit(10000)
     dataset_path = Path(sys.argv[1]).resolve()
     with data_reader(dataset_path) as data:
 
@@ -37,15 +38,41 @@ def main():
             if dist := trans_deps.get(d, None):
                 return dist
             if not graphid_in_test[d.node.graph]:
-                trans_deps[d] = set()
-                return set()
-            dist = set()
-            dist.update(d.cluster)
+                data = {'maximum': 0, 'deps': set()}
+                trans_deps[d] = data
+                return data
+            deps = set()
+            maximum = 0
+            deps.update(d.cluster)
             direct_cluster_deps = { dep for c in d.cluster for dep in definition_dependencies(c) } - set(d.cluster)
             for dep in direct_cluster_deps:
-                dist.update(calc_trans_deps(dep))
-            trans_deps[d] = dist
-            return dist
+                dep_data = calc_trans_deps(dep)
+                deps.update(dep_data['deps'])
+                maximum = max(maximum, dep_data['maximum'])
+            data = {'maximum': maximum + 1, 'deps': deps}
+            trans_deps[d] = data
+            return data
+
+        new_global_context = dict()
+        def calc_global_context(d):
+            # print(f"global: {d.name}")
+            if context := new_global_context.get(d, None):
+                return context
+            if not graphid_in_test[d.node.graph]:
+                new_global_context[d] = set()
+                return set()
+            deps = set()
+            deps.update(d.cluster)
+            direct_context_deps = (({ c.previous for c in d.cluster if c.previous is not None } |
+                                   { r for c in d.cluster for r in c.external_previous }) -
+                                   set(d.cluster))
+            # for k in direct_context_deps:
+            #     print(f"    direct: {k.name}")
+            for dep in direct_context_deps:
+                dep_data = calc_global_context(dep)
+                deps.update(dep_data)
+            new_global_context[d] = deps
+            return deps
 
         for f in data.values():
             if f.filename.parts[0] not in test_packages:
@@ -54,8 +81,11 @@ def main():
                 if not isinstance(d.status, Original):
                     continue
                 if proof := d.proof:
-                    deps = calc_trans_deps(d) - set(d.cluster)
-                    print(f"{f.filename.parts[0]}\t{d.name}\t{len(deps)}")
+                    data = calc_trans_deps(d)
+                    global_context = calc_global_context(d) - set(d.cluster)
+                    deps = data['deps'] - set(d.cluster)
+                    maximum = data['maximum'] - 1
+                    print(f"{f.filename.parts[0]}\t{d.name}\t{len(deps)}\t{maximum}\t{len(global_context)}")
 
 if __name__ == "__main__":
     exit(main())
