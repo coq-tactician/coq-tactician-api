@@ -18,7 +18,7 @@ test_packages = set([
     "coq-iris-heap-lang.3.4.0",
     "coq-printf.2.0.0",
     "coq-smtcoq.2.0+8.11",
-    "coq-topology.10.0.1"
+    "coq-topology.10.0.1",
     "coq-haskell.1.0.0",
     "coq-bbv.1.3",
     "coq-poltac.0.8.11",
