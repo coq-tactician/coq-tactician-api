@@ -33,9 +33,11 @@ let rec is_ssr_tactic t =
              let* () = M.tell true in
              c t
            | TacAlias CAst.{ v=(k, _args); _} ->
-             let* () = M.tell (is_ssr_kername k) in
-             let al = Tacenv.interp_alias k in
-             let* () = M.tell (is_ssr_tactic al.alias_body) in
+             let* () = if is_ssr_kername k then
+                 M.tell true
+               else
+                 let al = Tacenv.interp_alias k in
+                 M.tell (is_ssr_tactic al.alias_body) in
              c t
            | _ -> c t))
     ; raw_tactic = (fun t c ->
@@ -44,9 +46,11 @@ let rec is_ssr_tactic t =
            let* () = M.tell true in
            c t
          | TacAlias CAst.{ v=(k, _args); _} ->
-           let* () = M.tell (is_ssr_kername k) in
-           let al = Tacenv.interp_alias k in
-           let* () = M.tell (is_ssr_tactic al.alias_body) in
+           let* () = if is_ssr_kername k then
+               M.tell true
+             else
+               let al = Tacenv.interp_alias k in
+               M.tell (is_ssr_tactic al.alias_body) in
            c t
          | _ -> c t))
     } in

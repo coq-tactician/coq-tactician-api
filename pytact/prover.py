@@ -1,5 +1,5 @@
 """
-a test of connection to coq-tactician-reinforce
+a test of connection to coq-tactician-api
 """
 
 import sys
@@ -105,8 +105,8 @@ async def search_dfs(result, tactics, limit) -> Optional[List[capnpLocalTactic]]
 
 
 async def example_script_prover(args, pull):
-    TAC_INTROS = 126567959
-    TAC_APPLY = 165468576
+    TAC_INTROS = 4249207563281686782
+    TAC_APPLY = 3192827940261208899
     result, _ = await open_proof(pull, "forall A B C : Prop, (A -> B -> C) -> A -> B -> C", args.vis)
     result = await runTactic(result.newState.obj, capnpLocalTactic(TAC_INTROS, []), args.vis)
     result = await runTactic(result.newState.obj, "intro", args.vis)
@@ -158,7 +158,7 @@ async def client_connected_cb(counter, args, reader, writer):
 
 def my_parse_args():
     parser = argparse.ArgumentParser(
-        description='example of python code interacting with coq-tactician-reinforce')
+        description='example of python code interacting with coq-tactician-api')
 
     parser.add_argument('--interactive',
                         action='store_true',
@@ -190,7 +190,7 @@ def my_parse_args():
 
 
     parser.add_argument('--tcp', action='store_true',
-                        help='drive coq-tactician-reinforce with tcp/ip instead of stdin')
+                        help='drive coq-tactician-api with tcp/ip instead of stdin')
 
     parser.add_argument('--tcp-sessions',
                         type = int,
@@ -211,7 +211,7 @@ def my_parse_args():
 
     parser.add_argument('--coqfile', type=str, default=None,
                         help=('path to coq source code file (.v extension) to execute'
-                              'in coq-tactician-reinforce'
+                              'in coq-tactician-api'
                               f'the default is {pytact.common.test_filename_stdin}'
                               f'for --tcp --with-coq default is {pytact.common.test_filename_tcp}'))
 

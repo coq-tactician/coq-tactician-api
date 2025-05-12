@@ -101,17 +101,16 @@ def process1(args, fname: Path):
                 file_errors.append(f"{fname}: Node {d.node} should be a definition but is not")
 
             # Check correctness of Definition struct
-            match d.status:
-                case Original():
-                    file_original_definitions += 1
-                case Discharged(original):
-                    if not original.node.definition:
-                        file_errors.append(f"{fname}: Discharged node of definition {d.name} "
-                                        f"is not a definition")
-                case Substituted(original):
-                    if not original.node.definition:
-                        file_errors.append(f"{fname}: Substituted node of definition {d.name} "
-                                        f"is not a definition")
+            if isinstance(d.status, Original):
+                file_original_definitions += 1
+            elif isinstance(d.status, Discharged):
+                if not d.status.original.node.definition:
+                    file_errors.append(f"{fname}: Discharged node of definition {d.name} "
+                                       f"is not a definition")
+            elif isinstance(d.status, Substituted):
+                if not d.status.original.node.definition:
+                    file_errors.append(f"{fname}: Substituted node of definition {d.name} "
+                                       f"is not a definition")
 
             def check_in_global_context(s):
                 global_context = sub_global_contexts.global_context_set(d)

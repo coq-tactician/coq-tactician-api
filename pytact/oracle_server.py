@@ -6,6 +6,7 @@ import socket
 import socketserver
 import argparse
 import contextlib
+from typing import Union, Tuple
 from pytact.data_reader import (data_reader, Original, capnp_message_generator, ProofState,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 TacticPredictionText, TacticPredictionsText,
@@ -20,7 +21,7 @@ class LocalArgument:
 @dataclass(eq=True, frozen=True)
 class OracleTactic:
     tactic_id: int
-    arguments: tuple[GlobalArgument | LocalArgument, ...]
+    arguments: Tuple[Union[GlobalArgument, LocalArgument], ...]
     clean: bool
 
 def text_prediction_loop(text_oracle_data, context: GlobalContextMessage):
@@ -87,6 +88,7 @@ def run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
         raise Exception("The 'mode' argument needs to be either 'text' or 'graph'")
 
 def main():
+    sys.setrecursionlimit(10000)
     parser = argparse.ArgumentParser(
         description = 'A tactic prediction server acting as an oracle, retrieving it\'s information from a dataset',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -162,7 +164,7 @@ def main():
                 def handle(self):
                     run_session(oracle_data, text_oracle_data, known_definitions, known_tactics,
                                 cmd_args, self.request, record_file)
-            class Server(socketserver.ThreadingTCPServer):
+            class Server(socketserver.ForkingTCPServer):
                 def __init__(self, *kwargs):
                     self.allow_reuse_address = True
                     self.daemon_threads = True

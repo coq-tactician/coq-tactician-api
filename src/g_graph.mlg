@@ -25,9 +25,9 @@ VERNAC COMMAND EXTEND LGraphProof CLASSIFIED AS QUERY STATE proof_query
 | [ "Shared" "Graph" "Depth" int(d) "Proof" ] -> { fun ~pstate -> SimpleHashedViz.make_proof_graph ~def_depth:d pstate }
 END
 
-VERNAC COMMAND EXTEND Reinforce CLASSIFIED AS QUERY
-| [ "Reinforce" ] -> { Reinforce.reinforce_stdin () }
-| [ "Reinforce" string(ip_addr) int(port) ] -> { Reinforce.reinforce_tcp ip_addr port }
+VERNAC COMMAND EXTEND Explore CLASSIFIED AS QUERY
+| [ "Tactician" "Explore" ] -> { Explore.reinforce_stdin () }
+| [ "Tactician" "Explore" string(ip_addr) int(port) ] -> { Explore.reinforce_tcp ip_addr port }
 END
 
 VERNAC COMMAND EXTEND CheckNeuralAlignment CLASSIFIED AS QUERY

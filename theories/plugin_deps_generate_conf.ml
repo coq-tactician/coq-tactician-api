@@ -116,7 +116,7 @@ let extract_dune dune_filename =
 let () =
   if (Array.length Sys.argv) != 4 then (
     debug_msg "usage: ocaml plugin_deps_generate_conf.ml dune \
-               TacticianReinforceDepLoader.v injection-flags ";
+               TacticianApiDepLoader.v injection-flags ";
     exit 1)
   else (
     (* get libraries from dune, using watermark cut *)

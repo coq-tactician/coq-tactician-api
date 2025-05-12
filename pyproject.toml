@@ -2,26 +2,26 @@
 requires = [
     "setuptools",
     "wheel",
-    "Cython==3.0.0a11",
-    "pycapnp>=1.2.2",
+    "Cython>=3.0.3",
+    "pycapnp>=1.2.2,<2",
     "Jinja2",
     "inflection"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytactician"
-version = '15.0'
+version = '15.1'
 description = "Python Library for interfacing with Coq and Tactician"
 authors = [
     {name = "Lasse Blaauwbroek", email = "lasse@blaauwbroek.eu"},
     {name = "Vasily Pestun", email = "vasily.pestun@gmail.com"},
     {name = "Miroslav Olšák", email = "mirek@olsak.net"},
 ]
-readme = "README.md"
-requires-python = ">=3.10"
-license = {text = "MIT License"}
+readme = "pytact/README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -29,18 +29,27 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Operating System :: POSIX :: Linux"
 ]
 dependencies = [
-    "pycapnp>=1.2.2",
+    "pycapnp>=1.2.2,<2",
     "immutables",
     "graphviz",
-    "sanic==22.6.2",
-    "sanic-ext==22.6.2",
+    "sanic==23.6.0",
+    "sanic-ext==23.6.0",
     "Jinja2",
     "inflection"
 ]
+
+[project.urls]
+Homepage = "https://coq-tactician.github.io"
+Documentation = "https://coq-tactician.github.io/api/pytactician-pdoc"
+Repository = "https://github.com/coq-tactician/coq-tactician-api"
+Changelog = "https://github.com/coq-tactician/coq-tactician-api/blob/coq8.11/CHANGELOG.md"
 
 [project.scripts]
 pytact-fake-coq = "pytact.fake_coq_client:main"
@@ -65,4 +74,6 @@ pytact = [
     "data_reader.pyx",
     "graph_api_capnp_cython.pyx",
     "graph_api_capnp_cython.pxd",
+    "data_reader.pyi",
+    "py.typed",
 ]

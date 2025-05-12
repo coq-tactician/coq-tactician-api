@@ -1,86 +1,78 @@
-# A Graph -and Text-based machine learning interface for Tactician
+# Tactician's API: A graph- and text-based machine learning interface for Coq
 
-## Prerequisites
+![Tactician's web of large-scale formal knowledge](assets/web.png)
+Tactician's API provides external machine learning agents with the data
+collected by [Tactician](https://coq-tactician.github.io) from the [Coq Proof
+Assistant](https://coq.inria.fr). It is able to extract large-scale datasets
+from a wide variety of Coq packages for the purpose of offline machine learning.
+Additionally, it allows agents to interact with Coq. Proving servers can be
+connected to Tactician's `synth` tactic and prove theorems for Coq users (see
+[below](#interaction-with-synth)). Additionally, servers can do proof
+exploration through the `Tactician Explore` command (see
+[below](#client-based-proof-exploration)).
 
-This repository has an OCaml component that should be installed through the Opam package manager and a Python
-component that should be installed through the Pip package manager. Additionally, some extra dependencies are needed:
-- Opam 2.1.x
-- Capt'n Proto >= 0.8
-- XXHash >= 0.8
-- Graphviz
-- A reasonable set of development packages like git, bash, gmp, c/c++ compiler toolchains that should be installed
-  on most systems.
+The data provided to agents includes definitions, theorems, proof terms and a
+machine-readable representation of tactical proofs. The data is provided both in
+Coq's standard text-based human-readable format and as a semantic graph. The
+semantic graph is a single interconnected object that includes the entire
+mathematical universe known to Coq (at a given moment in time). The graph is
+designed to represent the semantic meaning of a mathematical object as
+faithfully as possible, minimizing the amount of implicit knowledge needed to
+interpret the object. For example, when a definition `X` refers to another
+definition `Y`, such a dependency is encoded explicitly using an edge in the
+graph. No definition lookup table is need. We also shy away from using names or
+de Bruijn indices as variables. Instead, variables point directly to their
+binders, so that name lookup becomes a trivial operation. Such an encoding
+reduces alpha-equivalence between terms to the graph-theoretic notion of
+bisimilarity, and allows us to globally deduplicate any alpha-equivalent terms
+in the graph.
 
-The simplest and most reliable way to install these packages is through Conda. This repository provides a
-`environment.yml` file with the required Conda dependencies. To set it up, follow these commands:
-```
-git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git # Clone this repo
-cd coq-tactician-reinforce
-conda env create -f environment.yml
-```
+Communication with agents happens through the [Cap'n
+Proto](https://capnproto.org) serialization format and remote procedure calling
+(RPC) protocol. It supports a wide variety of programming languages, including
+Python, OCaml, C++, Haskell, Rust and more. This serialization was chosen
+because it allows us to memory-map (`mmap`) large graph datasets, allowing fast
+random-access to graphs that may not fit into main memory. Furthermore, Cap'n
+Proto's RPC protocol, based on the [distributed
+object-capability](https://en.wikipedia.org/wiki/Distributed_object) model,
+allows us to export Coq's proof states to external agents. Agents can inspect
+the proof states, and execute tactics on them, allowing exploration of the proof
+search space in arbitrary order.
 
-If you don't want to use Conda, you'll have to install the dependencies listed above through your distributions
-package manager. On Ubuntu 22.04 or newer, you can get the required packages as follows (older versions of Ubuntu
-have to fall back to the Conda solutions because the bundled software is out of date)
-```
-sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev
-```
+## PyTactician library
 
-After installing the prerequisites, you'll need a Python virtualenv and an Opam switch to install the software.
-To create the virtualenv, run
-```
-python3.10 -m venv <desired-location-of-virtualenv>
-```
-To activate the virtualenv run `source <location-of-virtualenv>/bin/activate`.
-
-For the OCaml side, if you've never run Opam before, initialize it by running `opam init`. Then, create a switch
-with the appropriate software repositories:
-```
-opam switch create tactician --empty --repos=custom-archive=git+https://github.com/LasseBlaauwbroek/custom-archive.git,coq-extra-dev=https://coq.inria.fr/opam/extra-dev,coq-core-dev=https://coq.inria.fr/opam/core-dev,coq-released=https://coq.inria.fr/opam/released,default
-```
-Make sure to follow any printed instructions regarding `eval $(opam env)` to activate the switch.
+This repository includes a Python library that provides a layer of abstraction
+over Cap'n Proto to make it easier to implement agents in Python. Check its
+[README](pytact/README.md) for more information.
 
 ## Installation
-To install the Python component of this repository, make sure that you have a virtualenv enabled then run the
-command `pip install .` from the root of this repository.
 
-To install the OCaml component of this repository, make sure that you have the appropriate switch activated and
-run the command `opam install . --no-depexts --yes` from the root of this repository.
+**Before attempting installation, ensure that you have all
+[prerequisites](#prerequisites) installed!**
 
-If you want maximum performance, it is recommended that you use an OCaml version with `flambda` enabled. On newer versions of Opam you can achieve this by installing `ocaml-option-flambda`.
+To install the OCaml component of this repository, make sure that you have the
+appropriate switch activated and run the command `opam install .` from the root
+of this repository.
 
-## Usage of the Python software
-The Python software provides both a software library to work with the graph based datasets extracted from Coq and
-a number of executables. Available executables are as follows (use the `--help` flag for each executable to learn
-about all the options).
-
-- `pytact-check [-h] [--jobs JOBS] [--quick] [--verbose VERBOSE] dir`
-   Run sanity checks on a dataset and print some statistics.
-- `pytact-visualize [-h] [--port PORT] [--hostname HOSTNAME] [--dev] dataset`:
-   Start an interactive server that visualizes a dataset.
-- `pytact-server [-h] [--tcp TCP] [--record RECORD_FILE] {graph,text}`
-  Example python server capable of communicating with Coq through Tactician's 'synth' tactic
-  To learn how to interface Coq and Tactician with this server, see the sections below.
-- `pytact-oracle [-h] [--tcp PORT] [--record RECORD_FILE] {graph,text} dataset`
-  A tactic prediction server acting as an oracle, retrieving it's information from a dataset
-- `pytact-fake-coq [-h] (--tcp TCP_LOCATION | --stdin EXECUTABLE) data`
-  A fake Coq client that connects to a prediction server and feeds it a stream of previously recorded messages.
-- `pytact-prover`: A dummy example client that interfaces with Coq and Tactician for reinforcement-learning-style
-  communication. To learn how to interface Coq and Tactician with this client, see the sections below.
+If you want maximum performance, it is recommended that you use an OCaml version
+with `flambda` enabled. On newer versions of Opam you can achieve this by
+installing `ocaml-option-flambda`.
 
 ## Usage of the Coq plugin
 
 ### Available Commands
 
-These commands will create a graph of some object, and write it to `graph.pdf` (if `graphviz` is available).
+These commands will create a graph of some object, and write it to `graph.pdf`
+(if `graphviz` is available).
 
 The following commands are always available:
 ```
 [Shared] Graph [Depth <n>] Ident identifier.
 [Shared] Graph [Depth <n>] Term term.
 ```
-The normal commands print a fully transitive graph. Adding `Depth i` limits the traversal to visiting at most `i`
-nested definitions.
+
+The normal commands print a fully transitive graph. Adding `Depth i` limits the
+traversal to visiting at most `i` nested definitions.
 
 Additionally, in proof mode, these commands are available:
 ```
@@ -95,10 +87,13 @@ Options that modify the graphs generated by the commands above are
 ```
 
 ### Interaction with `synth`
-In order to connect Tactician's `synth` tactic to a external tactic prediction server like the dummy
-`pytact-server` described above, the plugin makes a number of commands and settings available in Coq.
-In order to load the plugin, Coq needs to be started appropriately. This can be done by prefixing every invocation
-of a command that uses Coq, like `coqc`, `coqide`, a `make` command or an editor like `emacs` with `tactician exec`:
+In order to connect Tactician's `synth` tactic to a external tactic prediction
+server like the dummy `pytact-server` described above, the plugin makes a number
+of commands and settings available in Coq. In order to load the plugin, Coq
+needs to be started appropriately. This can be done by prefixing every
+invocation of a command that uses Coq, like `coqc`, `coqide`, a `make` command
+or an editor like `emacs` with `tactician exec`:
+
 ```
 tactician exec -- coqc ...
 tactician exec -- coqide ...
@@ -111,8 +106,11 @@ To make the `synth` command available, your Coq file will have to start with
 From Tactician Require Import Ltac1.
 ```
 The following settings govern the data that Coq will send to the server:
-- `Set Tactician Neural Truncate` determines wether the bodies of definitions will get truncated or not (on by default).
 - `Set Tactician Neural Textmode` determines wether Coq is communicating with a graph-based server or a text-based server (graph-based by default).
+- `Set Tactician Neural Metadata` adds text-based metadata to when communicating in graph-mode, such as
+  hypothesis names, textual representation of proof states and textual representations of definition.
+  This will slow down the communication protocol, and should only be enabled for debugging, or when otherwise needed.
+
 To let Coq take care of starting and stopping the server, use the command
 ```
 Set Tactician Neural Executable "external-server-executable --argument1 --argument2".
@@ -129,36 +127,36 @@ At this point, you have the following commands available which will interact wit
 - `Tactician Neural Cache` will preemptively send a lot of required data to the prediction server and keeps that
   information cached. This will make the commands above run much faster. This command can be issued multiple times
   in a document, creating multiple nested caches.
+- `Set Tactician Autocache` will automatically execute `Tactician Neural Cache` on each command. This is an
+  experimental option, and there may be some overhead associated with this.
 
-## Reinforcement interaction
+## Client-based proof exploration
 
-Finally, the command `Reinforce.` will initiate a reinforcement session. An example of this is available in
-[TestReinforceStdin.v](pytact/tests/TestReinforceStdin.v).
-To do this, you need to have a python client running. An example is available in the `pytact-prover` executable.
-To see how it works, run
-```
-pytact-prover --pdfsequence --pdfname test
-```
-This will execute a dummy proof through the reinforcement learning interface. Visualizations of each proof state
-are available in `test<n>.pdf`.
-optionally `--file` option to point to a source Coq `.v` file.
-Also with `--interactive` option the innteractive shell appears where you can
-manually interact with the environment. Whenever a tactic is executed,
-the resulting proof state if visualized in the file
-`python_graph.pdf`.
+Finally, the command `Tactician Explore.` will initiate a proof exploration
+session. An example of this is available in
+[TestReinforceStdin.v](pytact/tests/TestReinforceStdin.v). To do this, you need
+to have a python client running. An example is available in the `pytact-prover`
+executable. To see how it works, run ``` pytact-prover --pdfsequence --pdfname
+test ``` This will execute a dummy proof through the proof exploration
+interface. Visualizations of each proof state are available in `test<n>.pdf`.
+optionally `--file` option to point to a source Coq `.v` file. Also with
+`--interactive` option the interactive shell appears where you can manually
+interact with the environment. Whenever a tactic is executed, the resulting
+proof state if visualized in the file `python_graph.pdf`.
 
 ## Generating a dataset
-To generate a dataset, you currently have to install a slightly different version of the Coq plugin that resides
-in the `generate-dataset` branch. The procedure to generate the dataset is as follows.
+To generate a dataset, you currently have to install a slightly different
+version of the Coq plugin that resides in the `generate-dataset` branch. The
+procedure to generate the dataset is as follows.
 
 1. Create your switch
 ```
 opam switch create tacgen --empty
 ```
-2. Install coq-tactician-reinforce generate-dataset
+2. Install coq-tactician-api generate-dataset
 ```
-git clone -b generate-dataset --recurse-submodules git@github.com:coq-tactician/coq-tactician-reinforce.git
-cd coq-tactician-reinforce
+git clone -b generate-dataset --recurse-submodules git@github.com:coq-tactician/coq-tactician-api.git
+cd coq-tactician-api
 opam install .
 tactician inject # you can answer 'no' to recompiling
 opam install coq-tactician-stdlib --keep-build-dir # make sure that you have the coq-extra-dev repo enabled
@@ -185,6 +183,50 @@ opam install coq-package --keep-build-dir
 and you find the `*.bin` in the directory `<switch>/.opam-switch/build`. The recorded
 dependency paths are relative to `<switch>/.opam-switch/build`.
 
+## Prerequisites
+
+This repository has an OCaml component that should be installed through the Opam
+package manager and a Python component that should be installed through the Pip
+package manager. Additionally, some extra dependencies are needed:
+- Opam 2.1.x
+- Cap'n Proto >= 0.8
+- XXHash >= 0.8
+- Graphviz
+- A reasonable set of development packages like git, bash, gmp, c/c++ compiler
+  toolchains that should be installed on most systems.
+
+If your operating systems package manager does not provide these packages with the
+correct version, the simplest and most reliable way to install these packages is
+through Conda. This repository provides a `environment.yml` file with the required
+Conda dependencies. To set it up, follow these commands:
+```
+git clone --recurse-submodules git@github.com:coq-tactician/coq-tactician-api.git # Clone this repo
+cd coq-tactician-api
+conda env create -f environment.yml
+conda activate tactician
+conda env config vars set CPATH=${CONDA_PREFIX}/include:${CPATH}
+conda activate tactician
+```
+
+On Ubuntu 22.04 or newer, you can get the required packages as follows (older versions of Ubuntu
+have to fall back to the Conda solutions because the bundled software is out of date)
+```
+sudo apt-get --yes install graphviz capnproto libcapnp-dev pkg-config libev-dev libxxhash-dev
+```
+
+After installing the prerequisites, you'll need a Python virtualenv and an Opam
+switch to install the software. To create the virtualenv, run ``` python -m
+venv <desired-location-of-virtualenv> ``` To activate the virtualenv run `source
+<location-of-virtualenv>/bin/activate`.
+
+For the OCaml side, if you've never run Opam before, initialize it by running `opam init`. Then, create a switch
+with the appropriate software repositories:
+```
+opam switch create tactician --empty --repos=custom-archive=git+https://github.com/LasseBlaauwbroek/custom-archive.git,coq-extra-dev=https://coq.inria.fr/opam/extra-dev,coq-core-dev=https://coq.inria.fr/opam/core-dev,coq-released=https://coq.inria.fr/opam/released,default
+```
+Make sure to follow any printed instructions regarding `eval $(opam env)` to activate the switch.
+
+
 ## CI
 To verify the build and test locally by specification in `Dockerfile` you run
 
@@ -208,7 +250,7 @@ Debian.10/opam 2.0.9/coq 8.11.2/ocaml-variants-4.11.2+flambda.
 
 The layer defined by `Dockerfile_base` adds `conda/python 3.9`,
 `capnp` library and all opam package dependencies requested by the
-coq-tactician-reinforce (including the opam package defined in git
+coq-tactician-api (including the opam package defined in git
 submodule `coq-tactician`).
 
 The image defined by `Dockerfile_base` can be updated by maintainers (currently Vasily) by

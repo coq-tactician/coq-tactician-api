@@ -1,4 +1,3 @@
-(* Set Tactician Reinforce1 Debug. *)
 Load NNLearner.
 Set Tactician Neural Server "127.0.0.1:33333".
 From Tactician Require Import Ltac1.
