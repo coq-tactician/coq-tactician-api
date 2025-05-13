@@ -35,6 +35,9 @@ with data_reader(dataset_path) as data:
         
         breakpoint()
 
+# breakpoint() pauses execution so you can poke at stuff
+# dir(object) tells you everything you can call on the object
+
 
  
 
