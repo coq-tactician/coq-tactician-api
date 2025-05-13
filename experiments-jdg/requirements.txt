@@ -1,3 +1,6 @@
 pymongo
 pytactician
 polars
+graphviz
+networkx
+pytactician
