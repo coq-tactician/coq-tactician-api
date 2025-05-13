@@ -9,7 +9,5 @@ dependencies:
   - opam
   - pkg-config
   - python=3.10
-  - sysroot_linux-64=2.17
   - xxhash>=0.8
   - gmp
-  - squashfuse
