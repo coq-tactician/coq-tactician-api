@@ -3,7 +3,7 @@ from pathlib import Path
 from pytact.data_reader import data_reader
 import polars as pl
 
-dataset_path = Path("/home/jgallagher/LocalData/tactician/v15-opam-coq8.11-partial/dataset").resolve()
+dataset_path = Path("<path-to>/v15-stdlib-coq8.11/dataset").resolve()
 
 
 with data_reader(dataset_path) as data:
