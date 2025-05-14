@@ -2,13 +2,15 @@
 from pathlib import Path
 from pytact.data_reader import data_reader
 import polars as pl
+import networkx
 
-dataset_path = Path("<path-to>/v15-stdlib-coq8.11/dataset").resolve()
+dataset_path = Path("/Users/huubdejong/Documents/Education/UBC/M2PI_2025/Project/TacticianDataTemp/TacticianDataTemp/TacticianDataTemp/v15-stdlib-coq8.11/dataset").resolve()
 
 
 with data_reader(dataset_path) as data:
     # data is everything.
     # data.items() iterates over all the files in the dataset dictionary.
+    counts = {}
     for idx, (relative_path,dataset) in enumerate(data.items()):
         data_lowlevel = dataset.lowlevel
         # type(www) is the lowevel pytact.graph_api_capnpn_cython.Dataset_Reader class
@@ -32,6 +34,30 @@ with data_reader(dataset_path) as data:
 
         all_nodeIndices = [edge.target.node_index for edge in data_lowlevel.graph.edges]
         all_nodeIndices_df = pl.DataFrame(all_nodeIndices)
+        a = 0
+
+        for node in data_lowlevel.graph.nodes:
+            children = []
+            a1 = node.children_index
+            a2 = node.children_count
+            for j in range(a2):
+                childIndex = data_lowlevel.graph.edges[a1 + j].target.node_index
+                children.append(data_lowlevel.graph.nodes[childIndex])
+            print("Node number " + str(node.identity) + " with children " + str([c.identity for c in children]))
+            #breakpoint()
+
+        # may need to skip ssr or ssreflect ?
+        
+        for c in dataset.definitions(spine_only=True):
+            if c.proof != None:
+                for i in range(len(c.proof)):
+                    #print(c.proof[i].tactic.base_text)
+                    if c.proof[i].tactic.base_text in counts:
+                        counts[c.proof[i].tactic.base_text] += 1
+                    else:
+                        counts.update({c.proof[i].tactic.base_text: 1})
+                a = c
+        #print(a)
         
         breakpoint()
 
