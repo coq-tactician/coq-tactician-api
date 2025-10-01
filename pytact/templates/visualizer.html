@@ -243,7 +243,8 @@
             </div>
             <script type="module">
                 const dot = {{ svg|tojson }};
-                import { Graphviz } from "https://cdn.jsdelivr.net/npm/@hpcc-js/wasm/dist/index.js";
+                // Wasm pinned to 2.26.1 due to a weir visualization bug in the graphviz that comes with version 2.26.2
+                import { Graphviz } from "https://cdn.jsdelivr.net/npm/@hpcc-js/wasm@2.26.1/dist/index.js";
                 if (Graphviz) {
                     const graphviz = await Graphviz.load();
                     const svg = graphviz.layout(dot, "svg", "dot");
