@@ -591,6 +591,7 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
     let module Node = Api.Builder.Node in
     let module Request = Api.Builder.PredictionProtocol.Request in
     let module Prediction = Api.Reader.PredictionProtocol.Prediction in
+    let module TextPrediction = Api.Reader.PredictionProtocol.TextPrediction in
     let module Response = Api.Reader.PredictionProtocol.Response in
     let request = Request.init_root () in
     let predict = Request.predict_init request in
@@ -665,6 +666,18 @@ module NeuralLearner : TacticianOnlineLearnerType = functor (TS : TacticianStruc
             let conf = Prediction.confidence_get p in
             Option.map (fun tac -> tac, conf) @@ Tactic_one_variable.tactic_substitute args tac
           ) @@ CList.mapi (fun i x -> i, x) preds in
+        preds
+      | Response.TextPrediction preds ->
+        let preds = Capnp.Array.to_list preds in
+        let preds = List.filter_map (fun p ->
+            try
+              let tac = Tacintern.intern_pure_tactic (Genintern.empty_glob_sign env) @@
+                Pcoq.parse_string Pltac.tactic_eoi @@ TextPrediction.tactic_text_get p in
+              let conf = TextPrediction.confidence_get p in
+              Some (tac, conf)
+            with e when CErrors.noncritical e ->
+              None
+          ) preds in
         preds
       | _ -> protocol_error response "prediction"
 
