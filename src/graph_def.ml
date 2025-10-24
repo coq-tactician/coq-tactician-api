@@ -1038,7 +1038,7 @@ module GraphHasher
       | _ -> None in
     CList.fold_left (fun ch -> function
         | el, { contents = Written (n, _); _ } -> Option.map (fun ls -> (el, n)::ls) ch
-        | _ -> None) init ch
+        | _ -> None) init (CList.rev ch)
 
   let mk_node : node_label -> children -> node t = fun nl ch ->
     let* _, depth = ask in
