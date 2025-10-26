@@ -74,6 +74,10 @@ def print_branch(branch, depth, indices, parameters):
     # - Kernel-land: case (x: A /\ B) first
     # - User-land translation: match (x: A /\ B) with | conj a b => first a b end
     # - What a human would write: match (x: A /\ B) with | conj a b => a end
+
+    #TODO: This does not reach a stable fixpoint under repeated printing-parsing
+    #      The term will get increasinly big. To remedy, implement a special case
+    #      where trm has enough lambdas and eta expansion is not needed.
     return f"{constr_str} {params} {args} => ({trm_str}) {args}"
 
 def print_ind_pattern(node: Node, indices, in_spine = True):
